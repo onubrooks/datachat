@@ -146,12 +146,18 @@ class LLMSettings(BaseSettings):
             "google": self.google_api_key,
         }
 
-        # Check default provider has key
-        if self.default_provider in provider_key_map:
-            if not provider_key_map[self.default_provider]:
+        selected_providers = {
+            self.default_provider,
+            self.classifier_provider,
+            self.sql_provider,
+            self.fallback_provider,
+        }
+
+        for provider in selected_providers:
+            if provider in provider_key_map and not provider_key_map[provider]:
                 raise ValueError(
-                    f"API key required for {self.default_provider} provider. "
-                    f"Set LLM_{self.default_provider.upper()}_API_KEY"
+                    f"API key required for {provider} provider. "
+                    f"Set LLM_{provider.upper()}_API_KEY"
                 )
 
         return self

@@ -57,6 +57,7 @@ class GoogleProvider(BaseLLMProvider):
                 "google-generativeai package not installed. "
                 "Install with: pip install google-generativeai"
             )
+            self.genai = None
             self.client = None
 
         logger.info(
@@ -66,11 +67,14 @@ class GoogleProvider(BaseLLMProvider):
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         """Generate completion using Google Gemini API."""
-        if not self.client:
+        if not self.genai:
             raise ImportError("google-generativeai package not installed")
 
         request = self._apply_defaults(request)
         self._log_request(request)
+
+        model_name = request.model or self.model
+        client = self.genai.GenerativeModel(model_name)
 
         # Convert messages to Gemini format
         prompt_parts = []
@@ -84,7 +88,7 @@ class GoogleProvider(BaseLLMProvider):
 
         prompt = "\n\n".join(prompt_parts)
 
-        response = await self.client.generate_content_async(
+        response = await client.generate_content_async(
             prompt,
             generation_config=self.genai.types.GenerationConfig(
                 temperature=request.temperature,
@@ -98,7 +102,7 @@ class GoogleProvider(BaseLLMProvider):
 
         llm_response = LLMResponse(
             content=response.text,
-            model=self.model,
+            model=model_name,
             usage=LLMUsage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -114,11 +118,14 @@ class GoogleProvider(BaseLLMProvider):
 
     async def stream(self, request: LLMRequest) -> AsyncIterator[LLMStreamChunk]:
         """Stream completion using Google Gemini API."""
-        if not self.client:
+        if not self.genai:
             raise ImportError("google-generativeai package not installed")
 
         request = self._apply_defaults(request)
         self._log_request(request)
+
+        model_name = request.model or self.model
+        client = self.genai.GenerativeModel(model_name)
 
         prompt_parts = []
         for msg in request.messages:
@@ -129,7 +136,7 @@ class GoogleProvider(BaseLLMProvider):
 
         prompt = "\n\n".join(prompt_parts)
 
-        response = await self.client.generate_content_async(
+        response = await client.generate_content_async(
             prompt,
             generation_config=self.genai.types.GenerationConfig(
                 temperature=request.temperature,
