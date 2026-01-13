@@ -262,6 +262,93 @@ class TestGetModelInfo:
         assert info.context_window == 128000
 
 
+class TestErrorHandling:
+    """Test error handling."""
+
+    @pytest.mark.asyncio
+    async def test_api_timeout_error(self, provider):
+        """Test handling of API timeout errors."""
+        import openai
+
+        with patch.object(
+            provider.client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            side_effect=openai.APITimeoutError("Request timed out"),
+        ):
+            request = LLMRequest(
+                messages=[LLMMessage(role="user", content="Test")],
+            )
+
+            with pytest.raises(openai.APITimeoutError):
+                await provider.generate(request)
+
+    @pytest.mark.asyncio
+    async def test_api_error(self, provider):
+        """Test handling of general API errors."""
+        import openai
+        from unittest.mock import Mock
+
+        # Create a mock request for the error
+        mock_request = Mock()
+        mock_request.method = "POST"
+        mock_request.url = "https://api.openai.com/v1/chat/completions"
+
+        with patch.object(
+            provider.client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            side_effect=openai.APIError("API error occurred", request=mock_request, body=None),
+        ):
+            request = LLMRequest(
+                messages=[LLMMessage(role="user", content="Test")],
+            )
+
+            with pytest.raises(openai.APIError):
+                await provider.generate(request)
+
+    @pytest.mark.asyncio
+    async def test_streaming_api_error(self, provider):
+        """Test handling of streaming API errors."""
+        import openai
+        from unittest.mock import Mock
+
+        # Create a mock request for the error
+        mock_request = Mock()
+        mock_request.method = "POST"
+        mock_request.url = "https://api.openai.com/v1/chat/completions"
+
+        with patch.object(
+            provider.client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            side_effect=openai.APIError("Streaming error", request=mock_request, body=None),
+        ):
+            request = LLMRequest(
+                messages=[LLMMessage(role="user", content="Test")],
+            )
+
+            with pytest.raises(openai.APIError):
+                async for _ in provider.stream(request):
+                    pass
+
+
+class TestTokenCounting:
+    """Test token counting edge cases."""
+
+    def test_count_tokens_unknown_model_fallback(self, provider):
+        """Test token counting with unknown model uses fallback encoding."""
+        # Create provider with unknown model
+        provider.model = "unknown-model-9999"
+
+        text = "Hello, world!"
+        count = provider.count_tokens(text)
+
+        # Should still return a count using fallback encoding
+        assert count > 0
+        assert isinstance(count, int)
+
+
 class TestFinishReasonMapping:
     """Test finish reason mapping."""
 

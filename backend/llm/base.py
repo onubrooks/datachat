@@ -80,7 +80,7 @@ class BaseLLMProvider(ABC):
         Raises:
             Exception: Provider-specific errors (API errors, timeouts, etc.)
         """
-        pass
+        pass  # pragma: no cover - abstract method
 
     @abstractmethod
     async def stream(self, request: LLMRequest) -> AsyncIterator[LLMStreamChunk]:
@@ -99,7 +99,7 @@ class BaseLLMProvider(ABC):
         Raises:
             Exception: Provider-specific errors
         """
-        pass
+        pass  # pragma: no cover - abstract method
 
     @abstractmethod
     def count_tokens(self, text: str) -> int:
@@ -115,7 +115,7 @@ class BaseLLMProvider(ABC):
         Returns:
             Number of tokens in the text
         """
-        pass
+        pass  # pragma: no cover - abstract method
 
     @abstractmethod
     def get_model_info(self, model_name: Optional[str] = None) -> ModelInfo:
@@ -128,7 +128,7 @@ class BaseLLMProvider(ABC):
         Returns:
             ModelInfo with model capabilities and limits
         """
-        pass
+        pass  # pragma: no cover - abstract method
 
     def _apply_defaults(self, request: LLMRequest) -> LLMRequest:
         """
