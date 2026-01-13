@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import chromadb
 from chromadb.config import Settings
+from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
 from backend.config import get_settings
 from backend.models.datapoint import DataPoint
@@ -51,6 +52,7 @@ class VectorStore:
         collection_name: Optional[str] = None,
         persist_directory: Optional[Union[str, Path]] = None,
         embedding_model: Optional[str] = None,
+        openai_api_key: Optional[str] = None,
     ):
         """
         Initialize the vector store.
@@ -59,20 +61,29 @@ class VectorStore:
             collection_name: Name of the Chroma collection (default from config)
             persist_directory: Directory for persistence (default from config)
             embedding_model: OpenAI embedding model (default from config)
+            openai_api_key: OpenAI API key (default from config)
         """
         # Only load config if needed (allows tests to avoid config validation)
-        if collection_name is None or persist_directory is None or embedding_model is None:
+        if (
+            collection_name is None
+            or persist_directory is None
+            or embedding_model is None
+            or openai_api_key is None
+        ):
             config = get_settings()
             self.collection_name = collection_name or config.chroma.collection_name
             self.persist_directory = Path(persist_directory or config.chroma.persist_dir)
             self.embedding_model = embedding_model or config.chroma.embedding_model
+            self.openai_api_key = openai_api_key or config.llm.openai_api_key
         else:
             self.collection_name = collection_name
             self.persist_directory = Path(persist_directory)
             self.embedding_model = embedding_model
+            self.openai_api_key = openai_api_key
 
         self.client: Optional[chromadb.ClientAPI] = None
         self.collection: Optional[chromadb.Collection] = None
+        self.embedding_function: Optional[OpenAIEmbeddingFunction] = None
 
         logger.info(
             f"VectorStore initialized: collection={self.collection_name}, "
@@ -112,10 +123,17 @@ class VectorStore:
             ),
         )
 
+        # Create OpenAI embedding function
+        self.embedding_function = OpenAIEmbeddingFunction(
+            api_key=self.openai_api_key,
+            model_name=self.embedding_model,
+        )
+
         # Get or create collection with OpenAI embeddings
         self.collection = self.client.get_or_create_collection(
             name=self.collection_name,
             metadata={"hnsw:space": "cosine"},
+            embedding_function=self.embedding_function,
         )
 
         logger.debug(
