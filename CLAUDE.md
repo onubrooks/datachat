@@ -390,10 +390,17 @@ refactor(knowledge): extract common retrieval logic
   - LLMProviderFactory with agent-specific overrides
   - Provider-agnostic request/response models
   - 68 unit tests with comprehensive coverage
+- [x] DataPoint loader and validator (PR #5)
+  - DataPointLoader class with single file and directory loading
+  - Validates JSON against Pydantic DataPoint models
+  - Graceful error handling with detailed error messages
+  - Loading statistics tracking
+  - Supports recursive directory traversal
+  - 27 unit tests with 91% coverage
+  - Sample DataPoint fixtures for testing
 
 ### Up Next
 
-- [ ] DataPoint loader and validator (knowledge/datapoints.py)
 - [ ] Vector store integration (knowledge/vectors.py with Chroma)
 - [ ] Knowledge graph implementation (knowledge/graph.py with NetworkX)
 - [ ] ContextAgent (retrieval without LLM calls)
