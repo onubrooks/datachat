@@ -15,11 +15,14 @@ Available Models:
         - DatabaseError: Database operation errors
         - RetrievalError: Context retrieval errors
 
-    DataPoint Models (TODO):
-        - DataPoint: Base datapoint model
+    DataPoint Models:
+        - DataPoint: Discriminated union of all DataPoint types
+        - BaseDataPoint: Base class with common fields
         - SchemaDataPoint: Table/column metadata
         - BusinessDataPoint: Business logic definitions
         - ProcessDataPoint: ETL process information
+        - ColumnMetadata: Column information
+        - Relationship: Table relationships
 
     API Models (TODO):
         - ChatRequest: API request model
@@ -27,6 +30,7 @@ Available Models:
 
 Usage:
     from backend.models.agent import AgentInput, AgentOutput, AgentError
+    from backend.models.datapoint import DataPoint, SchemaDataPoint
     from backend.models import Message
 """
 
@@ -41,6 +45,15 @@ from backend.models.agent import (
     RetrievalError,
     ValidationError,
 )
+from backend.models.datapoint import (
+    BaseDataPoint,
+    BusinessDataPoint,
+    ColumnMetadata,
+    DataPoint,
+    ProcessDataPoint,
+    Relationship,
+    SchemaDataPoint,
+)
 
 __all__ = [
     # Core agent models
@@ -54,4 +67,12 @@ __all__ = [
     "LLMError",
     "DatabaseError",
     "RetrievalError",
+    # DataPoint models
+    "DataPoint",
+    "BaseDataPoint",
+    "SchemaDataPoint",
+    "BusinessDataPoint",
+    "ProcessDataPoint",
+    "ColumnMetadata",
+    "Relationship",
 ]
