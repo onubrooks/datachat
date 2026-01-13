@@ -21,22 +21,82 @@ from pydantic import Field, PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class OpenAISettings(BaseSettings):
-    """OpenAI API configuration."""
+class LLMSettings(BaseSettings):
+    """LLM provider configuration."""
 
-    api_key: str = Field(
-        ...,
-        description="OpenAI API key for LLM access",
+    # Provider selection
+    default_provider: Literal["openai", "anthropic", "google", "local"] = Field(
+        default="openai",
+        description="Default LLM provider"
+    )
+    classifier_provider: Optional[Literal["openai", "anthropic", "google", "local"]] = Field(
+        None,
+        description="Provider for ClassifierAgent (defaults to default_provider)"
+    )
+    sql_provider: Optional[Literal["openai", "anthropic", "google", "local"]] = Field(
+        None,
+        description="Provider for SQLAgent (defaults to default_provider)"
+    )
+    fallback_provider: Optional[Literal["openai", "anthropic", "google", "local"]] = Field(
+        None,
+        description="Fallback provider if primary fails"
+    )
+
+    # OpenAI configuration
+    openai_api_key: Optional[str] = Field(
+        None,
+        description="OpenAI API key",
         min_length=20,
     )
-    model: str = Field(
+    openai_model: str = Field(
         default="gpt-4o",
-        description="Default OpenAI model for SQL generation",
+        description="OpenAI model for complex tasks"
     )
-    model_mini: str = Field(
+    openai_model_mini: str = Field(
         default="gpt-4o-mini",
-        description="Lightweight model for classification tasks",
+        description="OpenAI lightweight model"
     )
+
+    # Anthropic configuration
+    anthropic_api_key: Optional[str] = Field(
+        None,
+        description="Anthropic API key",
+        min_length=20,
+    )
+    anthropic_model: str = Field(
+        default="claude-3-5-sonnet-20241022",
+        description="Anthropic model for complex tasks"
+    )
+    anthropic_model_mini: str = Field(
+        default="claude-3-5-haiku-20241022",
+        description="Anthropic lightweight model"
+    )
+
+    # Google configuration
+    google_api_key: Optional[str] = Field(
+        None,
+        description="Google AI API key"
+    )
+    google_model: str = Field(
+        default="gemini-1.5-pro",
+        description="Google model for complex tasks"
+    )
+    google_model_mini: str = Field(
+        default="gemini-1.5-flash",
+        description="Google lightweight model"
+    )
+
+    # Local model configuration
+    local_base_url: str = Field(
+        default="http://localhost:11434",
+        description="Base URL for local model server (Ollama, vLLM, etc.)"
+    )
+    local_model: str = Field(
+        default="llama3.1:8b",
+        description="Local model name"
+    )
+
+    # Common settings
     temperature: float = Field(
         default=0.0,
         ge=0.0,
@@ -56,18 +116,51 @@ class OpenAISettings(BaseSettings):
     )
 
     model_config = SettingsConfigDict(
-        env_prefix="OPENAI_",
+        env_prefix="LLM_",
         env_file=".env",
         extra="ignore",
     )
 
-    @field_validator("api_key")
+    @field_validator("openai_api_key")
     @classmethod
-    def validate_api_key(cls, v: str) -> str:
+    def validate_openai_key(cls, v: Optional[str]) -> Optional[str]:
         """Validate OpenAI API key format."""
-        if not v.startswith("sk-"):
+        if v and not v.startswith("sk-"):
             raise ValueError("OpenAI API key must start with 'sk-'")
         return v
+
+    @field_validator("anthropic_api_key")
+    @classmethod
+    def validate_anthropic_key(cls, v: Optional[str]) -> Optional[str]:
+        """Validate Anthropic API key format."""
+        if v and not v.startswith("sk-ant-"):
+            raise ValueError("Anthropic API key must start with 'sk-ant-'")
+        return v
+
+    @model_validator(mode="after")
+    def validate_provider_keys(self) -> "LLMSettings":
+        """Ensure API key is set for selected providers."""
+        provider_key_map = {
+            "openai": self.openai_api_key,
+            "anthropic": self.anthropic_api_key,
+            "google": self.google_api_key,
+        }
+
+        selected_providers = {
+            self.default_provider,
+            self.classifier_provider,
+            self.sql_provider,
+            self.fallback_provider,
+        }
+
+        for provider in selected_providers:
+            if provider in provider_key_map and not provider_key_map[provider]:
+                raise ValueError(
+                    f"API key required for {provider} provider. "
+                    f"Set LLM_{provider.upper()}_API_KEY"
+                )
+
+        return self
 
 
 class DatabaseSettings(BaseSettings):
@@ -217,7 +310,7 @@ class Settings(BaseSettings):
     Main application settings.
 
     Loads configuration from environment variables and .env file.
-    Settings are nested by domain (openai, database, chroma, logging).
+    Settings are nested by domain (llm, database, chroma, logging).
 
     Environment Variables:
         ENVIRONMENT: Deployment environment (development, staging, production)
@@ -225,14 +318,16 @@ class Settings(BaseSettings):
         DEBUG: Enable debug mode
         API_HOST: API server host
         API_PORT: API server port
-        OPENAI_*: OpenAI configuration (see OpenAISettings)
+        LLM_*: LLM provider configuration (see LLMSettings)
         DATABASE_*: Database configuration (see DatabaseSettings)
         CHROMA_*: Vector store configuration (see ChromaSettings)
         LOG_*: Logging configuration (see LoggingSettings)
 
     Example:
         >>> settings = get_settings()
-        >>> settings.openai.api_key
+        >>> settings.llm.default_provider
+        'openai'
+        >>> settings.llm.openai_api_key
         'sk-...'
         >>> settings.is_production
         False
@@ -263,7 +358,7 @@ class Settings(BaseSettings):
     )
 
     # Nested settings
-    openai: OpenAISettings = Field(default_factory=OpenAISettings)
+    llm: LLMSettings = Field(default_factory=LLMSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     chroma: ChromaSettings = Field(default_factory=ChromaSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
@@ -304,7 +399,7 @@ class Settings(BaseSettings):
             extra={
                 "environment": self.environment,
                 "debug": self.debug,
-                "openai_model": self.openai.model,
+                "llm_provider": self.llm.default_provider,
                 "database_pool_size": self.database.pool_size,
                 "chroma_collection": self.chroma.collection_name,
             }

@@ -15,70 +15,78 @@ from backend.config import (
     ChromaSettings,
     DatabaseSettings,
     LoggingSettings,
-    OpenAISettings,
+    LLMSettings,
     Settings,
     clear_settings_cache,
     get_settings,
 )
 
 
-class TestOpenAISettings:
-    """Test OpenAI configuration."""
+class TestLLMSettings:
+    """Test LLM configuration."""
 
-    def test_valid_openai_settings(self, monkeypatch):
-        """Valid OpenAI settings load correctly."""
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-1234567890abcdefghij")
+    def test_valid_llm_settings(self, monkeypatch):
+        """Valid LLM settings load correctly."""
+        monkeypatch.setenv("LLM_OPENAI_API_KEY", "sk-test-key-1234567890abcdefghij")
 
-        settings = OpenAISettings()
+        settings = LLMSettings()
 
-        assert settings.api_key == "sk-test-key-1234567890abcdefghij"
-        assert settings.model == "gpt-4o"
-        assert settings.model_mini == "gpt-4o-mini"
+        assert settings.openai_api_key == "sk-test-key-1234567890abcdefghij"
+        assert settings.openai_model == "gpt-4o"
+        assert settings.openai_model_mini == "gpt-4o-mini"
         assert settings.temperature == 0.0
         assert settings.max_tokens == 2000
 
-    def test_custom_openai_settings(self, monkeypatch):
-        """Custom OpenAI settings override defaults."""
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-custom-key-1234567890xyz")
-        monkeypatch.setenv("OPENAI_MODEL", "gpt-4-turbo")
-        monkeypatch.setenv("OPENAI_TEMPERATURE", "0.7")
-        monkeypatch.setenv("OPENAI_MAX_TOKENS", "4000")
+    def test_custom_llm_settings(self, monkeypatch):
+        """Custom LLM settings override defaults."""
+        monkeypatch.setenv("LLM_OPENAI_API_KEY", "sk-custom-key-1234567890xyz")
+        monkeypatch.setenv("LLM_OPENAI_MODEL", "gpt-4-turbo")
+        monkeypatch.setenv("LLM_TEMPERATURE", "0.7")
+        monkeypatch.setenv("LLM_MAX_TOKENS", "4000")
 
-        settings = OpenAISettings()
+        settings = LLMSettings()
 
-        assert settings.model == "gpt-4-turbo"
+        assert settings.openai_model == "gpt-4-turbo"
         assert settings.temperature == 0.7
         assert settings.max_tokens == 4000
 
     def test_api_key_validation_requires_sk_prefix(self, monkeypatch):
         """API key must start with 'sk-'."""
-        monkeypatch.setenv("OPENAI_API_KEY", "invalid-key-1234567890abcdef")
+        monkeypatch.setenv("LLM_OPENAI_API_KEY", "invalid-key-1234567890abcdef")
 
         with pytest.raises(ValidationError, match="must start with 'sk-'"):
-            OpenAISettings()
+            LLMSettings()
 
     def test_api_key_minimum_length(self, monkeypatch):
         """API key must have minimum length."""
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-short")
+        monkeypatch.setenv("LLM_OPENAI_API_KEY", "sk-short")
 
         with pytest.raises(ValidationError):
-            OpenAISettings()
+            LLMSettings()
 
     def test_temperature_validation(self, monkeypatch):
         """Temperature must be between 0.0 and 2.0."""
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-1234567890abcdefghij")
-        monkeypatch.setenv("OPENAI_TEMPERATURE", "3.0")
+        monkeypatch.setenv("LLM_OPENAI_API_KEY", "sk-test-key-1234567890abcdefghij")
+        monkeypatch.setenv("LLM_TEMPERATURE", "3.0")
 
         with pytest.raises(ValidationError, match="less than or equal to 2"):
-            OpenAISettings()
+            LLMSettings()
 
     def test_max_tokens_validation(self, monkeypatch):
         """Max tokens must be positive and within limits."""
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-1234567890abcdefghij")
-        monkeypatch.setenv("OPENAI_MAX_TOKENS", "20000")
+        monkeypatch.setenv("LLM_OPENAI_API_KEY", "sk-test-key-1234567890abcdefghij")
+        monkeypatch.setenv("LLM_MAX_TOKENS", "20000")
 
         with pytest.raises(ValidationError, match="less than or equal to 16"):
-            OpenAISettings()
+            LLMSettings()
+
+    def test_anthropic_key_validation(self, monkeypatch):
+        """Anthropic API key must start with 'sk-ant-'."""
+        monkeypatch.setenv("LLM_DEFAULT_PROVIDER", "anthropic")
+        monkeypatch.setenv("LLM_ANTHROPIC_API_KEY", "sk-invalid-key-1234567890")
+
+        with pytest.raises(ValidationError, match="must start with 'sk-ant-'"):
+            LLMSettings()
 
 
 class TestDatabaseSettings:
@@ -279,7 +287,7 @@ class TestSettings:
 
         assert settings.environment == "development"
         assert settings.app_name == "DataChat"
-        assert settings.openai.api_key == "sk-test-key-1234567890abcdefghij"
+        assert settings.llm.openai_api_key == "sk-test-key-1234567890abcdefghij"
         assert "postgresql" in str(settings.database.url)
         assert settings.chroma.collection_name == "datachat_knowledge"
         assert settings.logging.level == "INFO"
@@ -379,7 +387,7 @@ class TestGetSettings:
 @pytest.fixture
 def mock_env_vars(monkeypatch, tmp_path):
     """Set up mock environment variables for testing."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-1234567890abcdefghij")
+    monkeypatch.setenv("LLM_OPENAI_API_KEY", "sk-test-key-1234567890abcdefghij")
     monkeypatch.setenv(
         "DATABASE_URL",
         "postgresql://user:pass@localhost:5432/testdb"
