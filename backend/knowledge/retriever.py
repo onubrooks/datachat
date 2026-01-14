@@ -246,30 +246,47 @@ class Retriever:
                 "content": result.get("document"),
             }
 
-        # Get graph results (if we have a seed node)
+        # Get graph results by trying vector results as seed nodes
         graph_items = {}
         if vector_results:
-            # Use top vector result as seed for graph traversal
-            seed_node = vector_results[0]["datapoint_id"]
+            # Try each vector result as a seed until we get graph results
+            # This handles cases where top results aren't in the graph
+            for vector_result in vector_results:
+                seed_node = vector_result["datapoint_id"]
 
-            try:
-                related_nodes = self.knowledge_graph.get_related(
-                    seed_node, max_depth=graph_max_depth
+                try:
+                    related_nodes = self.knowledge_graph.get_related(
+                        seed_node, max_depth=graph_max_depth
+                    )
+
+                    # Successfully got results, build graph items
+                    for rank, node in enumerate(related_nodes[:graph_top_k], start=1):
+                        datapoint_id = node["node_id"]
+                        distance = node["distance"]
+                        score = 1.0 / distance if distance > 0 else 1.0
+
+                        graph_items[datapoint_id] = {
+                            "rank": rank,
+                            "score": score,
+                            "metadata": node["metadata"],
+                            "content": None,
+                        }
+
+                    # Successfully retrieved graph results, stop trying
+                    logger.debug(f"Graph seeded from node: {seed_node}")
+                    break
+
+                except Exception as e:
+                    # This seed node failed (not in graph or error), try next
+                    logger.debug(f"Seed node {seed_node} failed: {e}")
+                    continue
+
+            # If we exhausted all seeds without success, log warning
+            if not graph_items:
+                logger.warning(
+                    f"All {len(vector_results)} seed candidates failed graph traversal, "
+                    "using vector-only results"
                 )
-
-                for rank, node in enumerate(related_nodes[:graph_top_k], start=1):
-                    datapoint_id = node["node_id"]
-                    distance = node["distance"]
-                    score = 1.0 / distance if distance > 0 else 1.0
-
-                    graph_items[datapoint_id] = {
-                        "rank": rank,
-                        "score": score,
-                        "metadata": node["metadata"],
-                        "content": None,
-                    }
-            except Exception as e:
-                logger.warning(f"Graph traversal failed, using vector only: {e}")
 
         # Apply RRF (Reciprocal Rank Fusion)
         rrf_scores = self._apply_rrf(vector_items, graph_items)

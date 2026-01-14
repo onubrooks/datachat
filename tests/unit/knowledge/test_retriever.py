@@ -429,6 +429,56 @@ class TestHybridMode:
         assert len(result.items) > 0
         assert all(item.source in ("vector", "hybrid") for item in result.items)
 
+    @pytest.mark.asyncio
+    async def test_hybrid_mode_tries_multiple_seed_nodes(
+        self, retriever, mock_vector_store, mock_knowledge_graph, sample_graph_results
+    ):
+        """Test hybrid mode tries multiple seed nodes if first fails."""
+        # Return 3 vector results
+        vector_results = [
+            {
+                "datapoint_id": "not_in_graph_001",
+                "distance": 0.1,
+                "metadata": {"type": "Schema"},
+                "document": "First result not in graph",
+            },
+            {
+                "datapoint_id": "table_sales_001",
+                "distance": 0.2,
+                "metadata": {"type": "Schema"},
+                "document": "Second result IS in graph",
+            },
+            {
+                "datapoint_id": "another_vector_001",
+                "distance": 0.3,
+                "metadata": {"type": "Business"},
+                "document": "Third result",
+            },
+        ]
+        mock_vector_store.search.return_value = vector_results
+
+        # First seed fails, second succeeds
+        mock_knowledge_graph.get_related.side_effect = [
+            Exception("Node not in graph"),  # First seed fails
+            sample_graph_results,  # Second seed succeeds
+        ]
+
+        result = await retriever.retrieve(
+            "sales data", mode=RetrievalMode.HYBRID, top_k=5
+        )
+
+        # Should have tried both seeds
+        assert mock_knowledge_graph.get_related.call_count == 2
+        # First call with first seed
+        assert mock_knowledge_graph.get_related.call_args_list[0][0][0] == "not_in_graph_001"
+        # Second call with second seed
+        assert mock_knowledge_graph.get_related.call_args_list[1][0][0] == "table_sales_001"
+
+        # Should have results from both vector and graph
+        assert len(result.items) > 0
+        sources = {item.source for item in result.items}
+        assert "hybrid" in sources or ("vector" in sources and "graph" in sources)
+
 
 class TestRRFAlgorithm:
     """Test Reciprocal Rank Fusion algorithm."""
