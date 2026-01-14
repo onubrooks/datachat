@@ -328,6 +328,95 @@ class TestAddProcessDataPoint:
         ]
         assert edge_data["edge_type"] == EdgeType.USES
 
+    def test_add_process_with_process_dependency(self, knowledge_graph):
+        """Test process->process dependency edges are created."""
+        # Create upstream process
+        upstream_process = ProcessDataPoint(
+            datapoint_id="proc_extract_raw_001",
+            type="Process",
+            name="Extract Raw Data",
+            schedule="0 1 * * *",
+            data_freshness="T-1",
+            target_tables=["raw.sales_events"],
+            owner="data-eng@example.com",
+        )
+
+        # Create downstream process that depends on upstream
+        downstream_process = ProcessDataPoint(
+            datapoint_id="proc_transform_sales_002",
+            type="Process",
+            name="Transform Sales",
+            schedule="0 2 * * *",
+            data_freshness="T-1",
+            target_tables=["staging.sales"],
+            dependencies=["proc_extract_raw_001"],  # Process dependency
+            owner="data-eng@example.com",
+        )
+
+        knowledge_graph.add_datapoint(upstream_process)
+        knowledge_graph.add_datapoint(downstream_process)
+
+        # Check edge from downstream to upstream process
+        assert knowledge_graph.graph.has_edge(
+            "proc_transform_sales_002", "proc_extract_raw_001"
+        )
+
+        edge_data = knowledge_graph.graph["proc_transform_sales_002"][
+            "proc_extract_raw_001"
+        ]
+        assert edge_data["edge_type"] == EdgeType.DEPENDS_ON
+
+    def test_add_process_with_mixed_dependencies(
+        self, knowledge_graph, sample_schema_datapoint
+    ):
+        """Test process with both table and process dependencies."""
+        # Add a table
+        knowledge_graph.add_datapoint(sample_schema_datapoint)
+
+        # Create upstream process
+        upstream_process = ProcessDataPoint(
+            datapoint_id="proc_upstream_001",
+            type="Process",
+            name="Upstream Process",
+            schedule="0 1 * * *",
+            data_freshness="T-1",
+            target_tables=["raw.data"],
+            owner="data-eng@example.com",
+        )
+
+        # Create process with mixed dependencies
+        mixed_process = ProcessDataPoint(
+            datapoint_id="proc_mixed_002",
+            type="Process",
+            name="Mixed Dependencies Process",
+            schedule="0 3 * * *",
+            data_freshness="T-1",
+            target_tables=["staging.combined"],
+            dependencies=[
+                "analytics.fact_sales",  # Table dependency
+                "proc_upstream_001",  # Process dependency
+            ],
+            owner="data-eng@example.com",
+        )
+
+        knowledge_graph.add_datapoint(upstream_process)
+        knowledge_graph.add_datapoint(mixed_process)
+
+        # Check both edges exist
+        assert knowledge_graph.graph.has_edge(
+            "proc_mixed_002", "table_fact_sales_001"
+        )  # Table dep
+        assert knowledge_graph.graph.has_edge(
+            "proc_mixed_002", "proc_upstream_001"
+        )  # Process dep
+
+        # Both should be DEPENDS_ON edges
+        table_edge = knowledge_graph.graph["proc_mixed_002"]["table_fact_sales_001"]
+        process_edge = knowledge_graph.graph["proc_mixed_002"]["proc_upstream_001"]
+
+        assert table_edge["edge_type"] == EdgeType.DEPENDS_ON
+        assert process_edge["edge_type"] == EdgeType.DEPENDS_ON
+
 
 class TestGetRelated:
     """Test finding related nodes."""

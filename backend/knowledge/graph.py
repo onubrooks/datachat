@@ -264,7 +264,13 @@ class KnowledgeGraph:
         if datapoint.dependencies:
             for dep_name in datapoint.dependencies:
                 # Dependencies can be tables or other processes
+                # First try to find as a table by name
                 dep_id = self._find_table_by_name(dep_name)
+
+                # If not a table, try to find as a process by ID
+                if not dep_id:
+                    dep_id = self._find_process_by_id(dep_name)
+
                 if dep_id:
                     self.graph.add_edge(
                         process_id, dep_id, edge_type=EdgeType.DEPENDS_ON, weight=0.9
@@ -547,6 +553,15 @@ class KnowledgeGraph:
                 and data.get("table_name") == table_name
             ):
                 return node
+        return None
+
+    def _find_process_by_id(self, process_id: str) -> Optional[str]:
+        """Find process node by datapoint ID."""
+        # Direct lookup if the ID is already in the graph
+        if process_id in self.graph:
+            node_data = self.graph.nodes[process_id]
+            if node_data.get("node_type") == NodeType.PROCESS:
+                return process_id
         return None
 
     def _find_metrics_by_synonyms(self, synonyms: List[str]) -> List[str]:
