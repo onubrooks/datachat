@@ -262,6 +262,72 @@ class TestValidatorAgent:
             for e in result.validated_sql.errors
         )
 
+    @pytest.mark.asyncio
+    async def test_cte_with_delete_rejected(self, validator_agent, sample_input):
+        """Test that CTE followed by DELETE is rejected (security issue)."""
+        cte_delete_sql = GeneratedSQL(
+            sql="WITH t AS (SELECT id FROM analytics.fact_sales WHERE amount > 1000) DELETE FROM analytics.fact_sales WHERE id IN (SELECT id FROM t)",
+            explanation="CTE with DELETE - should be blocked",
+            used_datapoints=["table_fact_sales_001"],
+            confidence=0.5,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+        sample_input.generated_sql = cte_delete_sql
+
+        result = await validator_agent.execute(sample_input)
+
+        assert result.validated_sql.is_valid is False
+        assert result.validated_sql.is_safe is False
+        assert any(
+            e.error_type == "security" and "DELETE" in e.message
+            for e in result.validated_sql.errors
+        )
+
+    @pytest.mark.asyncio
+    async def test_cte_with_update_rejected(self, validator_agent, sample_input):
+        """Test that CTE followed by UPDATE is rejected (security issue)."""
+        cte_update_sql = GeneratedSQL(
+            sql="WITH t AS (SELECT 1) UPDATE analytics.fact_sales SET amount = 0",
+            explanation="CTE with UPDATE - should be blocked",
+            used_datapoints=["table_fact_sales_001"],
+            confidence=0.5,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+        sample_input.generated_sql = cte_update_sql
+
+        result = await validator_agent.execute(sample_input)
+
+        assert result.validated_sql.is_valid is False
+        assert result.validated_sql.is_safe is False
+        assert any(
+            e.error_type == "security" and "UPDATE" in e.message
+            for e in result.validated_sql.errors
+        )
+
+    @pytest.mark.asyncio
+    async def test_cte_with_insert_rejected(self, validator_agent, sample_input):
+        """Test that CTE followed by INSERT is rejected (security issue)."""
+        cte_insert_sql = GeneratedSQL(
+            sql="WITH t AS (SELECT 1) INSERT INTO analytics.fact_sales (amount) VALUES (999)",
+            explanation="CTE with INSERT - should be blocked",
+            used_datapoints=["table_fact_sales_001"],
+            confidence=0.5,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+        sample_input.generated_sql = cte_insert_sql
+
+        result = await validator_agent.execute(sample_input)
+
+        assert result.validated_sql.is_valid is False
+        assert result.validated_sql.is_safe is False
+        assert any(
+            e.error_type == "security" and "INSERT" in e.message
+            for e in result.validated_sql.errors
+        )
+
     # ============================================================================
     # Performance Warning Tests
     # ============================================================================

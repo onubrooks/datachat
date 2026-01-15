@@ -16,7 +16,7 @@ from typing import List, Optional, Set
 
 import sqlparse
 from sqlparse.sql import Identifier, IdentifierList, Token, Where
-from sqlparse.tokens import Keyword, Whitespace
+from sqlparse.tokens import Comment, Keyword, Whitespace
 
 from backend.agents.base import BaseAgent
 from backend.models import (
@@ -206,11 +206,25 @@ class ValidatorAgent(BaseAgent):
             stmt = parsed[0]
 
             # Check if it's a SELECT or WITH statement
+            # IMPORTANT: If it starts with WITH, we need to check the main statement
+            # after the CTE to prevent "WITH t AS (...) DELETE FROM users"
             first_token = stmt.token_first(skip_ws=True, skip_cm=True)
             if first_token:
                 token_value = first_token.value.upper()
-                if token_value not in ("SELECT", "WITH"):
-                    # Check if first token is a keyword at all
+
+                if token_value == "WITH":
+                    # CTE detected - find the main statement after CTE
+                    main_statement_keyword = self._find_main_statement_after_cte(stmt)
+                    if main_statement_keyword != "SELECT":
+                        errors.append(
+                            SQLValidationError(
+                                error_type="security",
+                                message=f"CTE can only precede SELECT statements, found: {main_statement_keyword}",
+                                severity="critical",
+                            )
+                        )
+                elif token_value != "SELECT":
+                    # Not WITH, not SELECT - reject
                     if first_token.ttype in (Keyword, Keyword.DML, Keyword.CTE):
                         errors.append(
                             SQLValidationError(
@@ -485,6 +499,57 @@ class ValidatorAgent(BaseAgent):
             cte_names.add(cte_name.upper())
 
         return cte_names
+
+    def _find_main_statement_after_cte(self, stmt) -> str:
+        """
+        Find the main statement keyword after a CTE (WITH clause).
+
+        This prevents attacks like "WITH t AS (...) DELETE FROM users"
+        by ensuring CTEs can only precede SELECT statements.
+
+        Args:
+            stmt: Parsed SQL statement object from sqlparse
+
+        Returns:
+            Main statement keyword (e.g., "SELECT", "DELETE", "UPDATE", "UNKNOWN")
+        """
+        # Walk through tokens to find the main statement after CTE
+        # CTE structure: WITH cte_name AS (...) SELECT ...
+        # We need to skip past the CTE definition and find the next DML keyword
+
+        in_cte_definition = False
+        paren_depth = 0
+
+        for token in stmt.tokens:
+            # Skip whitespace and comments
+            if token.ttype in (Whitespace, Comment.Single, Comment.Multiline):
+                continue
+
+            # If we see WITH, we're starting CTE
+            if token.ttype == Keyword.CTE or (
+                token.ttype == Keyword and token.value.upper() == "WITH"
+            ):
+                in_cte_definition = True
+                continue
+
+            # Track parentheses depth in CTE definition
+            if in_cte_definition:
+                token_str = str(token)
+                # Count opening parens
+                paren_depth += token_str.count("(")
+                # Count closing parens
+                paren_depth -= token_str.count(")")
+
+                # If we've closed all parens and see a keyword, that's our main statement
+                if paren_depth == 0 and token.ttype in (Keyword, Keyword.DML):
+                    keyword = token.value.upper()
+                    # Check for SELECT, DELETE, UPDATE, INSERT, etc.
+                    if keyword in ("SELECT", "DELETE", "UPDATE", "INSERT", "REPLACE"):
+                        return keyword
+
+        # If we can't determine the main statement, return UNKNOWN
+        # This will cause validation to fail, which is safer
+        return "UNKNOWN"
 
     def _calculate_performance_score(
         self, sql: str, warnings: List[ValidationWarning]
