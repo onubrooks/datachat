@@ -99,8 +99,10 @@ class ContextAgent(BaseAgent):
             sources_used = []
 
             for item in result.items:
-                # Extract type from metadata (default to "Schema" if not found)
-                datapoint_type = item.metadata.get("type", "Schema")
+                # Extract type from metadata
+                # Vector store uses "type" field directly (Schema/Business/Process)
+                # Knowledge graph uses "node_type" field (table/column/metric/process/glossary)
+                datapoint_type = self._extract_datapoint_type(item.metadata)
 
                 # Extract name from metadata (default to datapoint_id if not found)
                 name = item.metadata.get("name", item.datapoint_id)
@@ -167,6 +169,43 @@ class ContextAgent(BaseAgent):
             raise ValueError(
                 f"ContextAgent requires ContextAgentInput, got {type(input)}"
             )
+
+    def _extract_datapoint_type(self, metadata: Dict[str, Any]) -> str:
+        """
+        Extract DataPoint type from metadata.
+
+        Vector store uses "type" field directly (Schema/Business/Process).
+        Knowledge graph uses "node_type" field (table/column/metric/process/glossary).
+
+        Maps node_type to DataPoint type:
+        - table, column → Schema
+        - metric, glossary → Business
+        - process → Process
+
+        Args:
+            metadata: Item metadata from retrieval
+
+        Returns:
+            DataPoint type: "Schema", "Business", or "Process"
+        """
+        # First check if type is already set (vector store)
+        if "type" in metadata:
+            return metadata["type"]
+
+        # Otherwise map from node_type (knowledge graph)
+        node_type = metadata.get("node_type", "")
+
+        # Map NodeType to DataPoint type
+        if node_type in ("table", "column"):
+            return "Schema"
+        elif node_type in ("metric", "glossary"):
+            return "Business"
+        elif node_type == "process":
+            return "Process"
+        else:
+            # Default to Schema if unknown
+            logger.warning(f"Unknown node_type '{node_type}', defaulting to Schema")
+            return "Schema"
 
     def _build_context_for_next(
         self, input: ContextAgentInput, output: ContextAgentOutput

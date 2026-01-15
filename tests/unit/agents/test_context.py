@@ -474,6 +474,90 @@ class TestDataPointMapping:
     """Test mapping from RetrievedItem to RetrievedDataPoint."""
 
     @pytest.mark.asyncio
+    async def test_maps_node_type_to_datapoint_type(
+        self, context_agent, mock_retriever
+    ):
+        """Test correct mapping from node_type (graph) to DataPoint type."""
+        # Create items with node_type instead of type (from knowledge graph)
+        result = RetrievalResult(
+            items=[
+                RetrievedItem(
+                    datapoint_id="table_sales_001",
+                    score=0.9,
+                    source="graph",
+                    metadata={"node_type": "table", "name": "Sales Table"},
+                ),
+                RetrievedItem(
+                    datapoint_id="column_amount_001",
+                    score=0.8,
+                    source="graph",
+                    metadata={"node_type": "column", "name": "Amount"},
+                ),
+                RetrievedItem(
+                    datapoint_id="metric_revenue_001",
+                    score=0.95,
+                    source="graph",
+                    metadata={"node_type": "metric", "name": "Revenue"},
+                ),
+                RetrievedItem(
+                    datapoint_id="proc_daily_etl_001",
+                    score=0.7,
+                    source="graph",
+                    metadata={"node_type": "process", "name": "Daily ETL"},
+                ),
+            ],
+            total_count=4,
+            mode=RetrievalMode.GLOBAL,
+            query="test",
+        )
+
+        mock_retriever.retrieve.return_value = result
+
+        input_data = ContextAgentInput(query="test", max_datapoints=10)
+        output = await context_agent(input_data)
+
+        datapoints = output.investigation_memory.datapoints
+
+        # Check node_type → DataPoint type mapping
+        assert datapoints[0].datapoint_type == "Schema"  # table → Schema
+        assert datapoints[1].datapoint_type == "Schema"  # column → Schema
+        assert datapoints[2].datapoint_type == "Business"  # metric → Business
+        assert datapoints[3].datapoint_type == "Process"  # process → Process
+
+    @pytest.mark.asyncio
+    async def test_prefers_type_over_node_type(
+        self, context_agent, mock_retriever
+    ):
+        """Test type field takes precedence over node_type (vector store priority)."""
+        # Item has both type and node_type - type should win
+        result = RetrievalResult(
+            items=[
+                RetrievedItem(
+                    datapoint_id="test_001",
+                    score=0.9,
+                    source="hybrid",
+                    metadata={
+                        "type": "Business",  # Vector store value
+                        "node_type": "table",  # Graph value (should be ignored)
+                        "name": "Test Item",
+                    },
+                )
+            ],
+            total_count=1,
+            mode=RetrievalMode.HYBRID,
+            query="test",
+        )
+
+        mock_retriever.retrieve.return_value = result
+
+        input_data = ContextAgentInput(query="test", max_datapoints=10)
+        output = await context_agent(input_data)
+
+        dp = output.investigation_memory.datapoints[0]
+        # Should use "type" field, not node_type mapping
+        assert dp.datapoint_type == "Business"
+
+    @pytest.mark.asyncio
     async def test_handles_missing_metadata_fields(
         self, context_agent, mock_retriever
     ):
