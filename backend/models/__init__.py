@@ -51,6 +51,12 @@ from backend.models.agent import (
     GeneratedSQL,
     ValidationIssue,
     CorrectionAttempt,
+    # ValidatorAgent models
+    SQLValidationError,
+    ValidationWarning,
+    ValidatedSQL,
+    ValidatorAgentInput,
+    ValidatorAgentOutput,
 )
 from backend.models.datapoint import (
     BaseDataPoint,
@@ -81,6 +87,12 @@ __all__ = [
     "GeneratedSQL",
     "ValidationIssue",
     "CorrectionAttempt",
+    # ValidatorAgent models
+    "SQLValidationError",
+    "ValidationWarning",
+    "ValidatedSQL",
+    "ValidatorAgentInput",
+    "ValidatorAgentOutput",
     # DataPoint models
     "DataPoint",
     "BaseDataPoint",

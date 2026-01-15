@@ -7,12 +7,12 @@ Available Agents:
     - BaseAgent: Abstract base class for all agents
     - ContextAgent: Knowledge graph and vector retrieval (pure retrieval, no LLM)
     - SQLAgent: SQL query generation with self-correction
+    - ValidatorAgent: SQL validation with security and performance checks
     - ClassifierAgent: Intent detection and entity extraction (TODO)
-    - ValidatorAgent: Query validation and security checks (TODO)
     - ExecutorAgent: Query execution and response formatting (TODO)
 
 Usage:
-    from backend.agents import BaseAgent, ContextAgent, SQLAgent
+    from backend.agents import BaseAgent, ContextAgent, SQLAgent, ValidatorAgent
 
     class MyAgent(BaseAgent):
         async def execute(self, input: AgentInput) -> AgentOutput:
@@ -26,5 +26,6 @@ Usage:
 from backend.agents.base import BaseAgent
 from backend.agents.context import ContextAgent
 from backend.agents.sql import SQLAgent
+from backend.agents.validator import ValidatorAgent
 
-__all__ = ["BaseAgent", "ContextAgent", "SQLAgent"]
+__all__ = ["BaseAgent", "ContextAgent", "SQLAgent", "ValidatorAgent"]
