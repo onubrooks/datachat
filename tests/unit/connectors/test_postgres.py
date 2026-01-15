@@ -44,9 +44,10 @@ def mock_pool():
     conn.execute = AsyncMock()
 
     # Mock pool.acquire() context manager
+    # IMPORTANT: __aexit__ must return False to not suppress exceptions
     pool.acquire = MagicMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
-    pool.acquire.return_value.__aexit__ = AsyncMock()
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
     pool.close = AsyncMock()
 
     return pool, conn
@@ -200,15 +201,28 @@ class TestQueryExecution:
             await connector.execute("SELECT 1")
 
     @pytest.mark.asyncio
-    async def test_execute_timeout(self, postgres_config, mock_pool):
+    async def test_execute_timeout(self, postgres_config):
         """Test query timeout."""
-        pool, conn = mock_pool
-
         # Create a proper asyncpg exception mock
         from asyncpg.exceptions import QueryCanceledError as AsyncpgQueryCanceledError
 
-        conn.fetch = AsyncMock(side_effect=AsyncpgQueryCanceledError("Timeout"))
+        # Create fresh mocks for this test
+        pool = AsyncMock()
+        conn = AsyncMock()
+
+        # Mock successful connection check
+        conn.fetchval = AsyncMock(return_value="PostgreSQL 15.0")
+        # Mock execute to succeed (for SET statement_timeout)
         conn.execute = AsyncMock()
+        # Mock fetch to raise timeout exception
+        conn.fetch = AsyncMock(side_effect=AsyncpgQueryCanceledError("Timeout"))
+
+        # Mock pool.acquire() context manager
+        # IMPORTANT: __aexit__ must return False to not suppress exceptions
+        pool.acquire = MagicMock()
+        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+        pool.close = AsyncMock()
 
         with patch("asyncpg.create_pool", new=AsyncMock(return_value=pool)):
             connector = PostgresConnector(**postgres_config)
@@ -218,14 +232,27 @@ class TestQueryExecution:
                 await connector.execute("SELECT pg_sleep(100)")
 
     @pytest.mark.asyncio
-    async def test_execute_query_error(self, postgres_config, mock_pool):
+    async def test_execute_query_error(self, postgres_config):
         """Test query execution error."""
-        pool, conn = mock_pool
-
         from asyncpg.exceptions import PostgresSyntaxError as AsyncpgSyntaxError
 
-        conn.fetch = AsyncMock(side_effect=AsyncpgSyntaxError("Syntax error"))
+        # Create fresh mocks for this test
+        pool = AsyncMock()
+        conn = AsyncMock()
+
+        # Mock successful connection check
+        conn.fetchval = AsyncMock(return_value="PostgreSQL 15.0")
+        # Mock execute to succeed (for SET statement_timeout)
         conn.execute = AsyncMock()
+        # Mock fetch to raise syntax error
+        conn.fetch = AsyncMock(side_effect=AsyncpgSyntaxError("Syntax error"))
+
+        # Mock pool.acquire() context manager
+        # IMPORTANT: __aexit__ must return False to not suppress exceptions
+        pool.acquire = MagicMock()
+        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+        pool.close = AsyncMock()
 
         with patch("asyncpg.create_pool", new=AsyncMock(return_value=pool)):
             connector = PostgresConnector(**postgres_config)
@@ -236,20 +263,27 @@ class TestQueryExecution:
 
     @pytest.mark.asyncio
     async def test_execute_custom_timeout(self, postgres_config, mock_pool):
-        """Test query with custom timeout."""
+        """Test query with custom timeout override."""
         pool, conn = mock_pool
         conn.fetch = AsyncMock(return_value=[])
+        conn.execute = AsyncMock()
 
         with patch("asyncpg.create_pool", new=AsyncMock(return_value=pool)):
             connector = PostgresConnector(**postgres_config)
             await connector.connect()
 
+            # Execute with custom timeout (60s instead of default 30s)
             await connector.execute("SELECT 1", timeout=60)
 
-            # Verify timeout was set
-            conn.execute.assert_called()
-            call_args = conn.execute.call_args_list[0]
-            assert "60000" in call_args[0][0]  # 60 seconds = 60000 ms
+            # Verify statement_timeout was set to 60 seconds (60000 ms)
+            conn.execute.assert_called_once()
+            call_args = conn.execute.call_args[0]
+            assert "60000" in call_args[0]  # 60 seconds = 60000 ms
+
+            # Verify fetch was called with timeout parameter
+            conn.fetch.assert_called_once()
+            fetch_kwargs = conn.fetch.call_args[1]
+            assert fetch_kwargs["timeout"] == 60
 
 
 class TestSchemaIntrospection:
@@ -302,8 +336,14 @@ class TestSchemaIntrospection:
                 return fk_result
             return []
 
+        async def mock_fetchval(query, *args):
+            if "version()" in query:
+                return "PostgreSQL 15.0"
+            else:
+                return row_count_result
+
         conn.fetch = AsyncMock(side_effect=mock_fetch)
-        conn.fetchval = AsyncMock(return_value=row_count_result)
+        conn.fetchval = AsyncMock(side_effect=mock_fetchval)
 
         with patch("asyncpg.create_pool", new=AsyncMock(return_value=pool)):
             connector = PostgresConnector(**postgres_config)
@@ -342,13 +382,25 @@ class TestSchemaIntrospection:
             await connector.get_schema()
 
     @pytest.mark.asyncio
-    async def test_get_schema_error(self, postgres_config, mock_pool):
+    async def test_get_schema_error(self, postgres_config):
         """Test schema introspection error."""
-        pool, conn = mock_pool
-
         from asyncpg.exceptions import PostgresError as AsyncpgPostgresError
 
+        # Create fresh mocks for this test
+        pool = AsyncMock()
+        conn = AsyncMock()
+
+        # Mock successful connection check
+        conn.fetchval = AsyncMock(return_value="PostgreSQL 15.0")
+        # Mock fetch to raise schema error
         conn.fetch = AsyncMock(side_effect=AsyncpgPostgresError("Schema error"))
+
+        # Mock pool.acquire() context manager
+        # IMPORTANT: __aexit__ must return False to not suppress exceptions
+        pool.acquire = MagicMock()
+        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+        pool.close = AsyncMock()
 
         with patch("asyncpg.create_pool", new=AsyncMock(return_value=pool)):
             connector = PostgresConnector(**postgres_config)

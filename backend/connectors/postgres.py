@@ -78,6 +78,9 @@ class PostgresConnector(BaseConnector):
         try:
             logger.info(f"Connecting to PostgreSQL at {self.host}:{self.port}/{self.database}")
 
+            # Create pool with high command_timeout
+            # We'll use per-query timeouts instead of pool-level timeout
+            # to allow query-specific timeout overrides
             self._pool = await asyncpg.create_pool(
                 host=self.host,
                 port=self.port,
@@ -86,7 +89,7 @@ class PostgresConnector(BaseConnector):
                 password=self.password,
                 min_size=1,
                 max_size=self.pool_size,
-                command_timeout=self.timeout,
+                command_timeout=None,  # No pool-level timeout; use per-query instead
                 **self.kwargs,
             )
 
@@ -133,14 +136,15 @@ class PostgresConnector(BaseConnector):
 
         try:
             async with self._pool.acquire() as conn:
-                # Set statement timeout
+                # Set statement timeout (server-side)
                 await conn.execute(f"SET statement_timeout = {query_timeout * 1000}")
 
-                # Execute query
+                # Execute query with client-side timeout
+                # This ensures both client and server respect the timeout
                 if params:
-                    rows = await conn.fetch(query, *params)
+                    rows = await conn.fetch(query, *params, timeout=query_timeout)
                 else:
-                    rows = await conn.fetch(query)
+                    rows = await conn.fetch(query, timeout=query_timeout)
 
                 # Convert to dict format
                 result_rows = [dict(row) for row in rows]
