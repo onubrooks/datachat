@@ -173,3 +173,157 @@ class RetrievalError(AgentError):
 
     def __init__(self, agent: str, message: str, context: Optional[Dict[str, Any]] = None):
         super().__init__(agent, message, recoverable=True, context=context)
+
+
+# ============================================================================
+# ContextAgent Models
+# ============================================================================
+
+
+class ExtractedEntity(BaseModel):
+    """Entity extracted from user query (optional for ContextAgent)."""
+
+    entity_type: Literal["table", "column", "metric", "process", "value"]
+    value: str
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence score 0-1")
+
+    model_config = ConfigDict(frozen=True)
+
+
+class ContextAgentInput(AgentInput):
+    """
+    Input for ContextAgent.
+
+    ContextAgent performs pure retrieval (no LLM calls) to gather relevant
+    DataPoints for the user's query. Can optionally use extracted entities
+    to improve retrieval precision.
+    """
+
+    entities: List[ExtractedEntity] = Field(
+        default_factory=list,
+        description="Entities extracted from query (optional, from ClassifierAgent)"
+    )
+    retrieval_mode: Literal["local", "global", "hybrid"] = Field(
+        default="hybrid",
+        description="Retrieval mode: local (vector), global (graph), hybrid (both)"
+    )
+    max_datapoints: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Maximum number of DataPoints to retrieve"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "What were total sales last quarter?",
+                "entities": [
+                    {"entity_type": "metric", "value": "sales", "confidence": 0.9},
+                    {"entity_type": "table", "value": "fact_sales", "confidence": 0.8}
+                ],
+                "retrieval_mode": "hybrid",
+                "max_datapoints": 10
+            }
+        }
+    )
+
+
+class RetrievedDataPoint(BaseModel):
+    """A single retrieved DataPoint with retrieval metadata."""
+
+    datapoint_id: str = Field(..., description="DataPoint identifier")
+    datapoint_type: Literal["Schema", "Business", "Process"]
+    name: str = Field(..., description="Human-readable name")
+    score: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Relevance score (0-1, higher is better)"
+    )
+    source: str = Field(..., description="Retrieval source (vector/graph/hybrid)")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Full DataPoint metadata"
+    )
+
+    model_config = ConfigDict(frozen=True)
+
+
+class InvestigationMemory(BaseModel):
+    """
+    Contextual memory for the investigation.
+
+    Contains relevant DataPoints retrieved for the query, organized by type
+    and ranked by relevance. This memory is passed to downstream agents
+    (SQLAgent, etc.) to inform their reasoning.
+    """
+
+    query: str = Field(..., description="Original user query")
+    datapoints: List[RetrievedDataPoint] = Field(
+        default_factory=list,
+        description="Retrieved DataPoints ranked by relevance"
+    )
+    total_retrieved: int = Field(..., description="Total number of DataPoints retrieved")
+    retrieval_mode: str = Field(..., description="Retrieval mode used")
+    sources_used: List[str] = Field(
+        default_factory=list,
+        description="Unique sources (for citation tracking)"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "What were total sales last quarter?",
+                "datapoints": [
+                    {
+                        "datapoint_id": "metric_revenue_001",
+                        "datapoint_type": "Business",
+                        "name": "Revenue",
+                        "score": 0.95,
+                        "source": "hybrid",
+                        "metadata": {"calculation": "SUM(amount)"}
+                    }
+                ],
+                "total_retrieved": 5,
+                "retrieval_mode": "hybrid",
+                "sources_used": ["metric_revenue_001", "table_sales_001"]
+            }
+        }
+    )
+
+
+class ContextAgentOutput(AgentOutput):
+    """
+    Output from ContextAgent.
+
+    Contains InvestigationMemory with retrieved DataPoints that will be used
+    by downstream agents for SQL generation and query planning.
+    """
+
+    investigation_memory: InvestigationMemory = Field(
+        ...,
+        description="Retrieved context and DataPoints"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "success": True,
+                "data": {},
+                "metadata": {
+                    "agent_name": "ContextAgent",
+                    "duration_ms": 45.2,
+                    "llm_calls": 0  # ContextAgent doesn't use LLM
+                },
+                "next_agent": "SQLAgent",
+                "investigation_memory": {
+                    "query": "What were total sales last quarter?",
+                    "datapoints": [],
+                    "total_retrieved": 5,
+                    "retrieval_mode": "hybrid",
+                    "sources_used": []
+                }
+            }
+        }
+    )
