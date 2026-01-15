@@ -43,7 +43,14 @@ from backend.models.agent import (
     LLMError,
     Message,
     RetrievalError,
+    SQLGenerationError,
     ValidationError,
+    # SQLAgent models
+    SQLAgentInput,
+    SQLAgentOutput,
+    GeneratedSQL,
+    ValidationIssue,
+    CorrectionAttempt,
 )
 from backend.models.datapoint import (
     BaseDataPoint,
@@ -67,6 +74,13 @@ __all__ = [
     "LLMError",
     "DatabaseError",
     "RetrievalError",
+    "SQLGenerationError",
+    # SQLAgent models
+    "SQLAgentInput",
+    "SQLAgentOutput",
+    "GeneratedSQL",
+    "ValidationIssue",
+    "CorrectionAttempt",
     # DataPoint models
     "DataPoint",
     "BaseDataPoint",
