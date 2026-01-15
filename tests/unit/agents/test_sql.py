@@ -444,6 +444,45 @@ class TestValidation:
 
         assert len(issues) == 0
 
+    def test_accepts_ctes(self, sql_agent, sample_sql_agent_input):
+        """Test accepts CTEs (Common Table Expressions) without flagging as missing tables."""
+        # SQL with CTE - the 'sales' CTE should not be flagged as missing_table
+        cte_sql = GeneratedSQL(
+            sql="""WITH sales AS (
+                SELECT amount, date FROM analytics.fact_sales WHERE date >= '2024-07-01'
+            )
+            SELECT SUM(amount) FROM sales""",
+            explanation="Query using CTE",
+            used_datapoints=["table_fact_sales_001"],
+            confidence=0.95,
+            assumptions=[],
+            clarifying_questions=[]
+        )
+
+        issues = sql_agent._validate_sql(cte_sql, sample_sql_agent_input)
+
+        # Should have NO issues - 'sales' is a CTE, not a missing table
+        assert len(issues) == 0
+
+    def test_accepts_multiple_ctes(self, sql_agent, sample_sql_agent_input):
+        """Test accepts multiple CTEs."""
+        multi_cte_sql = GeneratedSQL(
+            sql="""WITH
+                sales AS (SELECT amount FROM analytics.fact_sales),
+                filtered_sales AS (SELECT amount FROM sales WHERE amount > 100)
+            SELECT SUM(amount) FROM filtered_sales""",
+            explanation="Query with multiple CTEs",
+            used_datapoints=["table_fact_sales_001"],
+            confidence=0.95,
+            assumptions=[],
+            clarifying_questions=[]
+        )
+
+        issues = sql_agent._validate_sql(multi_cte_sql, sample_sql_agent_input)
+
+        # Both 'sales' and 'filtered_sales' are CTEs, should not be flagged
+        assert len(issues) == 0
+
 
 class TestPromptBuilding:
     """Test prompt construction logic."""

@@ -327,7 +327,7 @@ class SQLAgent(BaseAgent):
 
         Performs basic validation checks:
         - Basic syntax check (SELECT, FROM keywords)
-        - Table names match available DataPoints
+        - Table names match available DataPoints (excluding CTEs and subqueries)
         - Column names referenced in DataPoints
         - No obvious SQL injection patterns
 
@@ -342,12 +342,12 @@ class SQLAgent(BaseAgent):
         sql = generated_sql.sql.strip().upper()
 
         # Basic syntax checks
-        if not sql.startswith("SELECT"):
+        if not sql.startswith("SELECT") and not sql.startswith("WITH"):
             issues.append(
                 ValidationIssue(
                     issue_type="syntax",
-                    message="SQL must start with SELECT",
-                    suggested_fix="Ensure query begins with SELECT statement"
+                    message="SQL must start with SELECT or WITH",
+                    suggested_fix="Ensure query begins with SELECT or WITH (for CTEs)"
                 )
             )
 
@@ -360,7 +360,21 @@ class SQLAgent(BaseAgent):
                 )
             )
 
-        # Extract table names from SQL
+        # Extract CTE names (Common Table Expressions) from WITH clause
+        # Pattern: WITH cte_name AS (...), another_cte AS (...)
+        cte_names = set()
+        cte_pattern = r'WITH\s+([a-zA-Z0-9_]+)\s+AS\s*\('
+        cte_matches = re.findall(cte_pattern, sql, re.IGNORECASE)
+        for cte_name in cte_matches:
+            cte_names.add(cte_name.upper())
+
+        # Also match comma-separated CTEs: , cte_name AS (
+        additional_cte_pattern = r',\s*([a-zA-Z0-9_]+)\s+AS\s*\('
+        additional_ctes = re.findall(additional_cte_pattern, sql, re.IGNORECASE)
+        for cte_name in additional_ctes:
+            cte_names.add(cte_name.upper())
+
+        # Extract table names from SQL (FROM and JOIN clauses)
         table_pattern = r'FROM\s+([a-zA-Z0-9_.]+)|JOIN\s+([a-zA-Z0-9_.]+)'
         table_matches = re.findall(table_pattern, sql, re.IGNORECASE)
         referenced_tables = {
@@ -378,13 +392,23 @@ class SQLAgent(BaseAgent):
                 if "." in table_name:
                     available_tables.add(table_name.split(".")[-1].upper())
 
-        # Check for missing tables
+        # Check for missing tables (excluding CTEs and special tables)
         for table in referenced_tables:
             table_upper = table.upper()
+
+            # Skip if this is a CTE name
+            if table_upper in cte_names:
+                continue
+
+            # Skip special tables
+            if table_upper in ("DUAL", "LATERAL"):
+                continue
+
+            # Check if table exists in DataPoints
             if table_upper not in available_tables and "." in table:
                 # Check without schema
                 table_no_schema = table.split(".")[-1].upper()
-                if table_no_schema not in available_tables:
+                if table_no_schema not in available_tables and table_no_schema not in cte_names:
                     issues.append(
                         ValidationIssue(
                             issue_type="missing_table",
@@ -394,14 +418,13 @@ class SQLAgent(BaseAgent):
                     )
             elif table_upper not in available_tables:
                 # Simple table name not found
-                if table_upper != "DUAL":  # DUAL is a special Oracle table
-                    issues.append(
-                        ValidationIssue(
-                            issue_type="missing_table",
-                            message=f"Table '{table}' not found in available DataPoints",
-                            suggested_fix=f"Use one of: {', '.join(sorted(available_tables))}"
-                        )
+                issues.append(
+                    ValidationIssue(
+                        issue_type="missing_table",
+                        message=f"Table '{table}' not found in available DataPoints",
+                        suggested_fix=f"Use one of: {', '.join(sorted(available_tables))}"
                     )
+                )
 
         return issues
 
