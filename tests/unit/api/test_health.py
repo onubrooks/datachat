@@ -4,7 +4,7 @@ Unit Tests for Health Check Endpoints
 Tests the /api/v1/health and /api/v1/ready endpoints.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient

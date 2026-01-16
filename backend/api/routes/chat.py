@@ -70,6 +70,11 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
         data = None
         if query_result and isinstance(query_result, dict):
             data = query_result.get("data")
+            if data is None:
+                rows = query_result.get("rows")
+                columns = query_result.get("columns")
+                if isinstance(rows, list) and isinstance(columns, list):
+                    data = {col: [row.get(col) for row in rows] for col in columns}
 
         # Extract visualization hint
         visualization_hint = result.get("visualization_hint")

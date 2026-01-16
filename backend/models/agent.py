@@ -185,13 +185,29 @@ class SQLGenerationError(AgentError):
 
 
 class ExtractedEntity(BaseModel):
-    """Entity extracted from user query (optional for ContextAgent)."""
+    """Entity extracted from user query."""
 
-    entity_type: Literal["table", "column", "metric", "process", "value"]
-    value: str
-    confidence: float = Field(ge=0.0, le=1.0, description="Confidence score 0-1")
+    entity_type: Literal["table", "column", "metric", "time_reference", "filter", "other"] = Field(
+        ..., description="Type of entity"
+    )
+    value: str = Field(..., description="Entity value as mentioned in query")
+    confidence: float = Field(
+        default=1.0, ge=0.0, le=1.0, description="Confidence in extraction (0-1)"
+    )
+    normalized_value: str | None = Field(
+        None, description="Normalized/canonical form of the entity"
+    )
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "entity_type": "metric",
+                "value": "total sales",
+                "confidence": 0.95,
+                "normalized_value": "revenue",
+            }
+        }
+    )
 
 
 class ContextAgentInput(AgentInput):
@@ -622,32 +638,6 @@ class ValidatorAgentOutput(AgentOutput):
 # ==============================================================================
 # ClassifierAgent Models
 # ==============================================================================
-
-
-class ExtractedEntity(BaseModel):
-    """Entity extracted from user query."""
-
-    entity_type: Literal["table", "column", "metric", "time_reference", "filter", "other"] = Field(
-        ..., description="Type of entity"
-    )
-    value: str = Field(..., description="Entity value as mentioned in query")
-    confidence: float = Field(
-        default=1.0, ge=0.0, le=1.0, description="Confidence in extraction (0-1)"
-    )
-    normalized_value: str | None = Field(
-        None, description="Normalized/canonical form of the entity"
-    )
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "entity_type": "metric",
-                "value": "total sales",
-                "confidence": 0.95,
-                "normalized_value": "revenue",
-            }
-        }
-    )
 
 
 class QueryClassification(BaseModel):

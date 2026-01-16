@@ -79,15 +79,6 @@ from backend.models.agent import (
     ValidatorAgentInput,
     ValidatorAgentOutput,
 )
-from backend.models.datapoint import (
-    BaseDataPoint,
-    BusinessDataPoint,
-    ColumnMetadata,
-    DataPoint,
-    ProcessDataPoint,
-    Relationship,
-    SchemaDataPoint,
-)
 from backend.models.api import (
     ChatMetrics,
     ChatRequest,
@@ -96,6 +87,15 @@ from backend.models.api import (
     ErrorResponse,
     HealthResponse,
     ReadinessResponse,
+)
+from backend.models.datapoint import (
+    BaseDataPoint,
+    BusinessDataPoint,
+    ColumnMetadata,
+    DataPoint,
+    ProcessDataPoint,
+    Relationship,
+    SchemaDataPoint,
 )
 
 __all__ = [
