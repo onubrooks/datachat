@@ -617,3 +617,234 @@ class ValidatorAgentOutput(AgentOutput):
             }
         }
     )
+
+
+# ==============================================================================
+# ClassifierAgent Models
+# ==============================================================================
+
+
+class ExtractedEntity(BaseModel):
+    """Entity extracted from user query."""
+
+    entity_type: Literal["table", "column", "metric", "time_reference", "filter", "other"] = Field(
+        ..., description="Type of entity"
+    )
+    value: str = Field(..., description="Entity value as mentioned in query")
+    confidence: float = Field(
+        default=1.0, ge=0.0, le=1.0, description="Confidence in extraction (0-1)"
+    )
+    normalized_value: str | None = Field(
+        None, description="Normalized/canonical form of the entity"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "entity_type": "metric",
+                "value": "total sales",
+                "confidence": 0.95,
+                "normalized_value": "revenue",
+            }
+        }
+    )
+
+
+class QueryClassification(BaseModel):
+    """Classification result for user query."""
+
+    intent: Literal["data_query", "exploration", "explanation", "meta"] = Field(
+        ..., description="Primary intent of the query"
+    )
+    entities: list[ExtractedEntity] = Field(
+        default_factory=list, description="Entities extracted from query"
+    )
+    complexity: Literal["simple", "medium", "complex"] = Field(
+        ..., description="Query complexity level"
+    )
+    clarification_needed: bool = Field(
+        default=False, description="Whether query needs clarification"
+    )
+    clarifying_questions: list[str] = Field(
+        default_factory=list,
+        description="Questions to ask user for clarification",
+    )
+    confidence: float = Field(
+        default=1.0, ge=0.0, le=1.0, description="Overall classification confidence"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "intent": "data_query",
+                "entities": [
+                    {"entity_type": "metric", "value": "revenue", "confidence": 0.95},
+                    {"entity_type": "time_reference", "value": "last quarter", "confidence": 0.9},
+                ],
+                "complexity": "simple",
+                "clarification_needed": False,
+                "clarifying_questions": [],
+                "confidence": 0.92,
+            }
+        }
+    )
+
+
+class ClassifierAgentInput(AgentInput):
+    """Input for ClassifierAgent."""
+
+    # Inherits query and conversation_history from AgentInput
+    # No additional fields needed
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "What was total revenue last quarter?",
+                "conversation_history": [],
+                "context": {},
+            }
+        }
+    )
+
+
+class ClassifierAgentOutput(AgentOutput):
+    """Output from ClassifierAgent."""
+
+    classification: QueryClassification = Field(..., description="Query classification result")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "success": True,
+                "classification": {
+                    "intent": "data_query",
+                    "entities": [{"entity_type": "metric", "value": "revenue", "confidence": 0.95}],
+                    "complexity": "simple",
+                    "clarification_needed": False,
+                    "confidence": 0.92,
+                },
+                "next_agent": "ContextAgent",
+            }
+        }
+    )
+
+
+# ==============================================================================
+# ExecutorAgent Models
+# ==============================================================================
+
+
+class QueryResult(BaseModel):
+    """Result from executing a SQL query."""
+
+    rows: list[dict[str, Any]] = Field(..., description="Query result rows")
+    row_count: int = Field(..., description="Number of rows returned")
+    columns: list[str] = Field(..., description="Column names in result")
+    execution_time_ms: float = Field(..., description="Query execution time in milliseconds")
+    was_truncated: bool = Field(
+        default=False, description="Whether results were truncated due to size"
+    )
+    max_rows: int | None = Field(None, description="Maximum rows allowed (if truncated)")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "rows": [
+                    {"customer_id": 123, "total_amount": 5000.0},
+                    {"customer_id": 456, "total_amount": 3200.0},
+                ],
+                "row_count": 2,
+                "columns": ["customer_id", "total_amount"],
+                "execution_time_ms": 45.2,
+                "was_truncated": False,
+                "max_rows": None,
+            }
+        }
+    )
+
+
+class ExecutedQuery(BaseModel):
+    """Complete query execution result with summary and visualization hints."""
+
+    query_result: QueryResult = Field(..., description="Raw query results")
+    natural_language_answer: str = Field(..., description="Natural language summary of results")
+    visualization_hint: (
+        Literal["table", "bar_chart", "line_chart", "pie_chart", "scatter", "none"] | None
+    ) = Field(None, description="Suggested visualization type")
+    key_insights: list[str] = Field(default_factory=list, description="Key insights from the data")
+    source_citations: list[str] = Field(
+        default_factory=list, description="DataPoint IDs used in pipeline"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query_result": {
+                    "rows": [{"customer_id": 123, "total_amount": 5000.0}],
+                    "row_count": 1,
+                    "columns": ["customer_id", "total_amount"],
+                    "execution_time_ms": 45.2,
+                },
+                "natural_language_answer": "Customer 123 had total sales of $5,000",
+                "visualization_hint": "table",
+                "key_insights": ["Single customer dominates sales"],
+                "source_citations": ["table_fact_sales_001"],
+            }
+        }
+    )
+
+
+class ExecutorAgentInput(AgentInput):
+    """Input for ExecutorAgent."""
+
+    validated_sql: ValidatedSQL = Field(..., description="Validated SQL from ValidatorAgent")
+    database_type: Literal["postgresql", "clickhouse", "mysql"] = Field(
+        ..., description="Target database type"
+    )
+    max_rows: int = Field(default=1000, description="Maximum rows to return")
+    timeout_seconds: int = Field(default=30, description="Query timeout in seconds")
+    source_datapoints: list[str] = Field(
+        default_factory=list, description="DataPoint IDs used in pipeline for citations"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "What were total sales?",
+                "validated_sql": {
+                    "is_valid": True,
+                    "sql": "SELECT SUM(amount) FROM fact_sales",
+                    "is_safe": True,
+                },
+                "database_type": "postgresql",
+                "max_rows": 1000,
+                "timeout_seconds": 30,
+                "source_datapoints": ["table_fact_sales_001"],
+            }
+        }
+    )
+
+
+class ExecutorAgentOutput(AgentOutput):
+    """Output from ExecutorAgent."""
+
+    executed_query: ExecutedQuery = Field(..., description="Executed query with results")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "success": True,
+                "executed_query": {
+                    "query_result": {
+                        "rows": [{"total": 150000.0}],
+                        "row_count": 1,
+                        "columns": ["total"],
+                        "execution_time_ms": 125.5,
+                    },
+                    "natural_language_answer": "Total sales were $150,000",
+                    "visualization_hint": "none",
+                    "source_citations": ["table_fact_sales_001"],
+                },
+            }
+        }
+    )

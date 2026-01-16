@@ -547,8 +547,12 @@ Example:
                 table_schema = metadata.get("schema", "")
                 business_purpose = metadata.get("business_purpose", "")
 
-                # Include schema in fully qualified table name if available
-                full_table_name = f"{table_schema}.{table_name}" if table_schema else table_name
+                # Only prefix schema if table_name doesn't already include it
+                # Avoids double-qualification like "analytics.analytics.fact_sales"
+                if table_schema and "." not in table_name:
+                    full_table_name = f"{table_schema}.{table_name}"
+                else:
+                    full_table_name = table_name
                 schema_parts.append(f"\n**Table: {full_table_name}**")
                 if business_purpose:
                     schema_parts.append(f"Purpose: {business_purpose}")

@@ -153,15 +153,24 @@ def reset_environment_per_test(monkeypatch):
     # Cleanup happens automatically via monkeypatch
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def mock_openai_api_key(monkeypatch):
     """
     Mock OpenAI API key for tests that require it.
 
     This prevents tests from attempting real API calls.
+    Runs automatically for all tests.
     """
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key-123")
-    yield "test-key-123"
+    # Clear the settings cache to force reload with new env vars
+    from backend.config import get_settings
+    get_settings.cache_clear()
+
+    test_key = "sk-test-key-1234567890-abcdefghijklmnop"  # 20+ chars
+    monkeypatch.setenv("OPENAI_API_KEY", test_key)
+    yield test_key
+
+    # Clear cache after test
+    get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -232,3 +241,62 @@ def assert_timing():
         assert duration_ms <= max_ms, f"Execution too slow: {duration_ms:.2f}ms > {max_ms}ms"
 
     return _assert_timing
+
+
+# ============================================================================
+# Mock LLM Provider
+# ============================================================================
+
+
+@pytest.fixture
+def mock_llm_provider():
+    """
+    Mock LLM provider for testing agents.
+
+    Provides a simple interface for setting responses.
+
+    Usage:
+        def test_agent(mock_llm_provider):
+            mock_llm_provider.set_response("test response")
+            result = await agent.execute(input)
+    """
+    from unittest.mock import AsyncMock
+
+    class MockLLMProvider:
+        def __init__(self):
+            self.generate = AsyncMock()
+            self.stream = AsyncMock()
+            self.count_tokens = AsyncMock(return_value=100)
+            self.get_model_info = AsyncMock(return_value={"name": "mock-model"})
+
+        def set_response(self, response: str):
+            """Set the response that generate() will return."""
+            self.generate.return_value = response
+
+    return MockLLMProvider()
+
+
+# ============================================================================
+# Mock Database Connectors
+# ============================================================================
+
+
+@pytest.fixture
+def mock_postgres_connector():
+    """
+    Mock PostgreSQL connector for testing.
+
+    Usage:
+        def test_query(mock_postgres_connector):
+            mock_postgres_connector.execute.return_value = QueryResult(...)
+            result = await connector.execute("SELECT 1")
+    """
+    from unittest.mock import AsyncMock
+
+    connector = AsyncMock()
+    connector.connect = AsyncMock()
+    connector.close = AsyncMock()
+    connector.execute = AsyncMock()
+    connector.get_schema = AsyncMock()
+
+    return connector
