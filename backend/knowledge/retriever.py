@@ -7,7 +7,7 @@ Supports local (vector), global (graph), and hybrid retrieval modes.
 
 import logging
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -31,16 +31,14 @@ class RetrievedItem(BaseModel):
     datapoint_id: str = Field(..., description="DataPoint identifier")
     score: float = Field(..., description="Relevance score (0-1, higher is better)")
     source: str = Field(..., description="Retrieval source (vector/graph/hybrid)")
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict, description="Additional metadata"
-    )
-    content: Optional[str] = Field(None, description="Retrieved content/document")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    content: str | None = Field(None, description="Retrieved content/document")
 
 
 class RetrievalResult(BaseModel):
     """Result from retrieval operation."""
 
-    items: List[RetrievedItem] = Field(
+    items: list[RetrievedItem] = Field(
         default_factory=list, description="Retrieved items ranked by relevance"
     )
     total_count: int = Field(..., description="Total number of items retrieved")
@@ -109,10 +107,10 @@ class Retriever:
         query: str,
         mode: RetrievalMode = RetrievalMode.HYBRID,
         top_k: int = 10,
-        vector_top_k: Optional[int] = None,
-        graph_top_k: Optional[int] = None,
+        vector_top_k: int | None = None,
+        graph_top_k: int | None = None,
         graph_max_depth: int = 2,
-        metadata_filter: Optional[Dict[str, Any]] = None,
+        metadata_filter: dict[str, Any] | None = None,
     ) -> RetrievalResult:
         """
         Retrieve relevant DataPoints based on query.
@@ -153,17 +151,15 @@ class Retriever:
                 f"Retrieved {len(items)} items using {mode} mode for query: '{query[:50]}...'"
             )
 
-            return RetrievalResult(
-                items=items, total_count=len(items), mode=mode, query=query
-            )
+            return RetrievalResult(items=items, total_count=len(items), mode=mode, query=query)
 
         except Exception as e:
             logger.error(f"Retrieval failed: {e}")
             raise RetrieverError(f"Retrieval failed: {e}") from e
 
     async def _retrieve_local(
-        self, query: str, top_k: int, metadata_filter: Optional[Dict[str, Any]] = None
-    ) -> List[RetrievedItem]:
+        self, query: str, top_k: int, metadata_filter: dict[str, Any] | None = None
+    ) -> list[RetrievedItem]:
         """Retrieve using vector search only."""
         vector_results = await self.vector_store.search(
             query, top_k=top_k, filter_metadata=metadata_filter
@@ -191,12 +187,10 @@ class Retriever:
 
     async def _retrieve_global(
         self, node_id: str, top_k: int, max_depth: int
-    ) -> List[RetrievedItem]:
+    ) -> list[RetrievedItem]:
         """Retrieve using graph traversal only."""
         # Get related nodes from graph
-        related_nodes = self.knowledge_graph.get_related(
-            node_id, max_depth=max_depth
-        )
+        related_nodes = self.knowledge_graph.get_related(node_id, max_depth=max_depth)
 
         items = []
         for node in related_nodes[:top_k]:
@@ -225,8 +219,8 @@ class Retriever:
         vector_top_k: int,
         graph_top_k: int,
         graph_max_depth: int,
-        metadata_filter: Optional[Dict[str, Any]] = None,
-    ) -> List[RetrievedItem]:
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[RetrievedItem]:
         """Retrieve using both vector and graph, combined with RRF."""
         # Get vector results
         vector_results = await self.vector_store.search(
@@ -293,11 +287,11 @@ class Retriever:
 
         # Deduplicate and create final items
         items = []
-        seen_ids: Set[str] = set()
+        seen_ids: set[str] = set()
 
-        for datapoint_id, rrf_score in sorted(
-            rrf_scores.items(), key=lambda x: x[1], reverse=True
-        )[:top_k]:
+        for datapoint_id, rrf_score in sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[
+            :top_k
+        ]:
             if datapoint_id in seen_ids:
                 continue
             seen_ids.add(datapoint_id)
@@ -311,9 +305,7 @@ class Retriever:
             # Determine source
             in_vector = datapoint_id in vector_items
             in_graph = datapoint_id in graph_items
-            source = "hybrid" if (in_vector and in_graph) else (
-                "vector" if in_vector else "graph"
-            )
+            source = "hybrid" if (in_vector and in_graph) else ("vector" if in_vector else "graph")
 
             items.append(
                 RetrievedItem(
@@ -334,9 +326,9 @@ class Retriever:
 
     def _apply_rrf(
         self,
-        vector_items: Dict[str, Dict[str, Any]],
-        graph_items: Dict[str, Dict[str, Any]],
-    ) -> Dict[str, float]:
+        vector_items: dict[str, dict[str, Any]],
+        graph_items: dict[str, dict[str, Any]],
+    ) -> dict[str, float]:
         """
         Apply Reciprocal Rank Fusion (RRF) to combine rankings.
 

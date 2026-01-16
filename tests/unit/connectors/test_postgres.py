@@ -4,18 +4,18 @@ Unit tests for PostgresConnector.
 Tests the PostgreSQL connector with mocked asyncpg connections.
 """
 
-import pytest
-from unittest.mock import AsyncMock, Mock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from backend.connectors.postgres import PostgresConnector
+import pytest
+
 from backend.connectors.base import (
     ConnectionError,
     QueryError,
-    SchemaError,
     QueryResult,
+    SchemaError,
     TableInfo,
-    ColumnInfo,
 )
+from backend.connectors.postgres import PostgresConnector
 
 
 @pytest.fixture
@@ -182,9 +182,7 @@ class TestQueryExecution:
             connector = PostgresConnector(**postgres_config)
             await connector.connect()
 
-            await connector.execute(
-                "SELECT * FROM users WHERE id = $1", params=[123]
-            )
+            await connector.execute("SELECT * FROM users WHERE id = $1", params=[123])
 
             # Verify fetch was called with unpacked params
             conn.fetch.assert_called_once()

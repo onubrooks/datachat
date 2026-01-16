@@ -36,7 +36,7 @@ Usage:
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
     import clickhouse_connect
@@ -110,7 +110,7 @@ class ClickHouseConnector(BaseConnector):
             **kwargs,
         )
 
-        self._client: Optional[Client] = None
+        self._client: Client | None = None
 
     async def connect(self) -> None:
         """
@@ -126,9 +126,7 @@ class ClickHouseConnector(BaseConnector):
             return
 
         try:
-            logger.info(
-                f"Connecting to ClickHouse at {self.host}:{self.port}/{self.database}"
-            )
+            logger.info(f"Connecting to ClickHouse at {self.host}:{self.port}/{self.database}")
 
             # Create client (synchronous operation, wrap in to_thread)
             self._client = await asyncio.to_thread(
@@ -142,9 +140,7 @@ class ClickHouseConnector(BaseConnector):
             )
 
             # Test connection
-            version = await asyncio.to_thread(
-                self._client.command, "SELECT version()"
-            )
+            version = await asyncio.to_thread(self._client.command, "SELECT version()")
             logger.info(f"Connected to ClickHouse: version {version}")
 
             self._connected = True
@@ -156,8 +152,8 @@ class ClickHouseConnector(BaseConnector):
     async def execute(
         self,
         query: str,
-        params: Optional[Dict[str, Any]] = None,
-        timeout: Optional[int] = None,
+        params: dict[str, Any] | None = None,
+        timeout: int | None = None,
     ) -> QueryResult:
         """
         Execute a SQL query.
@@ -196,15 +192,13 @@ class ClickHouseConnector(BaseConnector):
             # Convert to list of dicts
             columns = result.column_names
             result_rows = [
-                {col: row[i] for i, col in enumerate(columns)}
-                for row in result.result_rows
+                {col: row[i] for i, col in enumerate(columns)} for row in result.result_rows
             ]
 
             execution_time_ms = (time.perf_counter() - start_time) * 1000
 
             logger.debug(
-                f"Query executed in {execution_time_ms:.2f}ms, "
-                f"returned {len(result_rows)} rows"
+                f"Query executed in {execution_time_ms:.2f}ms, returned {len(result_rows)} rows"
             )
 
             return QueryResult(
@@ -218,9 +212,7 @@ class ClickHouseConnector(BaseConnector):
             logger.error(f"Query failed: {e}\nQuery: {query[:200]}...")
             raise QueryError(f"Query execution failed: {e}") from e
 
-    async def get_schema(
-        self, schema_name: Optional[str] = None
-    ) -> List[TableInfo]:
+    async def get_schema(self, schema_name: str | None = None) -> list[TableInfo]:
         """
         Introspect ClickHouse schema.
 
@@ -252,9 +244,7 @@ class ClickHouseConnector(BaseConnector):
                 WHERE database = {db:String}
                 ORDER BY name
             """
-            tables_result = await self.execute(
-                tables_query, params={"db": database_filter}
-            )
+            tables_result = await self.execute(tables_query, params={"db": database_filter})
 
             table_infos = []
 
@@ -284,11 +274,7 @@ class ClickHouseConnector(BaseConnector):
                 count_query = f"SELECT count() FROM {table_db}.{table_name}"
                 try:
                     count_result = await self.execute(count_query)
-                    row_count = (
-                        count_result.rows[0].get("count()")
-                        if count_result.rows
-                        else None
-                    )
+                    row_count = count_result.rows[0].get("count()") if count_result.rows else None
                 except Exception:
                     row_count = None
 
@@ -325,8 +311,7 @@ class ClickHouseConnector(BaseConnector):
                 table_infos.append(table_info)
 
             logger.info(
-                f"Introspected database '{database_filter}': "
-                f"found {len(table_infos)} tables"
+                f"Introspected database '{database_filter}': found {len(table_infos)} tables"
             )
 
             return table_infos

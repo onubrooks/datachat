@@ -6,14 +6,13 @@ This module provides fixtures and configuration used across all tests.
 
 import asyncio
 import logging
-from typing import AsyncGenerator, Generator
 
 import pytest
-
 
 # ============================================================================
 # Pytest Configuration
 # ============================================================================
+
 
 def pytest_addoption(parser):
     """Add custom command line options."""
@@ -21,29 +20,23 @@ def pytest_addoption(parser):
         "--run-integration",
         action="store_true",
         default=False,
-        help="Run integration tests (requires API keys and external services)"
+        help="Run integration tests (requires API keys and external services)",
     )
 
 
 def pytest_configure(config):
     """Configure pytest with custom markers and settings."""
     config.addinivalue_line(
-        "markers",
-        "integration: mark test as integration test (may require external services)"
+        "markers", "integration: mark test as integration test (may require external services)"
     )
-    config.addinivalue_line(
-        "markers",
-        "slow: mark test as slow (takes more than 1 second)"
-    )
-    config.addinivalue_line(
-        "markers",
-        "unit: mark test as unit test (default)"
-    )
+    config.addinivalue_line("markers", "slow: mark test as slow (takes more than 1 second)")
+    config.addinivalue_line("markers", "unit: mark test as unit test (default)")
 
 
 # ============================================================================
 # Event Loop Configuration
 # ============================================================================
+
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -61,6 +54,7 @@ def event_loop():
 # ============================================================================
 # Logging Configuration
 # ============================================================================
+
 
 @pytest.fixture(autouse=True)
 def configure_test_logging(caplog):
@@ -96,6 +90,7 @@ def disable_logging():
 # Test Utilities
 # ============================================================================
 
+
 @pytest.fixture
 def mock_async_function():
     """
@@ -121,6 +116,7 @@ def mock_async_function():
 # Common Test Data
 # ============================================================================
 
+
 @pytest.fixture
 def sample_query() -> str:
     """Sample user query for testing."""
@@ -142,6 +138,7 @@ def sample_queries() -> list[str]:
 # ============================================================================
 # Environment and Configuration
 # ============================================================================
+
 
 @pytest.fixture(autouse=True)
 def reset_environment_per_test(monkeypatch):
@@ -183,6 +180,7 @@ def mock_database_url(monkeypatch):
 # Async Helpers
 # ============================================================================
 
+
 @pytest.fixture
 async def async_context_manager():
     """
@@ -209,6 +207,7 @@ async def async_context_manager():
 # Timing Helpers
 # ============================================================================
 
+
 @pytest.fixture
 def assert_timing():
     """
@@ -220,11 +219,11 @@ def assert_timing():
                 # Code that should take 100-500ms
                 time.sleep(0.2)
     """
-    from contextlib import contextmanager
     import time
+    from contextlib import contextmanager
 
     @contextmanager
-    def _assert_timing(min_ms: float = 0, max_ms: float = float('inf')):
+    def _assert_timing(min_ms: float = 0, max_ms: float = float("inf")):
         start = time.perf_counter()
         yield
         duration_ms = (time.perf_counter() - start) * 1000

@@ -4,8 +4,6 @@ Unit tests for DataPoint models.
 Tests Pydantic validation, discriminated unions, and custom validators.
 """
 
-import json
-
 import pytest
 from pydantic import ValidationError
 
@@ -27,7 +25,7 @@ class TestColumnMetadata:
             name="customer_id",
             type="BIGINT",
             business_meaning="Unique identifier for customer",
-            nullable=False
+            nullable=False,
         )
 
         assert column.name == "customer_id"
@@ -42,7 +40,7 @@ class TestColumnMetadata:
             type="TIMESTAMP",
             business_meaning="Record creation timestamp",
             nullable=False,
-            default_value="CURRENT_TIMESTAMP"
+            default_value="CURRENT_TIMESTAMP",
         )
 
         assert column.default_value == "CURRENT_TIMESTAMP"
@@ -50,12 +48,7 @@ class TestColumnMetadata:
     def test_empty_column_name_rejected(self):
         """Empty column name is rejected."""
         with pytest.raises(ValidationError, match="at least 1 character"):
-            ColumnMetadata(
-                name="",
-                type="INT",
-                business_meaning="Test",
-                nullable=True
-            )
+            ColumnMetadata(name="", type="INT", business_meaning="Test", nullable=True)
 
 
 class TestRelationship:
@@ -64,9 +57,7 @@ class TestRelationship:
     def test_valid_relationship(self):
         """Valid relationship is accepted."""
         rel = Relationship(
-            target_table="dim_customer",
-            join_column="customer_id",
-            cardinality="N:1"
+            target_table="dim_customer", join_column="customer_id", cardinality="N:1"
         )
 
         assert rel.target_table == "dim_customer"
@@ -77,9 +68,7 @@ class TestRelationship:
     def test_relationship_with_schema(self):
         """Relationship can reference table with schema."""
         rel = Relationship(
-            target_table="analytics.dim_customer",
-            join_column="customer_id",
-            cardinality="N:1"
+            target_table="analytics.dim_customer", join_column="customer_id", cardinality="N:1"
         )
 
         assert "analytics" in rel.target_table
@@ -90,7 +79,7 @@ class TestRelationship:
             Relationship(
                 target_table="dim_customer",
                 join_column="customer_id",
-                cardinality="1:many"  # Invalid
+                cardinality="1:many",  # Invalid
             )
 
     def test_logical_relationship(self):
@@ -99,7 +88,7 @@ class TestRelationship:
             target_table="dim_product",
             join_column="product_id",
             cardinality="1:N",
-            relationship_type="logical"
+            relationship_type="logical",
         )
 
         assert rel.relationship_type == "logical"
@@ -121,10 +110,10 @@ class TestSchemaDataPoint:
                     name="amount",
                     type="DECIMAL(18,2)",
                     business_meaning="Transaction value in USD",
-                    nullable=False
+                    nullable=False,
                 )
             ],
-            owner="data-team@company.com"
+            owner="data-team@company.com",
         )
 
         assert datapoint.type == "Schema"
@@ -142,25 +131,18 @@ class TestSchemaDataPoint:
             business_purpose="Order transactions",
             key_columns=[
                 ColumnMetadata(
-                    name="order_id",
-                    type="BIGINT",
-                    business_meaning="Order ID",
-                    nullable=False
+                    name="order_id", type="BIGINT", business_meaning="Order ID", nullable=False
                 )
             ],
             relationships=[
                 Relationship(
-                    target_table="dim_customer",
-                    join_column="customer_id",
-                    cardinality="N:1"
+                    target_table="dim_customer", join_column="customer_id", cardinality="N:1"
                 ),
                 Relationship(
-                    target_table="dim_product",
-                    join_column="product_id",
-                    cardinality="N:1"
-                )
+                    target_table="dim_product", join_column="product_id", cardinality="N:1"
+                ),
             ],
-            owner="data@example.com"
+            owner="data@example.com",
         )
 
         assert len(datapoint.relationships) == 2
@@ -175,17 +157,12 @@ class TestSchemaDataPoint:
             schema="analytics",
             business_purpose="Sales data",
             key_columns=[
-                ColumnMetadata(
-                    name="id",
-                    type="INT",
-                    business_meaning="ID",
-                    nullable=False
-                )
+                ColumnMetadata(name="id", type="INT", business_meaning="ID", nullable=False)
             ],
             common_queries=["SUM(amount)", "GROUP BY date"],
             gotchas=["Always filter by date", "Use index on customer_id"],
             freshness="T-1",
-            owner="team@example.com"
+            owner="team@example.com",
         )
 
         assert len(datapoint.common_queries) == 2
@@ -202,7 +179,7 @@ class TestSchemaDataPoint:
                 schema="public",
                 business_purpose="Test table purpose description",
                 key_columns=[],  # Empty list not allowed
-                owner="test@example.com"
+                owner="test@example.com",
             )
 
     def test_schema_datapoint_row_count(self):
@@ -214,15 +191,10 @@ class TestSchemaDataPoint:
             schema="public",
             business_purpose="Large table",
             key_columns=[
-                ColumnMetadata(
-                    name="id",
-                    type="INT",
-                    business_meaning="ID",
-                    nullable=False
-                )
+                ColumnMetadata(name="id", type="INT", business_meaning="ID", nullable=False)
             ],
             row_count=1000000,
-            owner="data@example.com"
+            owner="data@example.com",
         )
 
         assert datapoint.row_count == 1000000
@@ -237,15 +209,10 @@ class TestSchemaDataPoint:
                 schema="public",
                 business_purpose="Test table",
                 key_columns=[
-                    ColumnMetadata(
-                        name="id",
-                        type="INT",
-                        business_meaning="ID",
-                        nullable=False
-                    )
+                    ColumnMetadata(name="id", type="INT", business_meaning="ID", nullable=False)
                 ],
                 row_count=-100,  # Invalid
-                owner="test@example.com"
+                owner="test@example.com",
             )
 
 
@@ -258,7 +225,7 @@ class TestBusinessDataPoint:
             datapoint_id="metric_revenue_001",
             name="Revenue",
             calculation="SUM(fact_sales.amount) WHERE status = 'completed'",
-            owner="finance@company.com"
+            owner="finance@company.com",
         )
 
         assert datapoint.type == "Business"
@@ -272,7 +239,7 @@ class TestBusinessDataPoint:
             name="Total Revenue",
             calculation="SUM(amount)",
             synonyms=["sales", "income", "earnings", "total sales"],
-            owner="finance@example.com"
+            owner="finance@example.com",
         )
 
         assert len(datapoint.synonyms) == 4
@@ -287,10 +254,10 @@ class TestBusinessDataPoint:
             business_rules=[
                 "Exclude refunds (status != 'refunded')",
                 "Convert to USD using daily rate",
-                "Include only completed transactions"
+                "Include only completed transactions",
             ],
             related_tables=["fact_sales", "dim_currency", "fact_refunds"],
-            owner="finance@example.com"
+            owner="finance@example.com",
         )
 
         assert len(datapoint.business_rules) == 3
@@ -304,7 +271,7 @@ class TestBusinessDataPoint:
             calculation="AVG(amount)",
             unit="USD",
             aggregation="AVG",
-            owner="analytics@example.com"
+            owner="analytics@example.com",
         )
 
         assert datapoint.unit == "USD"
@@ -318,7 +285,7 @@ class TestBusinessDataPoint:
                 name="Test Metric",
                 calculation="MEDIAN(amount)",
                 aggregation="MEDIAN",  # Not in allowed list
-                owner="test@example.com"
+                owner="test@example.com",
             )
 
 
@@ -333,7 +300,7 @@ class TestProcessDataPoint:
             schedule="0 2 * * *",
             data_freshness="T-1 (yesterday's data available by 3am UTC)",
             target_tables=["analytics.fact_sales"],
-            owner="data-eng@company.com"
+            owner="data-eng@company.com",
         )
 
         assert datapoint.type == "Process"
@@ -349,7 +316,7 @@ class TestProcessDataPoint:
             data_freshness="T-1",
             target_tables=["analytics.fact_transformed"],
             dependencies=["raw.sales_events", "raw.customer_events"],
-            owner="etl@example.com"
+            owner="etl@example.com",
         )
 
         assert len(datapoint.dependencies) == 2
@@ -365,7 +332,7 @@ class TestProcessDataPoint:
             target_tables=["analytics.real_time_metrics"],
             sla="Complete within 10 minutes",
             monitoring_url="https://monitor.example.com/etl/critical",
-            owner="sre@example.com"
+            owner="sre@example.com",
         )
 
         assert datapoint.sla == "Complete within 10 minutes"
@@ -380,7 +347,7 @@ class TestProcessDataPoint:
                 schedule="0 0 * * *",
                 data_freshness="Daily",
                 target_tables=[],  # Empty not allowed
-                owner="test@example.com"
+                owner="test@example.com",
             )
 
 
@@ -394,7 +361,7 @@ class TestDataPointIDValidation:
             "metric_revenue_001",
             "proc_daily_etl_001",
             "table_dim_customer_123",
-            "metric_avg_order_value_999"
+            "metric_avg_order_value_999",
         ]
 
         for datapoint_id in valid_ids:
@@ -405,14 +372,9 @@ class TestDataPointIDValidation:
                 schema="public",
                 business_purpose="Test table purpose",
                 key_columns=[
-                    ColumnMetadata(
-                        name="id",
-                        type="INT",
-                        business_meaning="ID",
-                        nullable=False
-                    )
+                    ColumnMetadata(name="id", type="INT", business_meaning="ID", nullable=False)
                 ],
-                owner="test@example.com"
+                owner="test@example.com",
             )
             assert datapoint.datapoint_id == datapoint_id
 
@@ -437,14 +399,9 @@ class TestDataPointIDValidation:
                     schema="public",
                     business_purpose="Test table",
                     key_columns=[
-                        ColumnMetadata(
-                            name="id",
-                            type="INT",
-                            business_meaning="ID",
-                            nullable=False
-                        )
+                        ColumnMetadata(name="id", type="INT", business_meaning="ID", nullable=False)
                     ],
-                    owner="test@example.com"
+                    owner="test@example.com",
                 )
 
 
@@ -457,15 +414,12 @@ class TestOwnerValidation:
             "user@example.com",
             "data-team@company.com",
             "john.doe@subdomain.example.org",
-            "analytics+reports@company.io"
+            "analytics+reports@company.io",
         ]
 
         for email in valid_emails:
             datapoint = BusinessDataPoint(
-                datapoint_id="metric_test_001",
-                name="Test",
-                calculation="SUM(x)",
-                owner=email
+                datapoint_id="metric_test_001", name="Test", calculation="SUM(x)", owner=email
             )
             assert datapoint.owner == email.lower()  # Lowercased
 
@@ -476,16 +430,13 @@ class TestOwnerValidation:
             "missing-at-sign.com",
             "@no-local-part.com",
             "no-domain@",
-            "spaces in@email.com"
+            "spaces in@email.com",
         ]
 
         for email in invalid_emails:
             with pytest.raises(ValidationError, match="valid email address"):
                 BusinessDataPoint(
-                    datapoint_id="metric_test_001",
-                    name="Test",
-                    calculation="SUM(x)",
-                    owner=email
+                    datapoint_id="metric_test_001", name="Test", calculation="SUM(x)", owner=email
                 )
 
 
@@ -502,18 +453,14 @@ class TestDiscriminatedUnion:
             "schema": "public",
             "business_purpose": "Test table for unit tests",
             "key_columns": [
-                {
-                    "name": "id",
-                    "type": "INT",
-                    "business_meaning": "Primary key",
-                    "nullable": False
-                }
+                {"name": "id", "type": "INT", "business_meaning": "Primary key", "nullable": False}
             ],
-            "owner": "test@example.com"
+            "owner": "test@example.com",
         }
 
-        from backend.models.datapoint import DataPoint
         from pydantic import TypeAdapter
+
+        from backend.models.datapoint import DataPoint
 
         adapter = TypeAdapter(DataPoint)
         datapoint = adapter.validate_python(data)
@@ -528,11 +475,12 @@ class TestDiscriminatedUnion:
             "type": "Business",
             "name": "Test Metric",
             "calculation": "COUNT(*)",
-            "owner": "test@example.com"
+            "owner": "test@example.com",
         }
 
-        from backend.models.datapoint import DataPoint
         from pydantic import TypeAdapter
+
+        from backend.models.datapoint import DataPoint
 
         adapter = TypeAdapter(DataPoint)
         datapoint = adapter.validate_python(data)
@@ -549,11 +497,12 @@ class TestDiscriminatedUnion:
             "schedule": "0 0 * * *",
             "data_freshness": "Daily",
             "target_tables": ["test_table"],
-            "owner": "test@example.com"
+            "owner": "test@example.com",
         }
 
-        from backend.models.datapoint import DataPoint
         from pydantic import TypeAdapter
+
+        from backend.models.datapoint import DataPoint
 
         adapter = TypeAdapter(DataPoint)
         datapoint = adapter.validate_python(data)
@@ -567,11 +516,12 @@ class TestDiscriminatedUnion:
             "datapoint_id": "test_invalid_001",
             "type": "Invalid",  # Not a valid type
             "name": "Test",
-            "owner": "test@example.com"
+            "owner": "test@example.com",
         }
 
-        from backend.models.datapoint import DataPoint
         from pydantic import TypeAdapter
+
+        from backend.models.datapoint import DataPoint
 
         adapter = TypeAdapter(DataPoint)
 
@@ -592,14 +542,11 @@ class TestJSONSerialization:
             business_purpose="Test table for serialization",
             key_columns=[
                 ColumnMetadata(
-                    name="id",
-                    type="BIGINT",
-                    business_meaning="Primary key",
-                    nullable=False
+                    name="id", type="BIGINT", business_meaning="Primary key", nullable=False
                 )
             ],
             owner="test@example.com",
-            tags=["test", "example"]
+            tags=["test", "example"],
         )
 
         # Serialize to JSON

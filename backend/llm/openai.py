@@ -6,14 +6,13 @@ Supports GPT-4o, GPT-4o-mini, GPT-3.5-turbo, etc.
 """
 
 import logging
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
 
 import openai
 from openai import AsyncOpenAI
 
 from backend.llm.base import BaseLLMProvider
 from backend.llm.models import (
-    LLMMessage,
     LLMRequest,
     LLMResponse,
     LLMStreamChunk,
@@ -63,10 +62,7 @@ class OpenAIProvider(BaseLLMProvider):
             timeout=float(timeout),
         )
 
-        logger.info(
-            f"OpenAI provider initialized with model: {model}",
-            extra={"model": model}
-        )
+        logger.info(f"OpenAI provider initialized with model: {model}", extra={"model": model})
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         """
@@ -87,10 +83,7 @@ class OpenAIProvider(BaseLLMProvider):
 
         try:
             # Convert messages to OpenAI format
-            messages = [
-                {"role": msg.role, "content": msg.content}
-                for msg in request.messages
-            ]
+            messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
 
             # Call OpenAI API
             response = await self.client.chat.completions.create(
@@ -147,10 +140,7 @@ class OpenAIProvider(BaseLLMProvider):
         self._log_request(request)
 
         try:
-            messages = [
-                {"role": msg.role, "content": msg.content}
-                for msg in request.messages
-            ]
+            messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
 
             stream = await self.client.chat.completions.create(
                 model=request.model or self.model,
@@ -165,9 +155,9 @@ class OpenAIProvider(BaseLLMProvider):
                 if chunk.choices[0].delta.content:
                     yield LLMStreamChunk(
                         content=chunk.choices[0].delta.content,
-                        finish_reason=self._map_finish_reason(
-                            chunk.choices[0].finish_reason
-                        ) if chunk.choices[0].finish_reason else None,
+                        finish_reason=self._map_finish_reason(chunk.choices[0].finish_reason)
+                        if chunk.choices[0].finish_reason
+                        else None,
                         metadata={"id": chunk.id},
                     )
 
@@ -202,7 +192,7 @@ class OpenAIProvider(BaseLLMProvider):
             # ~4 characters per token average
             return len(text) // 4
 
-    def get_model_info(self, model_name: Optional[str] = None) -> ModelInfo:
+    def get_model_info(self, model_name: str | None = None) -> ModelInfo:
         """
         Get OpenAI model information.
 
@@ -257,7 +247,7 @@ class OpenAIProvider(BaseLLMProvider):
             ),
         )
 
-    def _map_finish_reason(self, reason: Optional[str]) -> str:
+    def _map_finish_reason(self, reason: str | None) -> str:
         """Map OpenAI finish reason to our standard format."""
         if reason == "stop":
             return "stop"

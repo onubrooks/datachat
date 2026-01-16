@@ -6,7 +6,7 @@ Supports Claude 3.5 Sonnet, Claude 3.5 Haiku, etc.
 """
 
 import logging
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
 
 from backend.llm.base import BaseLLMProvider
 from backend.llm.models import (
@@ -58,17 +58,13 @@ class AnthropicProvider(BaseLLMProvider):
 
         try:
             from anthropic import AsyncAnthropic
+
             self.client = AsyncAnthropic(api_key=api_key, timeout=float(timeout))
         except ImportError:
-            logger.warning(
-                "anthropic package not installed. Install with: pip install anthropic"
-            )
+            logger.warning("anthropic package not installed. Install with: pip install anthropic")
             self.client = None
 
-        logger.info(
-            f"Anthropic provider initialized with model: {model}",
-            extra={"model": model}
-        )
+        logger.info(f"Anthropic provider initialized with model: {model}", extra={"model": model})
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         """Generate completion using Anthropic API."""
@@ -146,7 +142,7 @@ class AnthropicProvider(BaseLLMProvider):
         # Rough approximation: ~4 characters per token
         return len(text) // 4
 
-    def get_model_info(self, model_name: Optional[str] = None) -> ModelInfo:
+    def get_model_info(self, model_name: str | None = None) -> ModelInfo:
         """Get Anthropic model information."""
         model = model_name or self.model
 
@@ -182,7 +178,7 @@ class AnthropicProvider(BaseLLMProvider):
             ),
         )
 
-    def _map_finish_reason(self, reason: Optional[str]) -> str:
+    def _map_finish_reason(self, reason: str | None) -> str:
         """Map Anthropic stop reason to standard format."""
         if reason == "end_turn":
             return "stop"

@@ -10,8 +10,6 @@ Tests the base agent framework including:
 
 import asyncio
 import time
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,7 +17,6 @@ from backend.agents.base import BaseAgent
 from backend.models.agent import (
     AgentError,
     AgentInput,
-    AgentMetadata,
     AgentOutput,
     LLMError,
     ValidationError,
@@ -48,11 +45,7 @@ class TestBaseAgentInstantiation:
 
         class ValidAgent(BaseAgent):
             async def execute(self, input: AgentInput) -> AgentOutput:
-                return AgentOutput(
-                    success=True,
-                    data={},
-                    metadata=self._create_metadata()
-                )
+                return AgentOutput(success=True, data={}, metadata=self._create_metadata())
 
         agent = ValidAgent(name="ValidAgent")
         assert agent.name == "ValidAgent"
@@ -74,17 +67,9 @@ class TestAgentConfiguration:
 
         class CustomAgent(BaseAgent):
             async def execute(self, input: AgentInput) -> AgentOutput:
-                return AgentOutput(
-                    success=True,
-                    data={},
-                    metadata=self._create_metadata()
-                )
+                return AgentOutput(success=True, data={}, metadata=self._create_metadata())
 
-        agent = CustomAgent(
-            name="CustomAgent",
-            max_retries=5,
-            timeout_seconds=30.0
-        )
+        agent = CustomAgent(name="CustomAgent", max_retries=5, timeout_seconds=30.0)
 
         assert agent.name == "CustomAgent"
         assert agent.max_retries == 5
@@ -121,11 +106,7 @@ class TestAgentExecution:
         class SlowAgent(BaseAgent):
             async def execute(self, input: AgentInput) -> AgentOutput:
                 await asyncio.sleep(0.1)  # 100ms delay
-                return AgentOutput(
-                    success=True,
-                    data={},
-                    metadata=self._create_metadata()
-                )
+                return AgentOutput(success=True, data={}, metadata=self._create_metadata())
 
         agent = SlowAgent(name="SlowAgent")
         output = await agent(sample_input)
@@ -143,13 +124,9 @@ class TestAgentExecution:
             async def execute(self, input: AgentInput) -> AgentOutput:
                 return AgentOutput(
                     success=True,
-                    data={
-                        "query": input.query,
-                        "processed": True,
-                        "items": [1, 2, 3]
-                    },
+                    data={"query": input.query, "processed": True, "items": [1, 2, 3]},
                     metadata=self._create_metadata(),
-                    next_agent="NextAgent"
+                    next_agent="NextAgent",
                 )
 
         agent = DataAgent(name="DataAgent")
@@ -170,11 +147,7 @@ class TestErrorHandling:
 
         class ErrorAgent(BaseAgent):
             async def execute(self, input: AgentInput) -> AgentOutput:
-                raise AgentError(
-                    agent=self.name,
-                    message="Something went wrong",
-                    recoverable=False
-                )
+                raise AgentError(agent=self.name, message="Something went wrong", recoverable=False)
 
         agent = ErrorAgent(name="ErrorAgent")
 
@@ -191,10 +164,7 @@ class TestErrorHandling:
 
         class FailAgent(BaseAgent):
             async def execute(self, input: AgentInput) -> AgentOutput:
-                raise ValidationError(
-                    agent=self.name,
-                    message="Invalid input"
-                )
+                raise ValidationError(agent=self.name, message="Invalid input")
 
         agent = FailAgent(name="FailAgent")
 
@@ -211,11 +181,7 @@ class TestErrorHandling:
         class TimedErrorAgent(BaseAgent):
             async def execute(self, input: AgentInput) -> AgentOutput:
                 await asyncio.sleep(0.05)  # 50ms delay
-                raise AgentError(
-                    agent=self.name,
-                    message="Error after delay",
-                    recoverable=False
-                )
+                raise AgentError(agent=self.name, message="Error after delay", recoverable=False)
 
         agent = TimedErrorAgent(name="TimedErrorAgent")
 
@@ -266,9 +232,7 @@ class TestRetryLogic:
                         message="API timeout",
                     )
                 return AgentOutput(
-                    success=True,
-                    data={"attempts": self.attempts},
-                    metadata=self._create_metadata()
+                    success=True, data={"attempts": self.attempts}, metadata=self._create_metadata()
                 )
 
         agent = RetryAgent()
@@ -315,14 +279,10 @@ class TestRetryLogic:
                 if self.attempts < 3:
                     raise LLMError(agent=self.name, message="Retry me")
 
-                return AgentOutput(
-                    success=True,
-                    data={},
-                    metadata=self._create_metadata()
-                )
+                return AgentOutput(success=True, data={}, metadata=self._create_metadata())
 
         agent = BackoffAgent()
-        output = await agent(sample_input)
+        await agent(sample_input)
 
         # Check delays between attempts
         assert len(agent.attempt_times) == 3
@@ -347,11 +307,7 @@ class TestLLMTracking:
             async def execute(self, input: AgentInput) -> AgentOutput:
                 self._track_llm_call()
                 self._track_llm_call()
-                return AgentOutput(
-                    success=True,
-                    data={},
-                    metadata=self._create_metadata()
-                )
+                return AgentOutput(success=True, data={}, metadata=self._create_metadata())
 
         agent = LLMAgent(name="LLMAgent")
         output = await agent(sample_input)
@@ -368,11 +324,7 @@ class TestLLMTracking:
                 self._track_llm_call(tokens=100)
                 self._track_llm_call(tokens=150)
                 self._track_llm_call(tokens=50)
-                return AgentOutput(
-                    success=True,
-                    data={},
-                    metadata=self._create_metadata()
-                )
+                return AgentOutput(success=True, data={}, metadata=self._create_metadata())
 
         agent = TokenAgent(name="TokenAgent")
         output = await agent(sample_input)
@@ -391,9 +343,7 @@ class TestContextPassing:
         original_context = {"step": 1, "data": "original"}
 
         new_context = valid_agent._build_context_for_next(
-            original_context,
-            step=2,
-            new_field="added"
+            original_context, step=2, new_field="added"
         )
 
         assert new_context["step"] == 2  # Updated
@@ -411,17 +361,14 @@ class TestContextPassing:
             async def execute(self, input: AgentInput) -> AgentOutput:
                 return AgentOutput(
                     success=True,
-                    data={
-                        "received_context": input.context.copy()
-                    },
-                    metadata=self._create_metadata()
+                    data={"received_context": input.context.copy()},
+                    metadata=self._create_metadata(),
                 )
 
         agent = ContextAgent(name="ContextAgent")
 
         input_with_context = AgentInput(
-            query="Test",
-            context={"previous_step": "classification", "entities": ["sales"]}
+            query="Test", context={"previous_step": "classification", "entities": ["sales"]}
         )
 
         output = await agent(input_with_context)
@@ -507,18 +454,11 @@ class TestInputValidation:
         class ValidatingAgent(BaseAgent):
             def _validate_input(self, input: AgentInput) -> None:
                 if not input.query:
-                    raise ValidationError(
-                        agent=self.name,
-                        message="Query cannot be empty"
-                    )
+                    raise ValidationError(agent=self.name, message="Query cannot be empty")
 
             async def execute(self, input: AgentInput) -> AgentOutput:
                 self._validate_input(input)
-                return AgentOutput(
-                    success=True,
-                    data={},
-                    metadata=self._create_metadata()
-                )
+                return AgentOutput(success=True, data={}, metadata=self._create_metadata())
 
         agent = ValidatingAgent(name="ValidatingAgent")
 
@@ -540,7 +480,7 @@ class TestErrorModels:
             agent="TestAgent",
             message="Something failed",
             recoverable=True,
-            context={"key": "value"}
+            context={"key": "value"},
         )
 
         error_dict = error.to_dict()
@@ -556,29 +496,18 @@ class TestErrorModels:
         from backend.models.agent import DatabaseError
 
         # Non-recoverable database error
-        error1 = DatabaseError(
-            agent="TestAgent",
-            message="Connection lost",
-            recoverable=False
-        )
+        error1 = DatabaseError(agent="TestAgent", message="Connection lost", recoverable=False)
         assert error1.recoverable is False
 
         # Recoverable database error
-        error2 = DatabaseError(
-            agent="TestAgent",
-            message="Temporary timeout",
-            recoverable=True
-        )
+        error2 = DatabaseError(agent="TestAgent", message="Temporary timeout", recoverable=True)
         assert error2.recoverable is True
 
     def test_retrieval_error_is_recoverable(self):
         """RetrievalError is recoverable by default."""
         from backend.models.agent import RetrievalError
 
-        error = RetrievalError(
-            agent="ContextAgent",
-            message="Vector store unavailable"
-        )
+        error = RetrievalError(agent="ContextAgent", message="Vector store unavailable")
         assert error.recoverable is True
         assert "ContextAgent" in str(error)
 
@@ -587,6 +516,7 @@ class TestErrorModels:
 # Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def valid_agent():
     """Create a valid test agent."""
@@ -594,9 +524,7 @@ def valid_agent():
     class TestAgent(BaseAgent):
         async def execute(self, input: AgentInput) -> AgentOutput:
             return AgentOutput(
-                success=True,
-                data={"result": "success"},
-                metadata=self._create_metadata()
+                success=True, data={"result": "success"}, metadata=self._create_metadata()
             )
 
     return TestAgent(name="TestAgent")
@@ -605,8 +533,4 @@ def valid_agent():
 @pytest.fixture
 def sample_input():
     """Create sample agent input."""
-    return AgentInput(
-        query="Test query",
-        conversation_history=[],
-        context={}
-    )
+    return AgentInput(query="Test query", conversation_history=[], context={})

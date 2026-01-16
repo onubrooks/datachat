@@ -4,16 +4,15 @@ Tests for Vector Store.
 Tests Chroma-based vector store operations with DataPoints.
 """
 
+from unittest.mock import patch
+
 import pytest
-from pathlib import Path
-from unittest.mock import Mock, patch
-import numpy as np
 
 from backend.knowledge.vectors import VectorStore, VectorStoreError
 from backend.models.datapoint import (
     BusinessDataPoint,
-    SchemaDataPoint,
     ProcessDataPoint,
+    SchemaDataPoint,
 )
 
 
@@ -168,9 +167,7 @@ class TestAddDataPoints:
     """Test adding datapoints to vector store."""
 
     @pytest.mark.asyncio
-    async def test_add_single_datapoint(
-        self, test_vector_store, sample_schema_datapoint
-    ):
+    async def test_add_single_datapoint(self, test_vector_store, sample_schema_datapoint):
         """Test adding a single datapoint."""
         added = await test_vector_store.add_datapoints([sample_schema_datapoint])
 
@@ -223,9 +220,7 @@ class TestAddDataPoints:
             await store.add_datapoints([])
 
     @pytest.mark.asyncio
-    async def test_add_datapoint_with_metadata(
-        self, test_vector_store, sample_schema_datapoint
-    ):
+    async def test_add_datapoint_with_metadata(self, test_vector_store, sample_schema_datapoint):
         """Test that metadata is stored correctly."""
         await test_vector_store.add_datapoints([sample_schema_datapoint])
 
@@ -250,9 +245,7 @@ class TestSearch:
         sample_business_datapoint,
     ):
         """Test that search returns semantically similar datapoints."""
-        await test_vector_store.add_datapoints(
-            [sample_schema_datapoint, sample_business_datapoint]
-        )
+        await test_vector_store.add_datapoints([sample_schema_datapoint, sample_business_datapoint])
 
         # Search for sales-related content
         results = await test_vector_store.search("sales data", top_k=2)
@@ -292,9 +285,7 @@ class TestSearch:
         sample_business_datapoint,
     ):
         """Test search with metadata filtering."""
-        await test_vector_store.add_datapoints(
-            [sample_schema_datapoint, sample_business_datapoint]
-        )
+        await test_vector_store.add_datapoints([sample_schema_datapoint, sample_business_datapoint])
 
         # Search only for Schema type
         results = await test_vector_store.search(
@@ -305,9 +296,7 @@ class TestSearch:
         assert results[0]["metadata"]["type"] == "Schema"
 
     @pytest.mark.asyncio
-    async def test_search_returns_distance(
-        self, test_vector_store, sample_schema_datapoint
-    ):
+    async def test_search_returns_distance(self, test_vector_store, sample_schema_datapoint):
         """Test that search results include distance scores."""
         await test_vector_store.add_datapoints([sample_schema_datapoint])
 
@@ -320,9 +309,7 @@ class TestSearch:
         assert isinstance(results[0]["distance"], (int, float))
 
     @pytest.mark.asyncio
-    async def test_search_returns_document(
-        self, test_vector_store, sample_schema_datapoint
-    ):
+    async def test_search_returns_document(self, test_vector_store, sample_schema_datapoint):
         """Test that search results include original document."""
         await test_vector_store.add_datapoints([sample_schema_datapoint])
 
@@ -359,9 +346,7 @@ class TestDelete:
     """Test deleting datapoints from vector store."""
 
     @pytest.mark.asyncio
-    async def test_delete_single_datapoint(
-        self, test_vector_store, sample_schema_datapoint
-    ):
+    async def test_delete_single_datapoint(self, test_vector_store, sample_schema_datapoint):
         """Test deleting a single datapoint."""
         await test_vector_store.add_datapoints([sample_schema_datapoint])
 
@@ -380,9 +365,7 @@ class TestDelete:
         sample_business_datapoint,
     ):
         """Test deleting multiple datapoints."""
-        await test_vector_store.add_datapoints(
-            [sample_schema_datapoint, sample_business_datapoint]
-        )
+        await test_vector_store.add_datapoints([sample_schema_datapoint, sample_business_datapoint])
 
         assert await test_vector_store.get_count() == 2
 
@@ -475,9 +458,7 @@ class TestClear:
         sample_business_datapoint,
     ):
         """Test that clear removes all datapoints."""
-        await test_vector_store.add_datapoints(
-            [sample_schema_datapoint, sample_business_datapoint]
-        )
+        await test_vector_store.add_datapoints([sample_schema_datapoint, sample_business_datapoint])
 
         assert await test_vector_store.get_count() == 2
 
@@ -503,9 +484,7 @@ class TestGetCount:
         assert count == 0
 
     @pytest.mark.asyncio
-    async def test_get_count_after_add(
-        self, test_vector_store, sample_schema_datapoint
-    ):
+    async def test_get_count_after_add(self, test_vector_store, sample_schema_datapoint):
         """Test count after adding datapoints."""
         await test_vector_store.add_datapoints([sample_schema_datapoint])
 
@@ -513,9 +492,7 @@ class TestGetCount:
         assert count == 1
 
     @pytest.mark.asyncio
-    async def test_get_count_after_delete(
-        self, test_vector_store, sample_schema_datapoint
-    ):
+    async def test_get_count_after_delete(self, test_vector_store, sample_schema_datapoint):
         """Test count after deleting datapoints."""
         await test_vector_store.add_datapoints([sample_schema_datapoint])
         await test_vector_store.delete(["table_test_sales_001"])
@@ -528,9 +505,7 @@ class TestDocumentCreation:
     """Test document text creation from DataPoints."""
 
     @pytest.mark.asyncio
-    async def test_schema_datapoint_document(
-        self, test_vector_store, sample_schema_datapoint
-    ):
+    async def test_schema_datapoint_document(self, test_vector_store, sample_schema_datapoint):
         """Test document creation for Schema DataPoint."""
         doc = test_vector_store._create_document(sample_schema_datapoint)
 
@@ -541,9 +516,7 @@ class TestDocumentCreation:
         assert "Tags: test, sales" in doc
 
     @pytest.mark.asyncio
-    async def test_business_datapoint_document(
-        self, test_vector_store, sample_business_datapoint
-    ):
+    async def test_business_datapoint_document(self, test_vector_store, sample_business_datapoint):
         """Test document creation for Business DataPoint."""
         doc = test_vector_store._create_document(sample_business_datapoint)
 
@@ -554,9 +527,7 @@ class TestDocumentCreation:
         assert "Rules: Exclude refunds" in doc
 
     @pytest.mark.asyncio
-    async def test_process_datapoint_document(
-        self, test_vector_store, sample_process_datapoint
-    ):
+    async def test_process_datapoint_document(self, test_vector_store, sample_process_datapoint):
         """Test document creation for Process DataPoint."""
         doc = test_vector_store._create_document(sample_process_datapoint)
 
@@ -568,9 +539,7 @@ class TestDocumentCreation:
 class TestMetadataCreation:
     """Test metadata creation from DataPoints."""
 
-    def test_schema_datapoint_metadata(
-        self, test_vector_store, sample_schema_datapoint
-    ):
+    def test_schema_datapoint_metadata(self, test_vector_store, sample_schema_datapoint):
         """Test metadata creation for Schema DataPoint."""
         metadata = test_vector_store._create_metadata(sample_schema_datapoint)
 
@@ -581,9 +550,7 @@ class TestMetadataCreation:
         assert metadata["schema"] == "test"
         assert metadata["tags"] == "test,sales"
 
-    def test_business_datapoint_metadata(
-        self, test_vector_store, sample_business_datapoint
-    ):
+    def test_business_datapoint_metadata(self, test_vector_store, sample_business_datapoint):
         """Test metadata creation for Business DataPoint."""
         metadata = test_vector_store._create_metadata(sample_business_datapoint)
 

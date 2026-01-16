@@ -34,10 +34,9 @@ Usage:
     await connector.close()
 """
 
-import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import asyncpg
 
@@ -110,8 +109,8 @@ class PostgresConnector(BaseConnector):
     async def execute(
         self,
         query: str,
-        params: Optional[List[Any]] = None,
-        timeout: Optional[int] = None,
+        params: list[Any] | None = None,
+        timeout: int | None = None,
     ) -> QueryResult:
         """
         Execute a SQL query.
@@ -153,8 +152,7 @@ class PostgresConnector(BaseConnector):
                 execution_time_ms = (time.perf_counter() - start_time) * 1000
 
                 logger.debug(
-                    f"Query executed in {execution_time_ms:.2f}ms, "
-                    f"returned {len(result_rows)} rows"
+                    f"Query executed in {execution_time_ms:.2f}ms, returned {len(result_rows)} rows"
                 )
 
                 return QueryResult(
@@ -174,9 +172,7 @@ class PostgresConnector(BaseConnector):
             logger.error(f"Unexpected error during query execution: {e}")
             raise QueryError(f"Query error: {e}") from e
 
-    async def get_schema(
-        self, schema_name: Optional[str] = None
-    ) -> List[TableInfo]:
+    async def get_schema(self, schema_name: str | None = None) -> list[TableInfo]:
         """
         Introspect PostgreSQL schema.
 
@@ -278,9 +274,7 @@ class PostgresConnector(BaseConnector):
                         WHERE oid = $1::regclass
                     """
                     try:
-                        row_count_result = await conn.fetchval(
-                            row_count_query, full_table_name
-                        )
+                        row_count_result = await conn.fetchval(row_count_query, full_table_name)
                         row_count = int(row_count_result) if row_count_result else None
                     except Exception:
                         row_count = None
@@ -299,12 +293,8 @@ class PostgresConnector(BaseConnector):
                             default_value=col["column_default"],
                             is_primary_key=is_pk,
                             is_foreign_key=is_fk,
-                            foreign_table=fk_map[col_name]["foreign_table"]
-                            if is_fk
-                            else None,
-                            foreign_column=fk_map[col_name]["foreign_column"]
-                            if is_fk
-                            else None,
+                            foreign_table=fk_map[col_name]["foreign_table"] if is_fk else None,
+                            foreign_column=fk_map[col_name]["foreign_column"] if is_fk else None,
                         )
                         column_infos.append(column_info)
 
@@ -319,8 +309,7 @@ class PostgresConnector(BaseConnector):
                     table_infos.append(table_info)
 
                 logger.info(
-                    f"Introspected schema '{schema_filter}': "
-                    f"found {len(table_infos)} tables"
+                    f"Introspected schema '{schema_filter}': found {len(table_infos)} tables"
                 )
 
                 return table_infos

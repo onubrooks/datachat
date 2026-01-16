@@ -6,9 +6,7 @@ These tests verify that the agent can successfully retrieve relevant context
 from the knowledge base.
 """
 
-import asyncio
 import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -18,11 +16,11 @@ from backend.knowledge.retriever import Retriever
 from backend.knowledge.vectors import VectorStore
 from backend.models.agent import ContextAgentInput, ExtractedEntity
 from backend.models.datapoint import (
-    SchemaDataPoint,
     BusinessDataPoint,
-    ProcessDataPoint,
     ColumnMetadata,
+    ProcessDataPoint,
     Relationship,
+    SchemaDataPoint,
 )
 
 
@@ -179,9 +177,7 @@ async def populated_vector_store(
 
         # Add all datapoints
         all_datapoints = (
-            sample_schema_datapoints
-            + sample_business_datapoints
-            + sample_process_datapoints
+            sample_schema_datapoints + sample_business_datapoints + sample_process_datapoints
         )
         await vector_store.add_datapoints(all_datapoints)
 
@@ -231,9 +227,7 @@ class TestContextAgentIntegration:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_retrieves_relevant_sales_context(
-        self, integration_context_agent
-    ):
+    async def test_retrieves_relevant_sales_context(self, integration_context_agent):
         """Test retrieval of sales-related context."""
         input_data = ContextAgentInput(
             query="What were our total sales last quarter?",
@@ -255,16 +249,13 @@ class TestContextAgentIntegration:
 
         # At least one sales-related datapoint should be retrieved
         sales_related = any(
-            "sales" in dp_id.lower() or "revenue" in dp_id.lower()
-            for dp_id in datapoint_ids
+            "sales" in dp_id.lower() or "revenue" in dp_id.lower() for dp_id in datapoint_ids
         )
         assert sales_related
 
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_retrieves_product_context(
-        self, integration_context_agent
-    ):
+    async def test_retrieves_product_context(self, integration_context_agent):
         """Test retrieval of product-related context."""
         input_data = ContextAgentInput(
             query="Show me top selling products by category",
@@ -287,9 +278,7 @@ class TestContextAgentIntegration:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_local_mode_retrieval(
-        self, integration_context_agent
-    ):
+    async def test_local_mode_retrieval(self, integration_context_agent):
         """Test local (vector-only) retrieval mode."""
         input_data = ContextAgentInput(
             query="revenue metrics",
@@ -333,9 +322,7 @@ class TestContextAgentIntegration:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_hybrid_mode_combines_sources(
-        self, integration_context_agent
-    ):
+    async def test_hybrid_mode_combines_sources(self, integration_context_agent):
         """Test hybrid mode combines vector and graph results."""
         input_data = ContextAgentInput(
             query="sales revenue and transactions",
@@ -356,9 +343,7 @@ class TestContextAgentIntegration:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_investigation_memory_structure(
-        self, integration_context_agent
-    ):
+    async def test_investigation_memory_structure(self, integration_context_agent):
         """Test InvestigationMemory has correct structure."""
         input_data = ContextAgentInput(
             query="sales data",
@@ -388,9 +373,7 @@ class TestContextAgentIntegration:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_citation_sources_tracked(
-        self, integration_context_agent
-    ):
+    async def test_citation_sources_tracked(self, integration_context_agent):
         """Test that sources are tracked for citations."""
         input_data = ContextAgentInput(
             query="total revenue calculation",
@@ -412,9 +395,7 @@ class TestContextAgentIntegration:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_with_extracted_entities(
-        self, integration_context_agent
-    ):
+    async def test_with_extracted_entities(self, integration_context_agent):
         """Test context retrieval with extracted entities."""
         entities = [
             ExtractedEntity(
@@ -443,9 +424,7 @@ class TestContextAgentIntegration:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_retrieval_performance(
-        self, integration_context_agent
-    ):
+    async def test_retrieval_performance(self, integration_context_agent):
         """Test that retrieval completes in reasonable time."""
         input_data = ContextAgentInput(
             query="sales metrics",
@@ -462,9 +441,7 @@ class TestContextAgentIntegration:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_no_llm_calls_made(
-        self, integration_context_agent
-    ):
+    async def test_no_llm_calls_made(self, integration_context_agent):
         """Test that ContextAgent makes no LLM calls."""
         input_data = ContextAgentInput(
             query="test query",
@@ -479,9 +456,7 @@ class TestContextAgentIntegration:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_respects_max_datapoints_limit(
-        self, integration_context_agent
-    ):
+    async def test_respects_max_datapoints_limit(self, integration_context_agent):
         """Test that max_datapoints limit is respected."""
         max_limit = 3
 

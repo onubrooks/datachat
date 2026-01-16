@@ -21,7 +21,7 @@ Usage:
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any
 
 from backend.models.agent import (
     AgentError,
@@ -60,12 +60,7 @@ class BaseAgent(ABC):
         - Metadata collection
     """
 
-    def __init__(
-        self,
-        name: str,
-        max_retries: int = 3,
-        timeout_seconds: Optional[float] = None
-    ):
+    def __init__(self, name: str, max_retries: int = 3, timeout_seconds: float | None = None):
         """
         Initialize base agent.
 
@@ -84,8 +79,8 @@ class BaseAgent(ABC):
             extra={
                 "agent": self.name,
                 "max_retries": max_retries,
-                "timeout_seconds": timeout_seconds
-            }
+                "timeout_seconds": timeout_seconds,
+            },
         )
 
     @abstractmethod
@@ -129,15 +124,15 @@ class BaseAgent(ABC):
         """
         start_time = time.perf_counter()
         attempt = 0
-        last_error: Optional[AgentError] = None
+        last_error: AgentError | None = None
 
         logger.info(
             f"Starting {self.name}",
             extra={
                 "agent": self.name,
                 "query": input.query[:100],  # Truncate for logging
-                "context_keys": list(input.context.keys())
-            }
+                "context_keys": list(input.context.keys()),
+            },
         )
 
         while attempt <= self.max_retries:
@@ -163,8 +158,8 @@ class BaseAgent(ABC):
                         "success": output.success,
                         "duration_ms": duration_ms,
                         "attempt": attempt + 1,
-                        "llm_calls": self._metadata.llm_calls
-                    }
+                        "llm_calls": self._metadata.llm_calls,
+                    },
                 )
 
                 return output
@@ -181,9 +176,9 @@ class BaseAgent(ABC):
                         "recoverable": e.recoverable,
                         "attempt": attempt,
                         "max_retries": self.max_retries,
-                        "context": e.context
+                        "context": e.context,
                     },
-                    exc_info=True
+                    exc_info=True,
                 )
 
                 # If error is not recoverable or we've exhausted retries, raise
@@ -200,8 +195,8 @@ class BaseAgent(ABC):
                             "agent": self.name,
                             "error": str(e),
                             "duration_ms": duration_ms,
-                            "attempts": attempt
-                        }
+                            "attempts": attempt,
+                        },
                     )
                     raise
 
@@ -209,7 +204,7 @@ class BaseAgent(ABC):
                 wait_time = 2 ** (attempt - 1)  # 1s, 2s, 4s, ...
                 logger.info(
                     f"Retrying {self.name} in {wait_time}s",
-                    extra={"agent": self.name, "wait_time": wait_time}
+                    extra={"agent": self.name, "wait_time": wait_time},
                 )
                 await self._sleep(wait_time)
 
@@ -226,25 +221,23 @@ class BaseAgent(ABC):
                         "agent": self.name,
                         "error": str(e),
                         "error_type": type(e).__name__,
-                        "duration_ms": duration_ms
+                        "duration_ms": duration_ms,
                     },
-                    exc_info=True
+                    exc_info=True,
                 )
 
                 raise AgentError(
                     agent=self.name,
                     message=f"Unexpected error: {str(e)}",
                     recoverable=False,
-                    context={"error_type": type(e).__name__}
+                    context={"error_type": type(e).__name__},
                 ) from e
 
         # Should never reach here, but for type safety
         if last_error:  # pragma: no cover - defensive programming
             raise last_error
         raise AgentError(  # pragma: no cover - defensive programming
-            agent=self.name,
-            message="Unknown error - retry loop exhausted",
-            recoverable=False
+            agent=self.name, message="Unknown error - retry loop exhausted", recoverable=False
         )
 
     def _create_metadata(self) -> AgentMetadata:
@@ -256,7 +249,7 @@ class BaseAgent(ABC):
         """
         return AgentMetadata(agent_name=self.name)
 
-    def _track_llm_call(self, tokens: Optional[int] = None) -> None:
+    def _track_llm_call(self, tokens: int | None = None) -> None:
         """
         Track an LLM API call in metadata.
 
@@ -277,8 +270,8 @@ class BaseAgent(ABC):
                 "agent": self.name,
                 "total_llm_calls": self._metadata.llm_calls,
                 "tokens_this_call": tokens,
-                "total_tokens": self._metadata.tokens_used
-            }
+                "total_tokens": self._metadata.tokens_used,
+            },
         )
 
     async def _sleep(self, seconds: float) -> None:
@@ -289,14 +282,17 @@ class BaseAgent(ABC):
             seconds: Number of seconds to sleep
         """
         import asyncio
+
         await asyncio.sleep(seconds)
 
-    def _validate_input(self, input: AgentInput) -> None:
+    def _validate_input(self, input: AgentInput) -> None:  # noqa: B027
         """
         Validate input data before execution.
 
         Override this method to add agent-specific validation.
         Raise ValidationError if input is invalid.
+
+        This is intentionally not abstract - agents can optionally override it.
 
         Args:
             input: Input data to validate
@@ -307,10 +303,8 @@ class BaseAgent(ABC):
         pass  # Base implementation does no validation
 
     def _build_context_for_next(
-        self,
-        current_context: Dict[str, Any],
-        **updates: Any
-    ) -> Dict[str, Any]:
+        self, current_context: dict[str, Any], **updates: Any
+    ) -> dict[str, Any]:
         """
         Build context dictionary to pass to next agent in pipeline.
 

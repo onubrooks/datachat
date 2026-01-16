@@ -102,9 +102,7 @@ class TestLLMRequest:
 
     def test_optional_fields(self):
         """Test optional fields have correct defaults."""
-        request = LLMRequest(
-            messages=[LLMMessage(role="user", content="Test")]
-        )
+        request = LLMRequest(messages=[LLMMessage(role="user", content="Test")])
         assert request.temperature is None
         assert request.max_tokens is None
         assert request.stream is False

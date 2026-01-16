@@ -15,7 +15,7 @@ Usage:
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import Field, PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,75 +26,55 @@ class LLMSettings(BaseSettings):
 
     # Provider selection
     default_provider: Literal["openai", "anthropic", "google", "local"] = Field(
-        default="openai",
-        description="Default LLM provider"
+        default="openai", description="Default LLM provider"
     )
-    classifier_provider: Optional[Literal["openai", "anthropic", "google", "local"]] = Field(
-        None,
-        description="Provider for ClassifierAgent (defaults to default_provider)"
+    classifier_provider: Literal["openai", "anthropic", "google", "local"] | None = Field(
+        None, description="Provider for ClassifierAgent (defaults to default_provider)"
     )
-    sql_provider: Optional[Literal["openai", "anthropic", "google", "local"]] = Field(
-        None,
-        description="Provider for SQLAgent (defaults to default_provider)"
+    sql_provider: Literal["openai", "anthropic", "google", "local"] | None = Field(
+        None, description="Provider for SQLAgent (defaults to default_provider)"
     )
-    fallback_provider: Optional[Literal["openai", "anthropic", "google", "local"]] = Field(
-        None,
-        description="Fallback provider if primary fails"
+    fallback_provider: Literal["openai", "anthropic", "google", "local"] | None = Field(
+        None, description="Fallback provider if primary fails"
     )
 
     # OpenAI configuration
-    openai_api_key: Optional[str] = Field(
+    openai_api_key: str | None = Field(
         None,
         description="OpenAI API key",
         min_length=20,
     )
-    openai_model: str = Field(
-        default="gpt-4o",
-        description="OpenAI model for complex tasks"
-    )
-    openai_model_mini: str = Field(
-        default="gpt-4o-mini",
-        description="OpenAI lightweight model"
-    )
+    openai_model: str = Field(default="gpt-4o", description="OpenAI model for complex tasks")
+    openai_model_mini: str = Field(default="gpt-4o-mini", description="OpenAI lightweight model")
 
     # Anthropic configuration
-    anthropic_api_key: Optional[str] = Field(
+    anthropic_api_key: str | None = Field(
         None,
         description="Anthropic API key",
         min_length=20,
     )
     anthropic_model: str = Field(
-        default="claude-3-5-sonnet-20241022",
-        description="Anthropic model for complex tasks"
+        default="claude-3-5-sonnet-20241022", description="Anthropic model for complex tasks"
     )
     anthropic_model_mini: str = Field(
-        default="claude-3-5-haiku-20241022",
-        description="Anthropic lightweight model"
+        default="claude-3-5-haiku-20241022", description="Anthropic lightweight model"
     )
 
     # Google configuration
-    google_api_key: Optional[str] = Field(
-        None,
-        description="Google AI API key"
-    )
+    google_api_key: str | None = Field(None, description="Google AI API key")
     google_model: str = Field(
-        default="gemini-1.5-pro",
-        description="Google model for complex tasks"
+        default="gemini-1.5-pro", description="Google model for complex tasks"
     )
     google_model_mini: str = Field(
-        default="gemini-1.5-flash",
-        description="Google lightweight model"
+        default="gemini-1.5-flash", description="Google lightweight model"
     )
 
     # Local model configuration
     local_base_url: str = Field(
         default="http://localhost:11434",
-        description="Base URL for local model server (Ollama, vLLM, etc.)"
+        description="Base URL for local model server (Ollama, vLLM, etc.)",
     )
-    local_model: str = Field(
-        default="llama3.1:8b",
-        description="Local model name"
-    )
+    local_model: str = Field(default="llama3.1:8b", description="Local model name")
 
     # Common settings
     temperature: float = Field(
@@ -123,7 +103,7 @@ class LLMSettings(BaseSettings):
 
     @field_validator("openai_api_key")
     @classmethod
-    def validate_openai_key(cls, v: Optional[str]) -> Optional[str]:
+    def validate_openai_key(cls, v: str | None) -> str | None:
         """Validate OpenAI API key format."""
         if v and not v.startswith("sk-"):
             raise ValueError("OpenAI API key must start with 'sk-'")
@@ -131,7 +111,7 @@ class LLMSettings(BaseSettings):
 
     @field_validator("anthropic_api_key")
     @classmethod
-    def validate_anthropic_key(cls, v: Optional[str]) -> Optional[str]:
+    def validate_anthropic_key(cls, v: str | None) -> str | None:
         """Validate Anthropic API key format."""
         if v and not v.startswith("sk-ant-"):
             raise ValueError("Anthropic API key must start with 'sk-ant-'")
@@ -156,8 +136,7 @@ class LLMSettings(BaseSettings):
         for provider in selected_providers:
             if provider in provider_key_map and not provider_key_map[provider]:
                 raise ValueError(
-                    f"API key required for {provider} provider. "
-                    f"Set LLM_{provider.upper()}_API_KEY"
+                    f"API key required for {provider} provider. Set LLM_{provider.upper()}_API_KEY"
                 )
 
         return self
@@ -277,7 +256,7 @@ class LoggingSettings(BaseSettings):
         default="%Y-%m-%d %H:%M:%S",
         description="Log timestamp format",
     )
-    file: Optional[Path] = Field(
+    file: Path | None = Field(
         default=None,
         description="Optional log file path (None = stdout only)",
     )
@@ -402,11 +381,11 @@ class Settings(BaseSettings):
                 "llm_provider": self.llm.default_provider,
                 "database_pool_size": self.database.pool_size,
                 "chroma_collection": self.chroma.collection_name,
-            }
+            },
         )
 
 
-@lru_cache()
+@lru_cache
 def get_settings() -> Settings:
     """
     Get cached application settings.
