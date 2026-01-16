@@ -261,6 +261,7 @@ def mock_llm_provider():
             result = await agent.execute(input)
     """
     from unittest.mock import AsyncMock
+    from backend.llm.models import LLMResponse, LLMUsage
 
     class MockLLMProvider:
         def __init__(self):
@@ -271,7 +272,14 @@ def mock_llm_provider():
 
         def set_response(self, response: str):
             """Set the response that generate() will return."""
-            self.generate.return_value = response
+            self.generate.return_value = LLMResponse(
+                content=response,
+                model="mock-model",
+                usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                finish_reason="stop",
+                provider="mock",
+                metadata={},
+            )
 
     return MockLLMProvider()
 

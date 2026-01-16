@@ -21,6 +21,7 @@ from backend.connectors.base import BaseConnector, QueryError
 from backend.connectors.clickhouse import ClickHouseConnector
 from backend.connectors.postgres import PostgresConnector
 from backend.llm.factory import LLMProviderFactory
+from backend.llm.models import LLMMessage, LLMRequest
 from backend.models import (
     ExecutedQuery,
     ExecutorAgentInput,
@@ -224,10 +225,20 @@ class ExecutorAgent(BaseAgent):
             prompt = self._build_summary_prompt(original_query, sql, query_result)
 
             # Call LLM
-            response = await self.llm.generate(prompt, temperature=0.3)
+            request = LLMRequest(
+                messages=[
+                    LLMMessage(
+                        role="system",
+                        content="You are a data assistant that summarizes query results.",
+                    ),
+                    LLMMessage(role="user", content=prompt),
+                ],
+                temperature=0.3,
+            )
+            response = await self.llm.generate(request)
 
             # Parse response (expecting "Answer: ... Insights: ..." format)
-            answer, insights = self._parse_summary_response(response, query_result)
+            answer, insights = self._parse_summary_response(response.content, query_result)
 
             return answer, insights
 

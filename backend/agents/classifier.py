@@ -17,6 +17,7 @@ from typing import Any
 from backend.agents.base import BaseAgent
 from backend.config import get_settings
 from backend.llm.factory import LLMProviderFactory
+from backend.llm.models import LLMMessage, LLMRequest
 from backend.models import (
     ClassifierAgentInput,
     ClassifierAgentOutput,
@@ -66,13 +67,22 @@ class ClassifierAgent(BaseAgent):
 
         try:
             # Build classification prompt
-            prompt = self._build_classification_prompt(input.query, input.conversation_history)
+            system_prompt, user_prompt = self._build_classification_prompt(
+                input.query, input.conversation_history
+            )
 
             # Call LLM
-            response = await self.llm.generate(prompt, temperature=0.3)
+            request = LLMRequest(
+                messages=[
+                    LLMMessage(role="system", content=system_prompt),
+                    LLMMessage(role="user", content=user_prompt),
+                ],
+                temperature=0.3,
+            )
+            response = await self.llm.generate(request)
 
             # Parse structured response
-            classification = self._parse_classification_response(response)
+            classification = self._parse_classification_response(response.content)
 
             logger.info(
                 f"[{self.name}] Classification complete: intent={classification.intent}, "
@@ -94,7 +104,9 @@ class ClassifierAgent(BaseAgent):
             logger.error(f"[{self.name}] Classification failed: {e}")
             raise LLMError(self.name, f"Failed to classify query: {e}") from e
 
-    def _build_classification_prompt(self, query: str, conversation_history: list[Any]) -> str:
+    def _build_classification_prompt(
+        self, query: str, conversation_history: list[Any]
+    ) -> tuple[str, str]:
         """
         Build prompt for query classification.
 
@@ -162,7 +174,7 @@ Mark clarification_needed=true if the query is ambiguous."""
 
 Analyze this query and return the classification in JSON format."""
 
-        return f"{system_prompt}\n\n{user_prompt}"
+        return system_prompt, user_prompt
 
     def _parse_classification_response(self, response: str) -> QueryClassification:
         """
