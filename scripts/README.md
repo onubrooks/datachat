@@ -14,6 +14,7 @@ This directory contains utility scripts for testing and development.
 - Installed dependencies: `openai`, `tiktoken`, `pydantic`
 
 **Usage**:
+
 ```bash
 # Make sure you're in the project root
 cd /Users/onuh/Documents/Work/Open\ Source/datachat
@@ -44,7 +45,8 @@ python scripts/test_sql_agent.py
   - Timing and token usage
 
 **Expected Output**:
-```
+
+```text
 Testing SQLAgent with sample data
 =================================
 
@@ -71,6 +73,7 @@ Used DataPoints: ['table_fact_sales_001']
 - Installed dependencies: `openai`, `tiktoken`, `pydantic`
 
 **Usage**:
+
 ```bash
 # Make sure you're in the project root
 cd /Users/onuh/Documents/Work/Open\ Source/datachat
@@ -91,7 +94,8 @@ python scripts/sql_agent_demo.py
 - Press Ctrl+C to exit
 
 **Example Session**:
-```
+
+```text
 SQLAgent Interactive Demo
 ========================
 
@@ -124,6 +128,7 @@ Query: _
 ### Issue: `ModuleNotFoundError: No module named 'openai'`
 
 **Solution**:
+
 ```bash
 pip install openai tiktoken pydantic
 ```
@@ -131,6 +136,7 @@ pip install openai tiktoken pydantic
 ### Issue: `OpenAI API key not found`
 
 **Solution**:
+
 ```bash
 # Option 1: Set environment variable
 export OPENAI_API_KEY=sk-...
@@ -142,12 +148,14 @@ echo "OPENAI_API_KEY=sk-..." >> .env
 ### Issue: `FileNotFoundError: [Errno 2] No such file or directory`
 
 **Solution**: Make sure you run scripts from the project root:
+
 ```bash
 cd /Users/onuh/Documents/Work/Open\ Source/datachat
 python scripts/test_sql_agent.py  # ✅ Correct
 ```
 
 Not from the scripts directory:
+
 ```bash
 cd scripts
 python test_sql_agent.py  # ❌ Incorrect - import paths will break

@@ -57,6 +57,16 @@ from backend.models.agent import (
     ValidationWarning,
     ValidatorAgentInput,
     ValidatorAgentOutput,
+    # ClassifierAgent models
+    ClassifierAgentInput,
+    ClassifierAgentOutput,
+    ExtractedEntity,
+    QueryClassification,
+    # ExecutorAgent models
+    ExecutedQuery,
+    ExecutorAgentInput,
+    ExecutorAgentOutput,
+    QueryResult,
 )
 from backend.models.datapoint import (
     BaseDataPoint,
@@ -93,6 +103,16 @@ __all__ = [
     "ValidatedSQL",
     "ValidatorAgentInput",
     "ValidatorAgentOutput",
+    # ClassifierAgent models
+    "ClassifierAgentInput",
+    "ClassifierAgentOutput",
+    "ExtractedEntity",
+    "QueryClassification",
+    # ExecutorAgent models
+    "ExecutorAgentInput",
+    "ExecutorAgentOutput",
+    "ExecutedQuery",
+    "QueryResult",
     # DataPoint models
     "DataPoint",
     "BaseDataPoint",
