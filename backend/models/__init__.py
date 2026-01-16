@@ -57,6 +57,11 @@ from backend.models.agent import (
     ValidationWarning,
     ValidatorAgentInput,
     ValidatorAgentOutput,
+    # ContextAgent models
+    ContextAgentInput,
+    ContextAgentOutput,
+    InvestigationMemory,
+    RetrievedDataPoint,
     # ClassifierAgent models
     ClassifierAgentInput,
     ClassifierAgentOutput,
@@ -103,6 +108,11 @@ __all__ = [
     "ValidatedSQL",
     "ValidatorAgentInput",
     "ValidatorAgentOutput",
+    # ContextAgent models
+    "ContextAgentInput",
+    "ContextAgentOutput",
+    "InvestigationMemory",
+    "RetrievedDataPoint",
     # ClassifierAgent models
     "ClassifierAgentInput",
     "ClassifierAgentOutput",

@@ -55,23 +55,33 @@ class SQLAgent(BaseAgent):
         sql = output.generated_sql.sql
     """
 
-    def __init__(self):
-        """Initialize SQLAgent with LLM provider."""
+    def __init__(self, llm_provider=None):
+        """
+        Initialize SQLAgent with LLM provider.
+
+        Args:
+            llm_provider: Optional LLM provider. If None, creates default provider.
+        """
         super().__init__(name="SQLAgent")
 
         # Get configuration
         self.config = get_settings()
 
         # Create LLM provider using factory (respects sql_provider override)
-        self.llm = LLMProviderFactory.create_agent_provider(
-            agent_name="sql",
-            config=self.config.llm,
-            model_type="main",  # Use main model (GPT-4o) for SQL generation
-        )
+        if llm_provider is None:
+            self.llm = LLMProviderFactory.create_agent_provider(
+                agent_name="sql",
+                config=self.config.llm,
+                model_type="main",  # Use main model (GPT-4o) for SQL generation
+            )
+        else:
+            self.llm = llm_provider
 
+        provider_name = getattr(self.llm, "provider", "unknown")
+        model_name = getattr(self.llm, "model", "unknown")
         logger.info(
-            f"SQLAgent initialized with {self.llm.provider} provider",
-            extra={"provider": self.llm.provider, "model": self.llm.model},
+            f"SQLAgent initialized with {provider_name} provider",
+            extra={"provider": provider_name, "model": model_name},
         )
 
     async def execute(self, input: SQLAgentInput) -> SQLAgentOutput:
