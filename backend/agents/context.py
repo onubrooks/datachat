@@ -13,17 +13,17 @@ The ContextAgent:
 """
 
 import logging
-from typing import Dict, Any
+from typing import Any
 
 from backend.agents.base import BaseAgent
-from backend.knowledge.retriever import Retriever, RetrievalMode
+from backend.knowledge.retriever import RetrievalMode, Retriever
 from backend.models.agent import (
+    AgentMetadata,
     ContextAgentInput,
     ContextAgentOutput,
     InvestigationMemory,
-    RetrievedDataPoint,
-    AgentMetadata,
     RetrievalError,
+    RetrievedDataPoint,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,11 +166,9 @@ class ContextAgent(BaseAgent):
             ValueError: If input is not ContextAgentInput
         """
         if not isinstance(input, ContextAgentInput):
-            raise ValueError(
-                f"ContextAgent requires ContextAgentInput, got {type(input)}"
-            )
+            raise ValueError(f"ContextAgent requires ContextAgentInput, got {type(input)}")
 
-    def _extract_datapoint_type(self, metadata: Dict[str, Any]) -> str:
+    def _extract_datapoint_type(self, metadata: dict[str, Any]) -> str:
         """
         Extract DataPoint type from metadata.
 
@@ -209,7 +207,7 @@ class ContextAgent(BaseAgent):
 
     def _build_context_for_next(
         self, input: ContextAgentInput, output: ContextAgentOutput
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Build context dictionary for next agent.
 

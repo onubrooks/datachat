@@ -22,10 +22,9 @@ Usage:
 """
 
 import re
-from typing import Annotated, Literal, Optional, Union
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-
 
 # ============================================================================
 # Column and Relationship Models
@@ -38,15 +37,10 @@ class ColumnMetadata(BaseModel):
     name: str = Field(..., description="Column name", min_length=1)
     type: str = Field(..., description="SQL data type (e.g., VARCHAR(255), INT)")
     business_meaning: str = Field(
-        ...,
-        description="Plain-English explanation of what this column represents",
-        min_length=1
+        ..., description="Plain-English explanation of what this column represents", min_length=1
     )
     nullable: bool = Field(..., description="Whether column can contain NULL values")
-    default_value: Optional[str] = Field(
-        None,
-        description="Default value if any"
-    )
+    default_value: str | None = Field(None, description="Default value if any")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -54,7 +48,7 @@ class ColumnMetadata(BaseModel):
                 "name": "customer_id",
                 "type": "BIGINT",
                 "business_meaning": "Unique identifier for customer",
-                "nullable": False
+                "nullable": False,
             }
         }
     )
@@ -64,22 +58,14 @@ class Relationship(BaseModel):
     """Foreign key relationship to another table."""
 
     target_table: str = Field(
-        ...,
-        description="Name of the target table (can include schema)",
-        min_length=1
+        ..., description="Name of the target table (can include schema)", min_length=1
     )
-    join_column: str = Field(
-        ...,
-        description="Column used for the join",
-        min_length=1
-    )
+    join_column: str = Field(..., description="Column used for the join", min_length=1)
     cardinality: Literal["1:1", "1:N", "N:1", "N:N"] = Field(
-        ...,
-        description="Relationship cardinality"
+        ..., description="Relationship cardinality"
     )
-    relationship_type: Optional[Literal["foreign_key", "logical"]] = Field(
-        default="foreign_key",
-        description="Type of relationship"
+    relationship_type: Literal["foreign_key", "logical"] | None = Field(
+        default="foreign_key", description="Type of relationship"
     )
 
     model_config = ConfigDict(
@@ -87,7 +73,7 @@ class Relationship(BaseModel):
             "example": {
                 "target_table": "dim_customer",
                 "join_column": "customer_id",
-                "cardinality": "N:1"
+                "cardinality": "N:1",
             }
         }
     )
@@ -109,30 +95,16 @@ class BaseDataPoint(BaseModel):
         ...,
         description="Unique identifier with format: {type_prefix}_{name}_{number}",
         min_length=1,
-        max_length=100
+        max_length=100,
     )
     type: Literal["Schema", "Business", "Process"] = Field(
-        ...,
-        description="DataPoint type for discriminated union"
+        ..., description="DataPoint type for discriminated union"
     )
-    name: str = Field(
-        ...,
-        description="Human-readable name",
-        min_length=1,
-        max_length=200
-    )
-    owner: str = Field(
-        ...,
-        description="Email of the team/person responsible",
-        min_length=1
-    )
-    tags: list[str] = Field(
-        default_factory=list,
-        description="Optional tags for categorization"
-    )
+    name: str = Field(..., description="Human-readable name", min_length=1, max_length=200)
+    owner: str = Field(..., description="Email of the team/person responsible", min_length=1)
+    tags: list[str] = Field(default_factory=list, description="Optional tags for categorization")
     metadata: dict[str, str] = Field(
-        default_factory=dict,
-        description="Additional metadata key-value pairs"
+        default_factory=dict, description="Additional metadata key-value pairs"
     )
 
     model_config = ConfigDict(
@@ -186,50 +158,33 @@ class SchemaDataPoint(BaseDataPoint):
     """
 
     type: Literal["Schema"] = Field(
-        default="Schema",
-        description="Type discriminator for Schema DataPoints"
+        default="Schema", description="Type discriminator for Schema DataPoints"
     )
     table_name: str = Field(
         ...,
         description="Full table name (can include schema, e.g., 'analytics.fact_sales')",
-        min_length=1
+        min_length=1,
     )
-    schema: str = Field(
-        ...,
-        description="Database schema name",
-        min_length=1
-    )
+    schema: str = Field(..., description="Database schema name", min_length=1)
     business_purpose: str = Field(
-        ...,
-        description="Plain-English explanation of table's purpose",
-        min_length=10
+        ..., description="Plain-English explanation of table's purpose", min_length=10
     )
     key_columns: list[ColumnMetadata] = Field(
-        ...,
-        description="Important columns in this table",
-        min_length=1
+        ..., description="Important columns in this table", min_length=1
     )
     relationships: list[Relationship] = Field(
-        default_factory=list,
-        description="Foreign key relationships to other tables"
+        default_factory=list, description="Foreign key relationships to other tables"
     )
     common_queries: list[str] = Field(
-        default_factory=list,
-        description="Common SQL patterns for this table"
+        default_factory=list, description="Common SQL patterns for this table"
     )
     gotchas: list[str] = Field(
-        default_factory=list,
-        description="Important notes, caveats, or performance tips"
+        default_factory=list, description="Important notes, caveats, or performance tips"
     )
-    freshness: Optional[str] = Field(
-        None,
-        description="Data freshness (e.g., 'T-1', 'Real-time', 'Monthly')"
+    freshness: str | None = Field(
+        None, description="Data freshness (e.g., 'T-1', 'Real-time', 'Monthly')"
     )
-    row_count: Optional[int] = Field(
-        None,
-        ge=0,
-        description="Approximate number of rows"
-    )
+    row_count: int | None = Field(None, ge=0, description="Approximate number of rows")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -245,20 +200,16 @@ class SchemaDataPoint(BaseDataPoint):
                         "name": "amount",
                         "type": "DECIMAL(18,2)",
                         "business_meaning": "Transaction value in USD",
-                        "nullable": False
+                        "nullable": False,
                     }
                 ],
                 "relationships": [
-                    {
-                        "target_table": "dim_region",
-                        "join_column": "region_id",
-                        "cardinality": "N:1"
-                    }
+                    {"target_table": "dim_region", "join_column": "region_id", "cardinality": "N:1"}
                 ],
                 "common_queries": ["SUM(amount)", "GROUP BY region"],
                 "gotchas": ["Always filter by date for performance"],
                 "freshness": "T-1",
-                "owner": "data-team@company.com"
+                "owner": "data-team@company.com",
             }
         }
     )
@@ -277,33 +228,23 @@ class BusinessDataPoint(BaseDataPoint):
     """
 
     type: Literal["Business"] = Field(
-        default="Business",
-        description="Type discriminator for Business DataPoints"
+        default="Business", description="Type discriminator for Business DataPoints"
     )
-    calculation: str = Field(
-        ...,
-        description="SQL calculation or metric definition",
-        min_length=1
-    )
+    calculation: str = Field(..., description="SQL calculation or metric definition", min_length=1)
     synonyms: list[str] = Field(
-        default_factory=list,
-        description="Alternative names users might use for this metric"
+        default_factory=list, description="Alternative names users might use for this metric"
     )
     business_rules: list[str] = Field(
-        default_factory=list,
-        description="Business logic and rules for calculating this metric"
+        default_factory=list, description="Business logic and rules for calculating this metric"
     )
     related_tables: list[str] = Field(
-        default_factory=list,
-        description="Tables involved in calculating this metric"
+        default_factory=list, description="Tables involved in calculating this metric"
     )
-    unit: Optional[str] = Field(
-        None,
-        description="Unit of measurement (e.g., 'USD', 'count', 'percentage')"
+    unit: str | None = Field(
+        None, description="Unit of measurement (e.g., 'USD', 'count', 'percentage')"
     )
-    aggregation: Optional[Literal["SUM", "AVG", "COUNT", "MIN", "MAX", "CUSTOM"]] = Field(
-        None,
-        description="Type of aggregation used"
+    aggregation: Literal["SUM", "AVG", "COUNT", "MIN", "MAX", "CUSTOM"] | None = Field(
+        None, description="Type of aggregation used"
     )
 
     model_config = ConfigDict(
@@ -316,12 +257,12 @@ class BusinessDataPoint(BaseDataPoint):
                 "synonyms": ["sales", "income", "earnings", "total sales"],
                 "business_rules": [
                     "Exclude refunds (status != 'refunded')",
-                    "Convert to USD using daily rate"
+                    "Convert to USD using daily rate",
                 ],
                 "related_tables": ["fact_sales", "dim_currency"],
                 "unit": "USD",
                 "aggregation": "SUM",
-                "owner": "finance@company.com"
+                "owner": "finance@company.com",
             }
         }
     )
@@ -340,36 +281,22 @@ class ProcessDataPoint(BaseDataPoint):
     """
 
     type: Literal["Process"] = Field(
-        default="Process",
-        description="Type discriminator for Process DataPoints"
+        default="Process", description="Type discriminator for Process DataPoints"
     )
-    schedule: str = Field(
-        ...,
-        description="Cron schedule or frequency description",
-        min_length=1
-    )
+    schedule: str = Field(..., description="Cron schedule or frequency description", min_length=1)
     data_freshness: str = Field(
-        ...,
-        description="When data becomes available (e.g., 'T-1 by 3am UTC')",
-        min_length=1
+        ..., description="When data becomes available (e.g., 'T-1 by 3am UTC')", min_length=1
     )
     target_tables: list[str] = Field(
-        ...,
-        description="Tables updated by this process",
-        min_length=1
+        ..., description="Tables updated by this process", min_length=1
     )
     dependencies: list[str] = Field(
-        default_factory=list,
-        description="Upstream tables or processes this depends on"
+        default_factory=list, description="Upstream tables or processes this depends on"
     )
-    sla: Optional[str] = Field(
-        None,
-        description="Service level agreement (e.g., '99.9% uptime', '< 1 hour')"
+    sla: str | None = Field(
+        None, description="Service level agreement (e.g., '99.9% uptime', '< 1 hour')"
     )
-    monitoring_url: Optional[str] = Field(
-        None,
-        description="URL to monitoring dashboard or logs"
-    )
+    monitoring_url: str | None = Field(None, description="URL to monitoring dashboard or logs")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -382,7 +309,7 @@ class ProcessDataPoint(BaseDataPoint):
                 "target_tables": ["analytics.fact_sales"],
                 "dependencies": ["raw.sales_events"],
                 "sla": "Complete within 1 hour",
-                "owner": "data-eng@company.com"
+                "owner": "data-eng@company.com",
             }
         }
     )
@@ -394,8 +321,7 @@ class ProcessDataPoint(BaseDataPoint):
 
 
 DataPoint = Annotated[
-    Union[SchemaDataPoint, BusinessDataPoint, ProcessDataPoint],
-    Field(discriminator="type")
+    SchemaDataPoint | BusinessDataPoint | ProcessDataPoint, Field(discriminator="type")
 ]
 """
 Discriminated union of all DataPoint types.

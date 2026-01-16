@@ -4,19 +4,19 @@ Tests for Knowledge Retriever.
 Tests unified retrieval combining VectorStore and KnowledgeGraph.
 """
 
-import pytest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
+import pytest
+
+from backend.knowledge.graph import KnowledgeGraph, NodeType
 from backend.knowledge.retriever import (
-    Retriever,
     RetrievalMode,
     RetrievalResult,
     RetrievedItem,
+    Retriever,
     RetrieverError,
 )
-from backend.knowledge.graph import KnowledgeGraph, NodeType
 from backend.knowledge.vectors import VectorStore
-from backend.models.datapoint import SchemaDataPoint, BusinessDataPoint
 
 
 @pytest.fixture
@@ -120,9 +120,7 @@ class TestLocalMode:
         """Test local mode only calls vector search."""
         mock_vector_store.search.return_value = sample_vector_results
 
-        result = await retriever.retrieve(
-            "sales data", mode=RetrievalMode.LOCAL, top_k=3
-        )
+        result = await retriever.retrieve("sales data", mode=RetrievalMode.LOCAL, top_k=3)
 
         # Should call vector search
         mock_vector_store.search.assert_called_once_with(
@@ -145,9 +143,7 @@ class TestLocalMode:
         """Test distance conversion to similarity score."""
         mock_vector_store.search.return_value = sample_vector_results
 
-        result = await retriever.retrieve(
-            "sales data", mode=RetrievalMode.LOCAL, top_k=3
-        )
+        result = await retriever.retrieve("sales data", mode=RetrievalMode.LOCAL, top_k=3)
 
         # Scores should be: 1/(1+0.1), 1/(1+0.3), 1/(1+0.5)
         assert result.items[0].score == pytest.approx(1.0 / 1.1, rel=1e-5)
@@ -161,9 +157,7 @@ class TestLocalMode:
         """Test metadata is preserved in results."""
         mock_vector_store.search.return_value = sample_vector_results
 
-        result = await retriever.retrieve(
-            "sales data", mode=RetrievalMode.LOCAL, top_k=3
-        )
+        result = await retriever.retrieve("sales data", mode=RetrievalMode.LOCAL, top_k=3)
 
         assert result.items[0].datapoint_id == "table_sales_001"
         assert result.items[0].metadata == {"name": "Sales Table", "type": "table"}
@@ -199,14 +193,10 @@ class TestGlobalMode:
         """Test global mode only calls graph traversal."""
         mock_knowledge_graph.get_related.return_value = sample_graph_results
 
-        result = await retriever.retrieve(
-            "metric_revenue_001", mode=RetrievalMode.GLOBAL, top_k=5
-        )
+        result = await retriever.retrieve("metric_revenue_001", mode=RetrievalMode.GLOBAL, top_k=5)
 
         # Should call graph traversal
-        mock_knowledge_graph.get_related.assert_called_once_with(
-            "metric_revenue_001", max_depth=2
-        )
+        mock_knowledge_graph.get_related.assert_called_once_with("metric_revenue_001", max_depth=2)
 
         # Check result
         assert result.mode == RetrievalMode.GLOBAL
@@ -221,18 +211,14 @@ class TestGlobalMode:
         """Test graph distance conversion to score."""
         mock_knowledge_graph.get_related.return_value = sample_graph_results
 
-        result = await retriever.retrieve(
-            "metric_revenue_001", mode=RetrievalMode.GLOBAL, top_k=5
-        )
+        result = await retriever.retrieve("metric_revenue_001", mode=RetrievalMode.GLOBAL, top_k=5)
 
         # Scores should be: 1/1, 1/2
         assert result.items[0].score == 1.0
         assert result.items[1].score == 0.5
 
     @pytest.mark.asyncio
-    async def test_global_mode_respects_top_k(
-        self, retriever, mock_knowledge_graph
-    ):
+    async def test_global_mode_respects_top_k(self, retriever, mock_knowledge_graph):
         """Test global mode limits results to top_k."""
         # Return 10 results
         many_results = [
@@ -248,9 +234,7 @@ class TestGlobalMode:
         ]
         mock_knowledge_graph.get_related.return_value = many_results
 
-        result = await retriever.retrieve(
-            "metric_revenue_001", mode=RetrievalMode.GLOBAL, top_k=3
-        )
+        result = await retriever.retrieve("metric_revenue_001", mode=RetrievalMode.GLOBAL, top_k=3)
 
         assert len(result.items) == 3
 
@@ -268,9 +252,7 @@ class TestGlobalMode:
             graph_max_depth=3,
         )
 
-        mock_knowledge_graph.get_related.assert_called_once_with(
-            "metric_revenue_001", max_depth=3
-        )
+        mock_knowledge_graph.get_related.assert_called_once_with("metric_revenue_001", max_depth=3)
 
 
 class TestHybridMode:
@@ -289,9 +271,7 @@ class TestHybridMode:
         mock_vector_store.search.return_value = sample_vector_results
         mock_knowledge_graph.get_related.return_value = sample_graph_results
 
-        result = await retriever.retrieve(
-            "sales data", mode=RetrievalMode.HYBRID, top_k=5
-        )
+        result = await retriever.retrieve("sales data", mode=RetrievalMode.HYBRID, top_k=5)
 
         # Should call both
         mock_vector_store.search.assert_called_once()
@@ -312,9 +292,7 @@ class TestHybridMode:
         mock_vector_store.search.return_value = sample_vector_results
         mock_knowledge_graph.get_related.return_value = sample_graph_results
 
-        result = await retriever.retrieve(
-            "sales data", mode=RetrievalMode.HYBRID, top_k=5
-        )
+        result = await retriever.retrieve("sales data", mode=RetrievalMode.HYBRID, top_k=5)
 
         # Items should be ranked by RRF scores
         assert len(result.items) > 0
@@ -336,9 +314,7 @@ class TestHybridMode:
         mock_vector_store.search.return_value = sample_vector_results
         mock_knowledge_graph.get_related.return_value = sample_graph_results
 
-        result = await retriever.retrieve(
-            "sales data", mode=RetrievalMode.HYBRID, top_k=10
-        )
+        result = await retriever.retrieve("sales data", mode=RetrievalMode.HYBRID, top_k=10)
 
         # Check no duplicate IDs
         ids = [item.datapoint_id for item in result.items]
@@ -357,9 +333,7 @@ class TestHybridMode:
         mock_vector_store.search.return_value = sample_vector_results
         mock_knowledge_graph.get_related.return_value = sample_graph_results
 
-        result = await retriever.retrieve(
-            "sales data", mode=RetrievalMode.HYBRID, top_k=10
-        )
+        result = await retriever.retrieve("sales data", mode=RetrievalMode.HYBRID, top_k=10)
 
         # table_sales_001 appears in both -> should be "hybrid"
         sales_item = next(
@@ -371,11 +345,7 @@ class TestHybridMode:
 
         # metric_revenue_001 only in vector -> should be "vector"
         revenue_item = next(
-            (
-                item
-                for item in result.items
-                if item.datapoint_id == "metric_revenue_001"
-            ),
+            (item for item in result.items if item.datapoint_id == "metric_revenue_001"),
             None,
         )
         if revenue_item:
@@ -383,11 +353,7 @@ class TestHybridMode:
 
         # table_product_001 only in graph -> should be "graph"
         product_item = next(
-            (
-                item
-                for item in result.items
-                if item.datapoint_id == "table_product_001"
-            ),
+            (item for item in result.items if item.datapoint_id == "table_product_001"),
             None,
         )
         if product_item:
@@ -409,9 +375,7 @@ class TestHybridMode:
         await retriever.retrieve("sales data", mode=RetrievalMode.HYBRID, top_k=5)
 
         # Should use first vector result as seed
-        mock_knowledge_graph.get_related.assert_called_once_with(
-            "table_sales_001", max_depth=2
-        )
+        mock_knowledge_graph.get_related.assert_called_once_with("table_sales_001", max_depth=2)
 
     @pytest.mark.asyncio
     async def test_hybrid_mode_handles_graph_failure_gracefully(
@@ -422,9 +386,7 @@ class TestHybridMode:
         mock_knowledge_graph.get_related.side_effect = Exception("Graph error")
 
         # Should not raise, just use vector results
-        result = await retriever.retrieve(
-            "sales data", mode=RetrievalMode.HYBRID, top_k=5
-        )
+        result = await retriever.retrieve("sales data", mode=RetrievalMode.HYBRID, top_k=5)
 
         assert len(result.items) > 0
         assert all(item.source in ("vector", "hybrid") for item in result.items)
@@ -463,9 +425,7 @@ class TestHybridMode:
             sample_graph_results,  # Second seed succeeds
         ]
 
-        result = await retriever.retrieve(
-            "sales data", mode=RetrievalMode.HYBRID, top_k=5
-        )
+        result = await retriever.retrieve("sales data", mode=RetrievalMode.HYBRID, top_k=5)
 
         # Should have tried both seeds
         assert mock_knowledge_graph.get_related.call_count == 2
@@ -549,16 +509,12 @@ class TestErrorHandling:
             await retriever.retrieve("query", mode="invalid_mode", top_k=5)
 
     @pytest.mark.asyncio
-    async def test_vector_store_error_propagates(
-        self, retriever, mock_vector_store
-    ):
+    async def test_vector_store_error_propagates(self, retriever, mock_vector_store):
         """Test vector store errors are caught and wrapped."""
         mock_vector_store.search.side_effect = Exception("Vector error")
 
         with pytest.raises(RetrieverError, match="Retrieval failed"):
-            await retriever.retrieve(
-                "query", mode=RetrievalMode.LOCAL, top_k=5
-            )
+            await retriever.retrieve("query", mode=RetrievalMode.LOCAL, top_k=5)
 
 
 class TestRetrievalResult:

@@ -7,8 +7,9 @@ and consistent data structures throughout the system.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Message(BaseModel):
@@ -26,11 +27,11 @@ class AgentMetadata(BaseModel):
 
     agent_name: str
     started_at: datetime = Field(default_factory=datetime.utcnow)
-    completed_at: Optional[datetime] = None
-    duration_ms: Optional[float] = None
+    completed_at: datetime | None = None
+    duration_ms: float | None = None
     llm_calls: int = 0
-    tokens_used: Optional[int] = None
-    error: Optional[str] = None
+    tokens_used: int | None = None
+    error: str | None = None
 
     model_config = ConfigDict(frozen=False)
 
@@ -51,13 +52,11 @@ class AgentInput(BaseModel):
     """
 
     query: str = Field(..., description="User's natural language query")
-    conversation_history: List[Message] = Field(
-        default_factory=list,
-        description="Previous messages in the conversation"
+    conversation_history: list[Message] = Field(
+        default_factory=list, description="Previous messages in the conversation"
     )
-    context: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Additional context passed between agents"
+    context: dict[str, Any] = Field(
+        default_factory=dict, description="Additional context passed between agents"
     )
 
     model_config = ConfigDict(
@@ -65,7 +64,7 @@ class AgentInput(BaseModel):
             "example": {
                 "query": "What were our top selling products last quarter?",
                 "conversation_history": [],
-                "context": {}
+                "context": {},
             }
         }
     )
@@ -80,14 +79,10 @@ class AgentOutput(BaseModel):
     """
 
     success: bool = Field(..., description="Whether the agent executed successfully")
-    data: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Agent-specific output data"
-    )
+    data: dict[str, Any] = Field(default_factory=dict, description="Agent-specific output data")
     metadata: AgentMetadata = Field(..., description="Execution metadata")
-    next_agent: Optional[str] = Field(
-        None,
-        description="Name of next agent to execute (for pipeline routing)"
+    next_agent: str | None = Field(
+        None, description="Name of next agent to execute (for pipeline routing)"
     )
 
     model_config = ConfigDict(
@@ -95,12 +90,8 @@ class AgentOutput(BaseModel):
             "example": {
                 "success": True,
                 "data": {"intent": "data_query"},
-                "metadata": {
-                    "agent_name": "ClassifierAgent",
-                    "duration_ms": 234.5,
-                    "llm_calls": 1
-                },
-                "next_agent": "ContextAgent"
+                "metadata": {"agent_name": "ClassifierAgent", "duration_ms": 234.5, "llm_calls": 1},
+                "next_agent": "ContextAgent",
             }
         }
     )
@@ -122,7 +113,7 @@ class AgentError(Exception):
         agent: str,
         message: str,
         recoverable: bool = True,
-        context: Optional[Dict[str, Any]] = None
+        context: dict[str, Any] | None = None,
     ):
         self.agent = agent
         self.message = message
@@ -130,28 +121,28 @@ class AgentError(Exception):
         self.context = context or {}
         super().__init__(f"[{agent}] {message}")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert error to dictionary for logging/API responses."""
         return {
             "agent": self.agent,
             "message": self.message,
             "recoverable": self.recoverable,
             "context": self.context,
-            "type": self.__class__.__name__
+            "type": self.__class__.__name__,
         }
 
 
 class ValidationError(AgentError):
     """Error during data validation (usually not recoverable)."""
 
-    def __init__(self, agent: str, message: str, context: Optional[Dict[str, Any]] = None):
+    def __init__(self, agent: str, message: str, context: dict[str, Any] | None = None):
         super().__init__(agent, message, recoverable=False, context=context)
 
 
 class LLMError(AgentError):
     """Error during LLM API call (usually recoverable with retry)."""
 
-    def __init__(self, agent: str, message: str, context: Optional[Dict[str, Any]] = None):
+    def __init__(self, agent: str, message: str, context: dict[str, Any] | None = None):
         super().__init__(agent, message, recoverable=True, context=context)
 
 
@@ -163,7 +154,7 @@ class DatabaseError(AgentError):
         agent: str,
         message: str,
         recoverable: bool = False,
-        context: Optional[Dict[str, Any]] = None
+        context: dict[str, Any] | None = None,
     ):
         super().__init__(agent, message, recoverable=recoverable, context=context)
 
@@ -171,7 +162,7 @@ class DatabaseError(AgentError):
 class RetrievalError(AgentError):
     """Error during context retrieval (usually recoverable)."""
 
-    def __init__(self, agent: str, message: str, context: Optional[Dict[str, Any]] = None):
+    def __init__(self, agent: str, message: str, context: dict[str, Any] | None = None):
         super().__init__(agent, message, recoverable=True, context=context)
 
 
@@ -183,7 +174,7 @@ class SQLGenerationError(AgentError):
         agent: str,
         message: str,
         recoverable: bool = True,
-        context: Optional[Dict[str, Any]] = None
+        context: dict[str, Any] | None = None,
     ):
         super().__init__(agent, message, recoverable=recoverable, context=context)
 
@@ -212,19 +203,16 @@ class ContextAgentInput(AgentInput):
     to improve retrieval precision.
     """
 
-    entities: List[ExtractedEntity] = Field(
+    entities: list[ExtractedEntity] = Field(
         default_factory=list,
-        description="Entities extracted from query (optional, from ClassifierAgent)"
+        description="Entities extracted from query (optional, from ClassifierAgent)",
     )
     retrieval_mode: Literal["local", "global", "hybrid"] = Field(
         default="hybrid",
-        description="Retrieval mode: local (vector), global (graph), hybrid (both)"
+        description="Retrieval mode: local (vector), global (graph), hybrid (both)",
     )
     max_datapoints: int = Field(
-        default=10,
-        ge=1,
-        le=50,
-        description="Maximum number of DataPoints to retrieve"
+        default=10, ge=1, le=50, description="Maximum number of DataPoints to retrieve"
     )
 
     model_config = ConfigDict(
@@ -233,10 +221,10 @@ class ContextAgentInput(AgentInput):
                 "query": "What were total sales last quarter?",
                 "entities": [
                     {"entity_type": "metric", "value": "sales", "confidence": 0.9},
-                    {"entity_type": "table", "value": "fact_sales", "confidence": 0.8}
+                    {"entity_type": "table", "value": "fact_sales", "confidence": 0.8},
                 ],
                 "retrieval_mode": "hybrid",
-                "max_datapoints": 10
+                "max_datapoints": 10,
             }
         }
     )
@@ -248,17 +236,9 @@ class RetrievedDataPoint(BaseModel):
     datapoint_id: str = Field(..., description="DataPoint identifier")
     datapoint_type: Literal["Schema", "Business", "Process"]
     name: str = Field(..., description="Human-readable name")
-    score: float = Field(
-        ...,
-        ge=0.0,
-        le=1.0,
-        description="Relevance score (0-1, higher is better)"
-    )
+    score: float = Field(..., ge=0.0, le=1.0, description="Relevance score (0-1, higher is better)")
     source: str = Field(..., description="Retrieval source (vector/graph/hybrid)")
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Full DataPoint metadata"
-    )
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Full DataPoint metadata")
 
     model_config = ConfigDict(frozen=True)
 
@@ -273,15 +253,13 @@ class InvestigationMemory(BaseModel):
     """
 
     query: str = Field(..., description="Original user query")
-    datapoints: List[RetrievedDataPoint] = Field(
-        default_factory=list,
-        description="Retrieved DataPoints ranked by relevance"
+    datapoints: list[RetrievedDataPoint] = Field(
+        default_factory=list, description="Retrieved DataPoints ranked by relevance"
     )
     total_retrieved: int = Field(..., description="Total number of DataPoints retrieved")
     retrieval_mode: str = Field(..., description="Retrieval mode used")
-    sources_used: List[str] = Field(
-        default_factory=list,
-        description="Unique sources (for citation tracking)"
+    sources_used: list[str] = Field(
+        default_factory=list, description="Unique sources (for citation tracking)"
     )
 
     model_config = ConfigDict(
@@ -295,12 +273,12 @@ class InvestigationMemory(BaseModel):
                         "name": "Revenue",
                         "score": 0.95,
                         "source": "hybrid",
-                        "metadata": {"calculation": "SUM(amount)"}
+                        "metadata": {"calculation": "SUM(amount)"},
                     }
                 ],
                 "total_retrieved": 5,
                 "retrieval_mode": "hybrid",
-                "sources_used": ["metric_revenue_001", "table_sales_001"]
+                "sources_used": ["metric_revenue_001", "table_sales_001"],
             }
         }
     )
@@ -315,8 +293,7 @@ class ContextAgentOutput(AgentOutput):
     """
 
     investigation_memory: InvestigationMemory = Field(
-        ...,
-        description="Retrieved context and DataPoints"
+        ..., description="Retrieved context and DataPoints"
     )
 
     model_config = ConfigDict(
@@ -327,7 +304,7 @@ class ContextAgentOutput(AgentOutput):
                 "metadata": {
                     "agent_name": "ContextAgent",
                     "duration_ms": 45.2,
-                    "llm_calls": 0  # ContextAgent doesn't use LLM
+                    "llm_calls": 0,  # ContextAgent doesn't use LLM
                 },
                 "next_agent": "SQLAgent",
                 "investigation_memory": {
@@ -335,8 +312,8 @@ class ContextAgentOutput(AgentOutput):
                     "datapoints": [],
                     "total_retrieved": 5,
                     "retrieval_mode": "hybrid",
-                    "sources_used": []
-                }
+                    "sources_used": [],
+                },
             }
         }
     )
@@ -356,21 +333,13 @@ class ValidationIssue(BaseModel):
     """
 
     issue_type: Literal["syntax", "missing_column", "missing_table", "ambiguous", "other"] = Field(
-        ...,
-        description="Type of validation issue"
+        ..., description="Type of validation issue"
     )
-    message: str = Field(
-        ...,
-        description="Human-readable description of the issue"
+    message: str = Field(..., description="Human-readable description of the issue")
+    location: str | None = Field(
+        None, description="Location in SQL where issue was found (line/column if available)"
     )
-    location: Optional[str] = Field(
-        None,
-        description="Location in SQL where issue was found (line/column if available)"
-    )
-    suggested_fix: Optional[str] = Field(
-        None,
-        description="Suggested correction for the issue"
-    )
+    suggested_fix: str | None = Field(None, description="Suggested correction for the issue")
 
 
 class GeneratedSQL(BaseModel):
@@ -381,32 +350,19 @@ class GeneratedSQL(BaseModel):
     were used to generate it.
     """
 
-    sql: str = Field(
-        ...,
-        description="Generated SQL query",
-        min_length=1
-    )
-    explanation: str = Field(
-        ...,
-        description="Human-readable explanation of what the query does"
-    )
-    used_datapoints: List[str] = Field(
-        default_factory=list,
-        description="DataPoint IDs used in query generation (for citation)"
+    sql: str = Field(..., description="Generated SQL query", min_length=1)
+    explanation: str = Field(..., description="Human-readable explanation of what the query does")
+    used_datapoints: list[str] = Field(
+        default_factory=list, description="DataPoint IDs used in query generation (for citation)"
     )
     confidence: float = Field(
-        ...,
-        ge=0.0,
-        le=1.0,
-        description="Confidence score for the generated query (0-1)"
+        ..., ge=0.0, le=1.0, description="Confidence score for the generated query (0-1)"
     )
-    assumptions: List[str] = Field(
-        default_factory=list,
-        description="Assumptions made during query generation"
+    assumptions: list[str] = Field(
+        default_factory=list, description="Assumptions made during query generation"
     )
-    clarifying_questions: List[str] = Field(
-        default_factory=list,
-        description="Questions for user if query is ambiguous"
+    clarifying_questions: list[str] = Field(
+        default_factory=list, description="Questions for user if query is ambiguous"
     )
 
     model_config = ConfigDict(
@@ -417,7 +373,7 @@ class GeneratedSQL(BaseModel):
                 "used_datapoints": ["table_fact_sales_001", "metric_revenue_001"],
                 "confidence": 0.95,
                 "assumptions": ["'last quarter' refers to Q3 2024 (most recent complete quarter)"],
-                "clarifying_questions": []
+                "clarifying_questions": [],
             }
         }
     )
@@ -432,9 +388,8 @@ class CorrectionAttempt(BaseModel):
 
     attempt_number: int = Field(..., ge=1, description="Correction attempt number")
     original_sql: str = Field(..., description="SQL before correction")
-    issues_found: List[ValidationIssue] = Field(
-        ...,
-        description="Validation issues that triggered correction"
+    issues_found: list[ValidationIssue] = Field(
+        ..., description="Validation issues that triggered correction"
     )
     corrected_sql: str = Field(..., description="SQL after correction")
     success: bool = Field(..., description="Whether correction resolved the issues")
@@ -448,14 +403,10 @@ class SQLAgentInput(AgentInput):
     """
 
     investigation_memory: InvestigationMemory = Field(
-        ...,
-        description="Context retrieved by ContextAgent"
+        ..., description="Context retrieved by ContextAgent"
     )
     max_correction_attempts: int = Field(
-        default=3,
-        ge=1,
-        le=5,
-        description="Maximum number of self-correction attempts"
+        default=3, ge=1, le=5, description="Maximum number of self-correction attempts"
     )
 
     model_config = ConfigDict(
@@ -467,9 +418,9 @@ class SQLAgentInput(AgentInput):
                     "datapoints": [],
                     "total_retrieved": 5,
                     "retrieval_mode": "hybrid",
-                    "sources_used": []
+                    "sources_used": [],
                 },
-                "max_correction_attempts": 3
+                "max_correction_attempts": 3,
             }
         }
     )
@@ -482,17 +433,13 @@ class SQLAgentOutput(AgentOutput):
     Contains generated SQL, explanation, and correction history if applicable.
     """
 
-    generated_sql: GeneratedSQL = Field(
-        ...,
-        description="Generated SQL query with metadata"
-    )
-    correction_attempts: List[CorrectionAttempt] = Field(
+    generated_sql: GeneratedSQL = Field(..., description="Generated SQL query with metadata")
+    correction_attempts: list[CorrectionAttempt] = Field(
         default_factory=list,
-        description="Self-correction attempts made (empty if first attempt succeeded)"
+        description="Self-correction attempts made (empty if first attempt succeeded)",
     )
     needs_clarification: bool = Field(
-        default=False,
-        description="Whether query needs user clarification"
+        default=False, description="Whether query needs user clarification"
     )
 
     model_config = ConfigDict(
@@ -504,7 +451,7 @@ class SQLAgentOutput(AgentOutput):
                     "agent_name": "SQLAgent",
                     "duration_ms": 1234.5,
                     "llm_calls": 1,
-                    "tokens_used": 850
+                    "tokens_used": 850,
                 },
                 "next_agent": "ValidatorAgent",
                 "generated_sql": {
@@ -513,10 +460,10 @@ class SQLAgentOutput(AgentOutput):
                     "used_datapoints": ["table_fact_sales_001"],
                     "confidence": 0.95,
                     "assumptions": [],
-                    "clarifying_questions": []
+                    "clarifying_questions": [],
                 },
                 "correction_attempts": [],
-                "needs_clarification": False
+                "needs_clarification": False,
             }
         }
     )
@@ -535,20 +482,12 @@ class SQLValidationError(BaseModel):
     """
 
     error_type: Literal["syntax", "security", "schema", "other"] = Field(
-        ...,
-        description="Type of validation error"
+        ..., description="Type of validation error"
     )
-    message: str = Field(
-        ...,
-        description="Human-readable error message"
-    )
-    location: Optional[str] = Field(
-        None,
-        description="Location in SQL where error was found"
-    )
+    message: str = Field(..., description="Human-readable error message")
+    location: str | None = Field(None, description="Location in SQL where error was found")
     severity: Literal["critical", "high", "medium", "low"] = Field(
-        default="critical",
-        description="Error severity level"
+        default="critical", description="Error severity level"
     )
 
 
@@ -560,17 +499,10 @@ class ValidationWarning(BaseModel):
     """
 
     warning_type: Literal["performance", "style", "compatibility", "other"] = Field(
-        ...,
-        description="Type of validation warning"
+        ..., description="Type of validation warning"
     )
-    message: str = Field(
-        ...,
-        description="Human-readable warning message"
-    )
-    suggestion: Optional[str] = Field(
-        None,
-        description="Suggested fix or improvement"
-    )
+    message: str = Field(..., description="Human-readable warning message")
+    suggestion: str | None = Field(None, description="Suggested fix or improvement")
 
 
 class ValidatedSQL(BaseModel):
@@ -580,35 +512,22 @@ class ValidatedSQL(BaseModel):
     Contains validation status, errors, warnings, and suggestions.
     """
 
-    is_valid: bool = Field(
-        ...,
-        description="Whether SQL is valid and safe to execute"
+    is_valid: bool = Field(..., description="Whether SQL is valid and safe to execute")
+    sql: str = Field(..., description="The validated SQL query")
+    errors: list[SQLValidationError] = Field(
+        default_factory=list, description="Critical errors that prevent execution"
     )
-    sql: str = Field(
-        ...,
-        description="The validated SQL query"
+    warnings: list[ValidationWarning] = Field(
+        default_factory=list, description="Non-critical issues and performance concerns"
     )
-    errors: List[SQLValidationError] = Field(
-        default_factory=list,
-        description="Critical errors that prevent execution"
-    )
-    warnings: List[ValidationWarning] = Field(
-        default_factory=list,
-        description="Non-critical issues and performance concerns"
-    )
-    suggestions: List[str] = Field(
-        default_factory=list,
-        description="General suggestions for improvement"
+    suggestions: list[str] = Field(
+        default_factory=list, description="General suggestions for improvement"
     )
     is_safe: bool = Field(
-        ...,
-        description="Whether SQL passed security checks (no injection patterns)"
+        ..., description="Whether SQL passed security checks (no injection patterns)"
     )
     performance_score: float = Field(
-        default=1.0,
-        ge=0.0,
-        le=1.0,
-        description="Performance score (0-1, higher is better)"
+        default=1.0, ge=0.0, le=1.0, description="Performance score (0-1, higher is better)"
     )
 
     model_config = ConfigDict(
@@ -621,12 +540,12 @@ class ValidatedSQL(BaseModel):
                     {
                         "warning_type": "performance",
                         "message": "Query missing LIMIT clause",
-                        "suggestion": "Add LIMIT to prevent returning too many rows"
+                        "suggestion": "Add LIMIT to prevent returning too many rows",
                     }
                 ],
                 "suggestions": ["Consider adding an index on date column"],
                 "is_safe": True,
-                "performance_score": 0.85
+                "performance_score": 0.85,
             }
         }
     )
@@ -639,17 +558,12 @@ class ValidatorAgentInput(AgentInput):
     Receives generated SQL from SQLAgent for validation.
     """
 
-    generated_sql: GeneratedSQL = Field(
-        ...,
-        description="SQL generated by SQLAgent"
-    )
+    generated_sql: GeneratedSQL = Field(..., description="SQL generated by SQLAgent")
     target_database: Literal["postgresql", "clickhouse", "mysql", "generic"] = Field(
-        default="postgresql",
-        description="Target database type for syntax validation"
+        default="postgresql", description="Target database type for syntax validation"
     )
     strict_mode: bool = Field(
-        default=False,
-        description="Enable strict validation (treat warnings as errors)"
+        default=False, description="Enable strict validation (treat warnings as errors)"
     )
 
     model_config = ConfigDict(
@@ -662,10 +576,10 @@ class ValidatorAgentInput(AgentInput):
                     "used_datapoints": ["table_fact_sales_001"],
                     "confidence": 0.95,
                     "assumptions": [],
-                    "clarifying_questions": []
+                    "clarifying_questions": [],
                 },
                 "target_database": "postgresql",
-                "strict_mode": False
+                "strict_mode": False,
             }
         }
     )
@@ -678,10 +592,7 @@ class ValidatorAgentOutput(AgentOutput):
     Contains validation results with errors, warnings, and suggestions.
     """
 
-    validated_sql: ValidatedSQL = Field(
-        ...,
-        description="Validation results"
-    )
+    validated_sql: ValidatedSQL = Field(..., description="Validation results")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -691,7 +602,7 @@ class ValidatorAgentOutput(AgentOutput):
                 "metadata": {
                     "agent_name": "ValidatorAgent",
                     "duration_ms": 45.2,
-                    "llm_calls": 0  # ValidatorAgent doesn't use LLM
+                    "llm_calls": 0,  # ValidatorAgent doesn't use LLM
                 },
                 "next_agent": "ExecutorAgent",
                 "validated_sql": {
@@ -701,8 +612,8 @@ class ValidatorAgentOutput(AgentOutput):
                     "warnings": [],
                     "suggestions": [],
                     "is_safe": True,
-                    "performance_score": 0.95
-                }
+                    "performance_score": 0.95,
+                },
             }
         }
     )

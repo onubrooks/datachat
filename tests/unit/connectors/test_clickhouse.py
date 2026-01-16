@@ -4,16 +4,17 @@ Unit tests for ClickHouseConnector.
 Tests the ClickHouse connector with mocked clickhouse-connect client.
 """
 
-import pytest
-from unittest.mock import AsyncMock, Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
-from backend.connectors.clickhouse import ClickHouseConnector
+import pytest
+
 from backend.connectors.base import (
     ConnectionError,
     QueryError,
-    SchemaError,
     QueryResult,
+    SchemaError,
 )
+from backend.connectors.clickhouse import ClickHouseConnector
 
 
 @pytest.fixture
@@ -72,9 +73,7 @@ class TestConnection:
     @pytest.mark.asyncio
     async def test_connect_success(self, clickhouse_config, mock_client):
         """Test successful connection."""
-        with patch(
-            "clickhouse_connect.get_client", return_value=mock_client
-        ):
+        with patch("clickhouse_connect.get_client", return_value=mock_client):
             connector = ClickHouseConnector(**clickhouse_config)
             await connector.connect()
 
@@ -85,9 +84,7 @@ class TestConnection:
     @pytest.mark.asyncio
     async def test_connect_idempotent(self, clickhouse_config, mock_client):
         """Test connecting multiple times doesn't create multiple clients."""
-        with patch(
-            "clickhouse_connect.get_client", return_value=mock_client
-        ) as get_client:
+        with patch("clickhouse_connect.get_client", return_value=mock_client) as get_client:
             connector = ClickHouseConnector(**clickhouse_config)
             await connector.connect()
             await connector.connect()  # Second call

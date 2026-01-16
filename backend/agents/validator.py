@@ -12,17 +12,16 @@ NO LLM calls - pure rule-based validation for speed and reliability.
 
 import logging
 import re
-from typing import List, Optional, Set
 
 import sqlparse
-from sqlparse.sql import Identifier, IdentifierList, Token, Where
+from sqlparse.sql import Identifier, IdentifierList
 from sqlparse.tokens import Comment, Keyword, Whitespace
 
 from backend.agents.base import BaseAgent
 from backend.models import (
     SQLValidationError,
-    ValidationWarning,
     ValidatedSQL,
+    ValidationWarning,
     ValidatorAgentInput,
     ValidatorAgentOutput,
 )
@@ -97,9 +96,9 @@ class ValidatorAgent(BaseAgent):
         )
 
         sql = input.generated_sql.sql.strip()
-        errors: List[SQLValidationError] = []
-        warnings: List[ValidationWarning] = []
-        suggestions: List[str] = []
+        errors: list[SQLValidationError] = []
+        warnings: list[ValidationWarning] = []
+        suggestions: list[str] = []
 
         # 1. Syntax validation
         syntax_errors = self._validate_syntax(sql, input.target_database)
@@ -163,9 +162,7 @@ class ValidatorAgent(BaseAgent):
             metadata=self._create_metadata(),
         )
 
-    def _validate_syntax(
-        self, sql: str, target_database: str
-    ) -> List[SQLValidationError]:
+    def _validate_syntax(self, sql: str, target_database: str) -> list[SQLValidationError]:
         """
         Validate SQL syntax using sqlparse.
 
@@ -176,7 +173,7 @@ class ValidatorAgent(BaseAgent):
         Returns:
             List of syntax errors
         """
-        errors: List[SQLValidationError] = []
+        errors: list[SQLValidationError] = []
 
         try:
             # Parse SQL
@@ -273,7 +270,7 @@ class ValidatorAgent(BaseAgent):
 
         return errors
 
-    def _validate_security(self, sql: str) -> List[SQLValidationError]:
+    def _validate_security(self, sql: str) -> list[SQLValidationError]:
         """
         Validate SQL for security issues (injection patterns).
 
@@ -283,7 +280,7 @@ class ValidatorAgent(BaseAgent):
         Returns:
             List of security errors
         """
-        errors: List[SQLValidationError] = []
+        errors: list[SQLValidationError] = []
 
         # Check for SQL injection patterns
         for pattern in self.INJECTION_PATTERNS:
@@ -318,8 +315,8 @@ class ValidatorAgent(BaseAgent):
         return errors
 
     def _validate_schema(
-        self, sql: str, used_datapoint_ids: List[str]
-    ) -> tuple[List[SQLValidationError], List[ValidationWarning]]:
+        self, sql: str, used_datapoint_ids: list[str]
+    ) -> tuple[list[SQLValidationError], list[ValidationWarning]]:
         """
         Validate SQL against schema from DataPoints.
 
@@ -333,16 +330,17 @@ class ValidatorAgent(BaseAgent):
         Returns:
             Tuple of (errors, warnings)
         """
-        errors: List[SQLValidationError] = []
-        warnings: List[ValidationWarning] = []
+        errors: list[SQLValidationError] = []
+        warnings: list[ValidationWarning] = []
 
-        # Extract table names from SQL
-        table_names = self._extract_table_names(sql)
+        # Extract table names from SQL for potential future use
+        # Currently not used but will be needed when we implement full schema validation
+        _ = self._extract_table_names(sql)  # noqa: F841
 
         # Note: In a full implementation, we would:
         # 1. Load DataPoints by ID
         # 2. Extract available tables and columns
-        # 3. Validate all table/column references
+        # 3. Validate all table/column references against extracted table_names
         # For now, we do basic validation assuming datapoint_ids are provided
 
         if not used_datapoint_ids:
@@ -356,9 +354,7 @@ class ValidatorAgent(BaseAgent):
 
         return errors, warnings
 
-    def _validate_performance(
-        self, sql: str
-    ) -> tuple[List[ValidationWarning], List[str]]:
+    def _validate_performance(self, sql: str) -> tuple[list[ValidationWarning], list[str]]:
         """
         Validate SQL for performance issues.
 
@@ -368,8 +364,8 @@ class ValidatorAgent(BaseAgent):
         Returns:
             Tuple of (warnings, suggestions)
         """
-        warnings: List[ValidationWarning] = []
-        suggestions: List[str] = []
+        warnings: list[ValidationWarning] = []
+        suggestions: list[str] = []
 
         sql_upper = sql.upper()
 
@@ -433,7 +429,7 @@ class ValidatorAgent(BaseAgent):
 
         return warnings, suggestions
 
-    def _extract_table_names(self, sql: str) -> Set[str]:
+    def _extract_table_names(self, sql: str) -> set[str]:
         """
         Extract table names from SQL query.
 
@@ -443,7 +439,7 @@ class ValidatorAgent(BaseAgent):
         Returns:
             Set of table names (uppercase)
         """
-        table_names: Set[str] = set()
+        table_names: set[str] = set()
 
         try:
             parsed = sqlparse.parse(sql)
@@ -474,7 +470,7 @@ class ValidatorAgent(BaseAgent):
 
         return table_names
 
-    def _extract_cte_names(self, sql: str) -> Set[str]:
+    def _extract_cte_names(self, sql: str) -> set[str]:
         """
         Extract CTE names from WITH clause.
 
@@ -484,7 +480,7 @@ class ValidatorAgent(BaseAgent):
         Returns:
             Set of CTE names (uppercase)
         """
-        cte_names: Set[str] = set()
+        cte_names: set[str] = set()
 
         # Pattern: WITH cte_name AS (...)
         cte_pattern = r"WITH\s+([a-zA-Z0-9_]+)\s+AS\s*\("
@@ -551,9 +547,7 @@ class ValidatorAgent(BaseAgent):
         # This will cause validation to fail, which is safer
         return "UNKNOWN"
 
-    def _calculate_performance_score(
-        self, sql: str, warnings: List[ValidationWarning]
-    ) -> float:
+    def _calculate_performance_score(self, sql: str, warnings: list[ValidationWarning]) -> float:
         """
         Calculate performance score based on query characteristics.
 

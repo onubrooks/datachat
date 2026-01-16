@@ -149,8 +149,7 @@ class TestValidatorAgent:
 
         assert result.validated_sql.is_valid is False
         assert any(
-            e.error_type == "syntax" and "SELECT" in e.message
-            for e in result.validated_sql.errors
+            e.error_type == "syntax" and "SELECT" in e.message for e in result.validated_sql.errors
         )
 
     @pytest.mark.asyncio
@@ -194,9 +193,7 @@ class TestValidatorAgent:
         result = await validator_agent.execute(sample_input)
 
         assert result.validated_sql.is_safe is False
-        assert any(
-            e.error_type == "security" for e in result.validated_sql.errors
-        )
+        assert any(e.error_type == "security" for e in result.validated_sql.errors)
 
     @pytest.mark.asyncio
     async def test_sql_injection_union_detected(self, validator_agent, sample_input):
@@ -220,9 +217,7 @@ class TestValidatorAgent:
         )
 
     @pytest.mark.asyncio
-    async def test_sql_injection_always_true_detected(
-        self, validator_agent, sample_input
-    ):
+    async def test_sql_injection_always_true_detected(self, validator_agent, sample_input):
         """Test that always-true conditions are detected."""
         always_true_sql = GeneratedSQL(
             sql="SELECT * FROM analytics.fact_sales WHERE customer_id = 123 OR 1=1",
@@ -237,9 +232,7 @@ class TestValidatorAgent:
         result = await validator_agent.execute(sample_input)
 
         assert result.validated_sql.is_safe is False
-        assert any(
-            e.error_type == "security" for e in result.validated_sql.errors
-        )
+        assert any(e.error_type == "security" for e in result.validated_sql.errors)
 
     @pytest.mark.asyncio
     async def test_dangerous_functions_detected(self, validator_agent, sample_input):
@@ -429,9 +422,7 @@ class TestValidatorAgent:
     # ============================================================================
 
     @pytest.mark.asyncio
-    async def test_strict_mode_warnings_as_errors(
-        self, validator_agent, sample_input
-    ):
+    async def test_strict_mode_warnings_as_errors(self, validator_agent, sample_input):
         """Test that strict mode treats warnings as errors."""
         select_star_sql = GeneratedSQL(
             sql="SELECT * FROM analytics.fact_sales WHERE date >= '2024-01-01'",
@@ -450,9 +441,7 @@ class TestValidatorAgent:
         assert result.validated_sql.is_valid is False
         assert len(result.validated_sql.warnings) > 0
         # Warnings are converted to errors in strict mode
-        assert any(
-            "STRICT MODE" in e.message for e in result.validated_sql.errors
-        )
+        assert any("STRICT MODE" in e.message for e in result.validated_sql.errors)
 
     # ============================================================================
     # Suggestion Tests
@@ -478,8 +467,7 @@ class TestValidatorAgent:
         for suggestion in result.validated_sql.suggestions:
             assert len(suggestion) > 10  # Non-trivial suggestion
             assert any(
-                keyword in suggestion.lower()
-                for keyword in ["add", "replace", "consider", "use"]
+                keyword in suggestion.lower() for keyword in ["add", "replace", "consider", "use"]
             )
 
     # ============================================================================
@@ -487,9 +475,7 @@ class TestValidatorAgent:
     # ============================================================================
 
     @pytest.mark.asyncio
-    async def test_postgresql_specific_validation(
-        self, validator_agent, sample_input
-    ):
+    async def test_postgresql_specific_validation(self, validator_agent, sample_input):
         """Test PostgreSQL-specific validation."""
         pg_sql = GeneratedSQL(
             sql="SELECT customer_id, SUM(amount) FROM analytics.fact_sales WHERE date >= '2024-01-01' GROUP BY customer_id LIMIT 100 OFFSET 50",
@@ -507,9 +493,7 @@ class TestValidatorAgent:
         assert result.validated_sql.is_valid is True
 
     @pytest.mark.asyncio
-    async def test_clickhouse_specific_validation(
-        self, validator_agent, sample_input
-    ):
+    async def test_clickhouse_specific_validation(self, validator_agent, sample_input):
         """Test ClickHouse-specific validation."""
         ch_sql = GeneratedSQL(
             sql="SELECT customer_id, SUM(amount) FROM analytics.fact_sales FINAL WHERE date >= '2024-01-01' GROUP BY customer_id",
@@ -547,9 +531,7 @@ class TestValidatorAgent:
             await validator_agent.execute(sample_input)
 
     @pytest.mark.asyncio
-    async def test_aggregation_without_where_allowed(
-        self, validator_agent, sample_input
-    ):
+    async def test_aggregation_without_where_allowed(self, validator_agent, sample_input):
         """Test that aggregations without WHERE are allowed (no false positives)."""
         count_sql = GeneratedSQL(
             sql="SELECT COUNT(*) FROM analytics.fact_sales",
@@ -565,9 +547,7 @@ class TestValidatorAgent:
 
         # COUNT(*) without WHERE is valid - should not have WHERE warning
         assert result.validated_sql.is_valid is True
-        where_warnings = [
-            w for w in result.validated_sql.warnings if "WHERE" in w.message
-        ]
+        where_warnings = [w for w in result.validated_sql.warnings if "WHERE" in w.message]
         assert len(where_warnings) == 0  # COUNT(*) is exempt
 
     @pytest.mark.asyncio
@@ -580,9 +560,7 @@ class TestValidatorAgent:
         assert result.metadata.started_at is not None
 
     @pytest.mark.asyncio
-    async def test_performance_score_calculation(
-        self, validator_agent, sample_input
-    ):
+    async def test_performance_score_calculation(self, validator_agent, sample_input):
         """Test that performance score is calculated correctly."""
         # Perfect query
         perfect_sql = GeneratedSQL(

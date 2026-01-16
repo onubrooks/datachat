@@ -9,16 +9,15 @@ import pytest
 
 from backend.agents.sql import SQLAgent
 from backend.models.agent import (
-    SQLAgentInput,
     InvestigationMemory,
     RetrievedDataPoint,
+    SQLAgentInput,
 )
-
 
 # Skip all tests in this module unless --run-integration flag is provided
 pytestmark = pytest.mark.skipif(
     "not config.getoption('--run-integration', default=False)",
-    reason="Integration tests require --run-integration flag and valid API keys"
+    reason="Integration tests require --run-integration flag and valid API keys",
 )
 
 
@@ -49,37 +48,39 @@ def sales_investigation_memory():
                             "name": "sale_id",
                             "type": "BIGINT",
                             "business_meaning": "Unique sale identifier",
-                            "nullable": False
+                            "nullable": False,
                         },
                         {
                             "name": "amount",
                             "type": "DECIMAL(18,2)",
                             "business_meaning": "Transaction value in USD",
-                            "nullable": False
+                            "nullable": False,
                         },
                         {
                             "name": "sale_date",
                             "type": "DATE",
                             "business_meaning": "Transaction date",
-                            "nullable": False
+                            "nullable": False,
                         },
                         {
                             "name": "status",
                             "type": "VARCHAR(50)",
                             "business_meaning": "Transaction status",
-                            "nullable": False
-                        }
+                            "nullable": False,
+                        },
                     ],
                     "relationships": [
                         {
                             "target_table": "dim_customer",
                             "join_column": "customer_id",
-                            "cardinality": "N:1"
+                            "cardinality": "N:1",
                         }
                     ],
                     "gotchas": ["Always filter by sale_date for performance"],
-                    "common_queries": ["SELECT SUM(amount) FROM fact_sales WHERE sale_date >= '2024-01-01'"]
-                }
+                    "common_queries": [
+                        "SELECT SUM(amount) FROM fact_sales WHERE sale_date >= '2024-01-01'"
+                    ],
+                },
             ),
             RetrievedDataPoint(
                 datapoint_id="metric_revenue_001",
@@ -92,15 +93,15 @@ def sales_investigation_memory():
                     "synonyms": ["sales", "income", "total sales"],
                     "business_rules": [
                         "Exclude refunds (status != 'refunded')",
-                        "Only include completed transactions (status = 'completed')"
+                        "Only include completed transactions (status = 'completed')",
                     ],
-                    "related_tables": ["fact_sales"]
-                }
-            )
+                    "related_tables": ["fact_sales"],
+                },
+            ),
         ],
         total_retrieved=2,
         retrieval_mode="hybrid",
-        sources_used=["table_fact_sales_001", "metric_revenue_001"]
+        sources_used=["table_fact_sales_001", "metric_revenue_001"],
     )
 
 
@@ -108,8 +109,7 @@ def sales_investigation_memory():
 async def test_generates_valid_sql_for_sales_query(sql_agent, sales_investigation_memory):
     """Test generates syntactically valid SQL for sales query."""
     input = SQLAgentInput(
-        query="What were total sales last quarter?",
-        investigation_memory=sales_investigation_memory
+        query="What were total sales last quarter?", investigation_memory=sales_investigation_memory
     )
 
     output = await sql_agent(input)
@@ -146,8 +146,7 @@ async def test_generates_valid_sql_for_sales_query(sql_agent, sales_investigatio
 async def test_applies_business_rules(sql_agent, sales_investigation_memory):
     """Test applies business rules from DataPoints."""
     input = SQLAgentInput(
-        query="Show me total revenue",
-        investigation_memory=sales_investigation_memory
+        query="Show me total revenue", investigation_memory=sales_investigation_memory
     )
 
     output = await sql_agent(input)
@@ -159,9 +158,8 @@ async def test_applies_business_rules(sql_agent, sales_investigation_memory):
 
     # Should filter by status (checking for business rule application)
     # Either excludes refunded OR includes only completed
-    has_status_filter = (
-        "status" in sql_lower and
-        ("refund" in sql_lower or "completed" in sql_lower)
+    has_status_filter = "status" in sql_lower and (
+        "refund" in sql_lower or "completed" in sql_lower
     )
 
     # Note: LLM might apply rules differently, so we just check it considered status
@@ -187,17 +185,27 @@ async def test_handles_join_query(sql_agent):
                 metadata={
                     "table_name": "analytics.fact_sales",
                     "key_columns": [
-                        {"name": "customer_id", "type": "BIGINT", "business_meaning": "Customer ID", "nullable": False},
-                        {"name": "amount", "type": "DECIMAL(18,2)", "business_meaning": "Sale amount", "nullable": False}
+                        {
+                            "name": "customer_id",
+                            "type": "BIGINT",
+                            "business_meaning": "Customer ID",
+                            "nullable": False,
+                        },
+                        {
+                            "name": "amount",
+                            "type": "DECIMAL(18,2)",
+                            "business_meaning": "Sale amount",
+                            "nullable": False,
+                        },
                     ],
                     "relationships": [
                         {
                             "target_table": "dim_customer",
                             "join_column": "customer_id",
-                            "cardinality": "N:1"
+                            "cardinality": "N:1",
                         }
-                    ]
-                }
+                    ],
+                },
             ),
             RetrievedDataPoint(
                 datapoint_id="table_dim_customer_001",
@@ -208,21 +216,28 @@ async def test_handles_join_query(sql_agent):
                 metadata={
                     "table_name": "analytics.dim_customer",
                     "key_columns": [
-                        {"name": "customer_id", "type": "BIGINT", "business_meaning": "Customer ID", "nullable": False},
-                        {"name": "customer_name", "type": "VARCHAR(255)", "business_meaning": "Customer name", "nullable": False}
-                    ]
-                }
-            )
+                        {
+                            "name": "customer_id",
+                            "type": "BIGINT",
+                            "business_meaning": "Customer ID",
+                            "nullable": False,
+                        },
+                        {
+                            "name": "customer_name",
+                            "type": "VARCHAR(255)",
+                            "business_meaning": "Customer name",
+                            "nullable": False,
+                        },
+                    ],
+                },
+            ),
         ],
         total_retrieved=2,
         retrieval_mode="hybrid",
-        sources_used=["table_fact_sales_001", "table_dim_customer_001"]
+        sources_used=["table_fact_sales_001", "table_dim_customer_001"],
     )
 
-    input = SQLAgentInput(
-        query="Show me sales by customer",
-        investigation_memory=memory
-    )
+    input = SQLAgentInput(query="Show me sales by customer", investigation_memory=memory)
 
     output = await sql_agent(input)
 
@@ -255,20 +270,23 @@ async def test_self_correction_with_real_llm(sql_agent):
                 metadata={
                     "table_name": "sales_data",
                     "key_columns": [
-                        {"name": "amount", "type": "DECIMAL", "business_meaning": "Amount", "nullable": False}
-                    ]
-                }
+                        {
+                            "name": "amount",
+                            "type": "DECIMAL",
+                            "business_meaning": "Amount",
+                            "nullable": False,
+                        }
+                    ],
+                },
             )
         ],
         total_retrieved=1,
         retrieval_mode="vector",
-        sources_used=["table_sales_001"]
+        sources_used=["table_sales_001"],
     )
 
     input = SQLAgentInput(
-        query="Get sales total",
-        investigation_memory=memory,
-        max_correction_attempts=2
+        query="Get sales total", investigation_memory=memory, max_correction_attempts=2
     )
 
     output = await sql_agent(input)
@@ -295,8 +313,7 @@ async def test_performance(sql_agent, sales_investigation_memory):
     import time
 
     input = SQLAgentInput(
-        query="What were total sales last quarter?",
-        investigation_memory=sales_investigation_memory
+        query="What were total sales last quarter?", investigation_memory=sales_investigation_memory
     )
 
     start = time.time()

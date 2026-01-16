@@ -16,23 +16,21 @@ The SQLAgent:
 import json
 import logging
 import re
-from typing import Dict, List, Optional, Any
 
 from backend.agents.base import BaseAgent
 from backend.config import get_settings
 from backend.llm.factory import LLMProviderFactory
-from backend.llm.models import LLMRequest, LLMMessage
+from backend.llm.models import LLMMessage, LLMRequest
 from backend.models.agent import (
+    AgentMetadata,
+    CorrectionAttempt,
+    GeneratedSQL,
+    LLMError,
     SQLAgentInput,
     SQLAgentOutput,
-    GeneratedSQL,
-    ValidationIssue,
-    CorrectionAttempt,
-    AgentMetadata,
     SQLGenerationError,
-    LLMError,
+    ValidationIssue,
 )
-from backend.models.datapoint import SchemaDataPoint, BusinessDataPoint
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +66,12 @@ class SQLAgent(BaseAgent):
         self.llm = LLMProviderFactory.create_agent_provider(
             agent_name="sql",
             config=self.config.llm,
-            model_type="main"  # Use main model (GPT-4o) for SQL generation
+            model_type="main",  # Use main model (GPT-4o) for SQL generation
         )
 
         logger.info(
             f"SQLAgent initialized with {self.llm.provider} provider",
-            extra={"provider": self.llm.provider, "model": self.llm.model}
+            extra={"provider": self.llm.provider, "model": self.llm.model},
         )
 
     async def execute(self, input: SQLAgentInput) -> SQLAgentOutput:
@@ -96,12 +94,12 @@ class SQLAgent(BaseAgent):
             f"Generating SQL for query: {input.query[:100]}...",
             extra={
                 "query_length": len(input.query),
-                "num_datapoints": len(input.investigation_memory.datapoints)
-            }
+                "num_datapoints": len(input.investigation_memory.datapoints),
+            },
         )
 
         metadata = AgentMetadata(agent_name=self.name)
-        correction_attempts: List[CorrectionAttempt] = []
+        correction_attempts: list[CorrectionAttempt] = []
 
         try:
             # Initial SQL generation
@@ -115,7 +113,7 @@ class SQLAgent(BaseAgent):
             while issues and attempt_number <= input.max_correction_attempts:
                 logger.warning(
                     f"SQL validation found {len(issues)} issues, attempting correction #{attempt_number}",
-                    extra={"issues": [issue.issue_type for issue in issues]}
+                    extra={"issues": [issue.issue_type for issue in issues]},
                 )
 
                 # Record correction attempt
@@ -123,10 +121,7 @@ class SQLAgent(BaseAgent):
 
                 # Attempt correction
                 corrected_sql = await self._correct_sql(
-                    generated_sql=generated_sql,
-                    issues=issues,
-                    input=input,
-                    metadata=metadata
+                    generated_sql=generated_sql, issues=issues, input=input, metadata=metadata
                 )
 
                 # Validate corrected SQL
@@ -140,7 +135,7 @@ class SQLAgent(BaseAgent):
                         original_sql=original_sql,
                         issues_found=issues,
                         corrected_sql=corrected_sql.sql,
-                        success=success
+                        success=success,
                     )
                 )
 
@@ -153,7 +148,7 @@ class SQLAgent(BaseAgent):
             if issues:
                 logger.error(
                     f"Failed to resolve {len(issues)} validation issues after {input.max_correction_attempts} attempts",
-                    extra={"issues": [issue.message for issue in issues]}
+                    extra={"issues": [issue.message for issue in issues]},
                 )
                 # Still return the best attempt we have, but mark needs_clarification
                 needs_clarification = True
@@ -161,12 +156,12 @@ class SQLAgent(BaseAgent):
                 needs_clarification = bool(generated_sql.clarifying_questions)
 
             logger.info(
-                f"SQL generation complete",
+                "SQL generation complete",
                 extra={
                     "correction_attempts": len(correction_attempts),
                     "needs_clarification": needs_clarification,
-                    "confidence": generated_sql.confidence
-                }
+                    "confidence": generated_sql.confidence,
+                },
             )
 
             return SQLAgentOutput(
@@ -176,7 +171,7 @@ class SQLAgent(BaseAgent):
                 next_agent="ValidatorAgent",
                 generated_sql=generated_sql,
                 correction_attempts=correction_attempts,
-                needs_clarification=needs_clarification
+                needs_clarification=needs_clarification,
             )
 
         except Exception as e:
@@ -186,14 +181,10 @@ class SQLAgent(BaseAgent):
                 agent=self.name,
                 message=f"Failed to generate SQL: {e}",
                 recoverable=False,
-                context={"query": input.query}
+                context={"query": input.query},
             ) from e
 
-    async def _generate_sql(
-        self,
-        input: SQLAgentInput,
-        metadata: AgentMetadata
-    ) -> GeneratedSQL:
+    async def _generate_sql(self, input: SQLAgentInput, metadata: AgentMetadata) -> GeneratedSQL:
         """
         Generate SQL from user query and context.
 
@@ -213,17 +204,11 @@ class SQLAgent(BaseAgent):
         # Create LLM request
         llm_request = LLMRequest(
             messages=[
-                LLMMessage(
-                    role="system",
-                    content=self._get_system_prompt()
-                ),
-                LLMMessage(
-                    role="user",
-                    content=prompt
-                )
+                LLMMessage(role="system", content=self._get_system_prompt()),
+                LLMMessage(role="user", content=prompt),
             ],
             temperature=0.0,  # Deterministic for SQL generation
-            max_tokens=2000
+            max_tokens=2000,
         )
 
         try:
@@ -238,7 +223,7 @@ class SQLAgent(BaseAgent):
 
             logger.debug(
                 f"Generated SQL: {generated_sql.sql[:200]}...",
-                extra={"confidence": generated_sql.confidence}
+                extra={"confidence": generated_sql.confidence},
             )
 
             return generated_sql
@@ -248,15 +233,15 @@ class SQLAgent(BaseAgent):
             raise LLMError(
                 agent=self.name,
                 message=f"LLM generation failed: {e}",
-                context={"query": input.query}
+                context={"query": input.query},
             ) from e
 
     async def _correct_sql(
         self,
         generated_sql: GeneratedSQL,
-        issues: List[ValidationIssue],
+        issues: list[ValidationIssue],
         input: SQLAgentInput,
-        metadata: AgentMetadata
+        metadata: AgentMetadata,
     ) -> GeneratedSQL:
         """
         Self-correct SQL based on validation issues.
@@ -279,17 +264,11 @@ class SQLAgent(BaseAgent):
         # Create LLM request
         llm_request = LLMRequest(
             messages=[
-                LLMMessage(
-                    role="system",
-                    content=self._get_system_prompt()
-                ),
-                LLMMessage(
-                    role="user",
-                    content=prompt
-                )
+                LLMMessage(role="system", content=self._get_system_prompt()),
+                LLMMessage(role="user", content=prompt),
             ],
             temperature=0.0,
-            max_tokens=2000
+            max_tokens=2000,
         )
 
         try:
@@ -304,7 +283,7 @@ class SQLAgent(BaseAgent):
 
             logger.debug(
                 f"Corrected SQL: {corrected_sql.sql[:200]}...",
-                extra={"issues_addressed": len(issues)}
+                extra={"issues_addressed": len(issues)},
             )
 
             return corrected_sql
@@ -314,14 +293,12 @@ class SQLAgent(BaseAgent):
             raise LLMError(
                 agent=self.name,
                 message=f"SQL correction failed: {e}",
-                context={"original_sql": generated_sql.sql}
+                context={"original_sql": generated_sql.sql},
             ) from e
 
     def _validate_sql(
-        self,
-        generated_sql: GeneratedSQL,
-        input: SQLAgentInput
-    ) -> List[ValidationIssue]:
+        self, generated_sql: GeneratedSQL, input: SQLAgentInput
+    ) -> list[ValidationIssue]:
         """
         Validate generated SQL for common issues.
 
@@ -338,7 +315,7 @@ class SQLAgent(BaseAgent):
         Returns:
             List of validation issues (empty if valid)
         """
-        issues: List[ValidationIssue] = []
+        issues: list[ValidationIssue] = []
         sql = generated_sql.sql.strip().upper()
 
         # Basic syntax checks
@@ -347,7 +324,7 @@ class SQLAgent(BaseAgent):
                 ValidationIssue(
                     issue_type="syntax",
                     message="SQL must start with SELECT or WITH",
-                    suggested_fix="Ensure query begins with SELECT or WITH (for CTEs)"
+                    suggested_fix="Ensure query begins with SELECT or WITH (for CTEs)",
                 )
             )
 
@@ -356,31 +333,28 @@ class SQLAgent(BaseAgent):
                 ValidationIssue(
                     issue_type="syntax",
                     message="SQL missing FROM clause",
-                    suggested_fix="Add FROM clause to specify table(s)"
+                    suggested_fix="Add FROM clause to specify table(s)",
                 )
             )
 
         # Extract CTE names (Common Table Expressions) from WITH clause
         # Pattern: WITH cte_name AS (...), another_cte AS (...)
         cte_names = set()
-        cte_pattern = r'WITH\s+([a-zA-Z0-9_]+)\s+AS\s*\('
+        cte_pattern = r"WITH\s+([a-zA-Z0-9_]+)\s+AS\s*\("
         cte_matches = re.findall(cte_pattern, sql, re.IGNORECASE)
         for cte_name in cte_matches:
             cte_names.add(cte_name.upper())
 
         # Also match comma-separated CTEs: , cte_name AS (
-        additional_cte_pattern = r',\s*([a-zA-Z0-9_]+)\s+AS\s*\('
+        additional_cte_pattern = r",\s*([a-zA-Z0-9_]+)\s+AS\s*\("
         additional_ctes = re.findall(additional_cte_pattern, sql, re.IGNORECASE)
         for cte_name in additional_ctes:
             cte_names.add(cte_name.upper())
 
         # Extract table names from SQL (FROM and JOIN clauses)
-        table_pattern = r'FROM\s+([a-zA-Z0-9_.]+)|JOIN\s+([a-zA-Z0-9_.]+)'
+        table_pattern = r"FROM\s+([a-zA-Z0-9_.]+)|JOIN\s+([a-zA-Z0-9_.]+)"
         table_matches = re.findall(table_pattern, sql, re.IGNORECASE)
-        referenced_tables = {
-            match[0] or match[1]
-            for match in table_matches
-        }
+        referenced_tables = {match[0] or match[1] for match in table_matches}
 
         # Get available tables from DataPoints
         available_tables = set()
@@ -413,7 +387,7 @@ class SQLAgent(BaseAgent):
                         ValidationIssue(
                             issue_type="missing_table",
                             message=f"Table '{table}' not found in available DataPoints",
-                            suggested_fix=f"Use one of: {', '.join(sorted(available_tables))}"
+                            suggested_fix=f"Use one of: {', '.join(sorted(available_tables))}",
                         )
                     )
             elif table_upper not in available_tables:
@@ -422,7 +396,7 @@ class SQLAgent(BaseAgent):
                     ValidationIssue(
                         issue_type="missing_table",
                         message=f"Table '{table}' not found in available DataPoints",
-                        suggested_fix=f"Use one of: {', '.join(sorted(available_tables))}"
+                        suggested_fix=f"Use one of: {', '.join(sorted(available_tables))}",
                     )
                 )
 
@@ -502,10 +476,7 @@ Example:
         return prompt
 
     def _build_correction_prompt(
-        self,
-        generated_sql: GeneratedSQL,
-        issues: List[ValidationIssue],
-        input: SQLAgentInput
+        self, generated_sql: GeneratedSQL, issues: list[ValidationIssue], input: SQLAgentInput
     ) -> str:
         """
         Build prompt for SQL self-correction.
@@ -522,11 +493,13 @@ Example:
         schema_context = self._format_schema_context(input.investigation_memory)
 
         # Format issues
-        issues_text = "\n".join([
-            f"- {issue.issue_type.upper()}: {issue.message}"
-            + (f" (Suggested fix: {issue.suggested_fix})" if issue.suggested_fix else "")
-            for issue in issues
-        ])
+        issues_text = "\n".join(
+            [
+                f"- {issue.issue_type.upper()}: {issue.message}"
+                + (f" (Suggested fix: {issue.suggested_fix})" if issue.suggested_fix else "")
+                for issue in issues
+            ]
+        )
 
         prompt = f"""The following SQL query has validation issues that need to be corrected:
 
@@ -571,10 +544,12 @@ Example:
                 metadata = dp.metadata if isinstance(dp.metadata, dict) else {}
 
                 table_name = metadata.get("table_name", "unknown")
-                schema = metadata.get("schema", "")
+                table_schema = metadata.get("schema", "")
                 business_purpose = metadata.get("business_purpose", "")
 
-                schema_parts.append(f"\n**Table: {table_name}**")
+                # Include schema in fully qualified table name if available
+                full_table_name = f"{table_schema}.{table_name}" if table_schema else table_name
+                schema_parts.append(f"\n**Table: {full_table_name}**")
                 if business_purpose:
                     schema_parts.append(f"Purpose: {business_purpose}")
 
@@ -586,9 +561,7 @@ Example:
                         col_name = col.get("name", "unknown")
                         col_type = col.get("type", "unknown")
                         col_meaning = col.get("business_meaning", "")
-                        schema_parts.append(
-                            f"  - {col_name} ({col_type}): {col_meaning}"
-                        )
+                        schema_parts.append(f"  - {col_name} ({col_type}): {col_meaning}")
 
                 # Add relationships
                 relationships = metadata.get("relationships", [])
@@ -598,9 +571,7 @@ Example:
                         target = rel.get("target_table", "unknown")
                         join_col = rel.get("join_column", "unknown")
                         cardinality = rel.get("cardinality", "")
-                        schema_parts.append(
-                            f"  - JOIN {target} ON {join_col} ({cardinality})"
-                        )
+                        schema_parts.append(f"  - JOIN {target} ON {join_col} ({cardinality})")
 
                 # Add gotchas/common queries
                 gotchas = metadata.get("gotchas", [])
@@ -659,12 +630,12 @@ Example:
         """
         try:
             # Try to extract JSON from response (handles markdown code blocks)
-            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
+            json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1)
             else:
                 # Try to find raw JSON
-                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                json_match = re.search(r"\{.*\}", content, re.DOTALL)
                 if json_match:
                     json_str = json_match.group(0)
                 else:
@@ -685,7 +656,7 @@ Example:
                 used_datapoints=data.get("used_datapoints", []),
                 confidence=data.get("confidence", 0.8),
                 assumptions=data.get("assumptions", []),
-                clarifying_questions=data.get("clarifying_questions", [])
+                clarifying_questions=data.get("clarifying_questions", []),
             )
 
         except json.JSONDecodeError as e:
@@ -709,8 +680,9 @@ Example:
         """
         if not isinstance(input, SQLAgentInput):
             from backend.models.agent import ValidationError
+
             raise ValidationError(
                 agent=self.name,
                 message=f"Expected SQLAgentInput, got {type(input).__name__}",
-                context={"input_type": type(input).__name__}
+                context={"input_type": type(input).__name__},
             )

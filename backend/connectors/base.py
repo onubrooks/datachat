@@ -13,7 +13,7 @@ All connectors must implement:
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -31,11 +31,11 @@ class ColumnInfo(BaseModel):
     name: str = Field(..., description="Column name")
     data_type: str = Field(..., description="Column data type")
     is_nullable: bool = Field(..., description="Whether column can be NULL")
-    default_value: Optional[str] = Field(None, description="Default value if any")
+    default_value: str | None = Field(None, description="Default value if any")
     is_primary_key: bool = Field(default=False, description="Is part of primary key")
     is_foreign_key: bool = Field(default=False, description="Is a foreign key")
-    foreign_table: Optional[str] = Field(None, description="Referenced table if FK")
-    foreign_column: Optional[str] = Field(None, description="Referenced column if FK")
+    foreign_table: str | None = Field(None, description="Referenced table if FK")
+    foreign_column: str | None = Field(None, description="Referenced column if FK")
 
 
 class TableInfo(BaseModel):
@@ -43,17 +43,17 @@ class TableInfo(BaseModel):
 
     schema: str = Field(..., description="Schema/database name")
     table_name: str = Field(..., description="Table name")
-    columns: List[ColumnInfo] = Field(..., description="List of columns")
-    row_count: Optional[int] = Field(None, description="Approximate row count")
+    columns: list[ColumnInfo] = Field(..., description="List of columns")
+    row_count: int | None = Field(None, description="Approximate row count")
     table_type: str = Field(default="TABLE", description="TABLE, VIEW, etc.")
 
 
 class QueryResult(BaseModel):
     """Result from query execution."""
 
-    rows: List[Dict[str, Any]] = Field(..., description="Query result rows")
+    rows: list[dict[str, Any]] = Field(..., description="Query result rows")
     row_count: int = Field(..., description="Number of rows returned")
-    columns: List[str] = Field(..., description="Column names")
+    columns: list[str] = Field(..., description="Column names")
     execution_time_ms: float = Field(..., description="Query execution time in ms")
 
 
@@ -158,9 +158,7 @@ class BaseConnector(ABC):
         self._pool = None
         self._connected = False
 
-        logger.info(
-            f"Initialized {self.__class__.__name__} for {user}@{host}:{port}/{database}"
-        )
+        logger.info(f"Initialized {self.__class__.__name__} for {user}@{host}:{port}/{database}")
 
     @abstractmethod
     async def connect(self) -> None:
@@ -179,8 +177,8 @@ class BaseConnector(ABC):
     async def execute(
         self,
         query: str,
-        params: Optional[List[Any]] = None,
-        timeout: Optional[int] = None,
+        params: list[Any] | None = None,
+        timeout: int | None = None,
     ) -> QueryResult:
         """
         Execute a SQL query.
@@ -200,9 +198,7 @@ class BaseConnector(ABC):
         pass
 
     @abstractmethod
-    async def get_schema(
-        self, schema_name: Optional[str] = None
-    ) -> List[TableInfo]:
+    async def get_schema(self, schema_name: str | None = None) -> list[TableInfo]:
         """
         Introspect database schema.
 

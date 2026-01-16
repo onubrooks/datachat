@@ -6,21 +6,20 @@ with self-correction capabilities.
 """
 
 import json
-import pytest
 from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 from backend.agents.sql import SQLAgent
 from backend.llm.models import LLMResponse, LLMUsage
 from backend.models.agent import (
-    SQLAgentInput,
-    SQLAgentOutput,
     GeneratedSQL,
-    ValidationIssue,
-    CorrectionAttempt,
     InvestigationMemory,
     RetrievedDataPoint,
+    SQLAgentInput,
+    SQLAgentOutput,
     SQLGenerationError,
-    LLMError,
+    ValidationIssue,
 )
 
 
@@ -41,8 +40,13 @@ def sql_agent(mock_llm_provider):
     mock_settings = Mock()
     mock_settings.llm = Mock()
 
-    with patch("backend.agents.sql.get_settings", return_value=mock_settings), \
-         patch("backend.agents.sql.LLMProviderFactory.create_agent_provider", return_value=mock_llm_provider):
+    with (
+        patch("backend.agents.sql.get_settings", return_value=mock_settings),
+        patch(
+            "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+            return_value=mock_llm_provider,
+        ),
+    ):
         agent = SQLAgent()
     return agent
 
@@ -68,18 +72,18 @@ def sample_investigation_memory():
                             "name": "amount",
                             "type": "DECIMAL(18,2)",
                             "business_meaning": "Transaction value in USD",
-                            "nullable": False
+                            "nullable": False,
                         },
                         {
                             "name": "date",
                             "type": "DATE",
                             "business_meaning": "Transaction date",
-                            "nullable": False
-                        }
+                            "nullable": False,
+                        },
                     ],
                     "relationships": [],
-                    "gotchas": ["Always filter by date for performance"]
-                }
+                    "gotchas": ["Always filter by date for performance"],
+                },
             ),
             RetrievedDataPoint(
                 datapoint_id="metric_revenue_001",
@@ -92,14 +96,14 @@ def sample_investigation_memory():
                     "synonyms": ["sales", "income"],
                     "business_rules": [
                         "Exclude refunds (status != 'refunded')",
-                        "Only completed transactions"
-                    ]
-                }
-            )
+                        "Only completed transactions",
+                    ],
+                },
+            ),
         ],
         total_retrieved=2,
         retrieval_mode="hybrid",
-        sources_used=["table_fact_sales_001", "metric_revenue_001"]
+        sources_used=["table_fact_sales_001", "metric_revenue_001"],
     )
 
 
@@ -109,7 +113,7 @@ def sample_sql_agent_input(sample_investigation_memory):
     return SQLAgentInput(
         query="What were total sales last quarter?",
         investigation_memory=sample_investigation_memory,
-        max_correction_attempts=3
+        max_correction_attempts=3,
     )
 
 
@@ -122,19 +126,15 @@ def sample_valid_llm_response():
         "used_datapoints": ["table_fact_sales_001", "metric_revenue_001"],
         "confidence": 0.95,
         "assumptions": ["'last quarter' refers to Q3 2024"],
-        "clarifying_questions": []
+        "clarifying_questions": [],
     }
 
     return LLMResponse(
         content=f"```json\n{json.dumps(response_json)}\n```",
         model="gpt-4o",
-        usage=LLMUsage(
-            prompt_tokens=500,
-            completion_tokens=150,
-            total_tokens=650
-        ),
+        usage=LLMUsage(prompt_tokens=500, completion_tokens=150, total_tokens=650),
         finish_reason="stop",
-        provider="openai"
+        provider="openai",
     )
 
 
@@ -154,10 +154,7 @@ class TestExecution:
 
     @pytest.mark.asyncio
     async def test_successful_sql_generation(
-        self,
-        sql_agent,
-        sample_sql_agent_input,
-        sample_valid_llm_response
+        self, sql_agent, sample_sql_agent_input, sample_valid_llm_response
     ):
         """Test successful SQL generation without corrections."""
         # Mock LLM response
@@ -179,10 +176,7 @@ class TestExecution:
 
     @pytest.mark.asyncio
     async def test_tracks_used_datapoints(
-        self,
-        sql_agent,
-        sample_sql_agent_input,
-        sample_valid_llm_response
+        self, sql_agent, sample_sql_agent_input, sample_valid_llm_response
     ):
         """Test tracks which DataPoints were used in generation."""
         sql_agent.llm.generate.return_value = sample_valid_llm_response
@@ -193,11 +187,7 @@ class TestExecution:
         assert "metric_revenue_001" in output.generated_sql.used_datapoints
 
     @pytest.mark.asyncio
-    async def test_handles_clarifying_questions(
-        self,
-        sql_agent,
-        sample_sql_agent_input
-    ):
+    async def test_handles_clarifying_questions(self, sql_agent, sample_sql_agent_input):
         """Test handles ambiguous queries with clarifying questions."""
         # Create response with clarifying questions
         response_json = {
@@ -208,7 +198,7 @@ class TestExecution:
             "assumptions": [],
             "clarifying_questions": [
                 "Which quarter do you mean by 'last quarter'? Q3 2024 or Q2 2024?"
-            ]
+            ],
         }
 
         llm_response = LLMResponse(
@@ -216,7 +206,7 @@ class TestExecution:
             model="gpt-4o",
             usage=LLMUsage(prompt_tokens=500, completion_tokens=150, total_tokens=650),
             finish_reason="stop",
-            provider="openai"
+            provider="openai",
         )
 
         sql_agent.llm.generate.return_value = llm_response
@@ -232,11 +222,7 @@ class TestSelfCorrection:
     """Test SQLAgent self-correction capabilities."""
 
     @pytest.mark.asyncio
-    async def test_self_corrects_missing_table(
-        self,
-        sql_agent,
-        sample_sql_agent_input
-    ):
+    async def test_self_corrects_missing_table(self, sql_agent, sample_sql_agent_input):
         """Test self-corrects when referencing non-existent table."""
         # First response with wrong table name
         bad_response_json = {
@@ -245,7 +231,7 @@ class TestSelfCorrection:
             "used_datapoints": ["table_fact_sales_001"],
             "confidence": 0.95,
             "assumptions": [],
-            "clarifying_questions": []
+            "clarifying_questions": [],
         }
 
         bad_llm_response = LLMResponse(
@@ -253,7 +239,7 @@ class TestSelfCorrection:
             model="gpt-4o",
             usage=LLMUsage(prompt_tokens=500, completion_tokens=150, total_tokens=650),
             finish_reason="stop",
-            provider="openai"
+            provider="openai",
         )
 
         # Corrected response
@@ -263,7 +249,7 @@ class TestSelfCorrection:
             "used_datapoints": ["table_fact_sales_001"],
             "confidence": 0.95,
             "assumptions": [],
-            "clarifying_questions": []
+            "clarifying_questions": [],
         }
 
         good_llm_response = LLMResponse(
@@ -271,7 +257,7 @@ class TestSelfCorrection:
             model="gpt-4o",
             usage=LLMUsage(prompt_tokens=500, completion_tokens=150, total_tokens=650),
             finish_reason="stop",
-            provider="openai"
+            provider="openai",
         )
 
         # Mock: first call returns bad SQL, second call returns corrected SQL
@@ -289,11 +275,7 @@ class TestSelfCorrection:
         assert output.metadata.llm_calls == 2  # Initial + 1 correction
 
     @pytest.mark.asyncio
-    async def test_self_corrects_syntax_error(
-        self,
-        sql_agent,
-        sample_sql_agent_input
-    ):
+    async def test_self_corrects_syntax_error(self, sql_agent, sample_sql_agent_input):
         """Test self-corrects syntax errors."""
         # Response missing FROM clause
         bad_response_json = {
@@ -302,7 +284,7 @@ class TestSelfCorrection:
             "used_datapoints": ["table_fact_sales_001"],
             "confidence": 0.95,
             "assumptions": [],
-            "clarifying_questions": []
+            "clarifying_questions": [],
         }
 
         bad_llm_response = LLMResponse(
@@ -310,7 +292,7 @@ class TestSelfCorrection:
             model="gpt-4o",
             usage=LLMUsage(prompt_tokens=500, completion_tokens=150, total_tokens=650),
             finish_reason="stop",
-            provider="openai"
+            provider="openai",
         )
 
         # Corrected response
@@ -320,7 +302,7 @@ class TestSelfCorrection:
             "used_datapoints": ["table_fact_sales_001"],
             "confidence": 0.95,
             "assumptions": [],
-            "clarifying_questions": []
+            "clarifying_questions": [],
         }
 
         good_llm_response = LLMResponse(
@@ -328,7 +310,7 @@ class TestSelfCorrection:
             model="gpt-4o",
             usage=LLMUsage(prompt_tokens=500, completion_tokens=150, total_tokens=650),
             finish_reason="stop",
-            provider="openai"
+            provider="openai",
         )
 
         sql_agent.llm.generate.side_effect = [bad_llm_response, good_llm_response]
@@ -337,14 +319,12 @@ class TestSelfCorrection:
 
         assert output.success is True
         assert len(output.correction_attempts) == 1
-        assert any(issue.issue_type == "syntax" for issue in output.correction_attempts[0].issues_found)
+        assert any(
+            issue.issue_type == "syntax" for issue in output.correction_attempts[0].issues_found
+        )
 
     @pytest.mark.asyncio
-    async def test_respects_max_correction_attempts(
-        self,
-        sql_agent,
-        sample_sql_agent_input
-    ):
+    async def test_respects_max_correction_attempts(self, sql_agent, sample_sql_agent_input):
         """Test respects maximum correction attempts."""
         # Always return bad SQL
         bad_response_json = {
@@ -353,7 +333,7 @@ class TestSelfCorrection:
             "used_datapoints": ["table_fact_sales_001"],
             "confidence": 0.95,
             "assumptions": [],
-            "clarifying_questions": []
+            "clarifying_questions": [],
         }
 
         bad_llm_response = LLMResponse(
@@ -361,7 +341,7 @@ class TestSelfCorrection:
             model="gpt-4o",
             usage=LLMUsage(prompt_tokens=500, completion_tokens=150, total_tokens=650),
             finish_reason="stop",
-            provider="openai"
+            provider="openai",
         )
 
         sql_agent.llm.generate.return_value = bad_llm_response
@@ -389,7 +369,7 @@ class TestValidation:
             used_datapoints=[],
             confidence=0.9,
             assumptions=[],
-            clarifying_questions=[]
+            clarifying_questions=[],
         )
 
         issues = sql_agent._validate_sql(invalid_sql, sample_sql_agent_input)
@@ -405,7 +385,7 @@ class TestValidation:
             used_datapoints=[],
             confidence=0.9,
             assumptions=[],
-            clarifying_questions=[]
+            clarifying_questions=[],
         )
 
         issues = sql_agent._validate_sql(invalid_sql, sample_sql_agent_input)
@@ -421,7 +401,7 @@ class TestValidation:
             used_datapoints=[],
             confidence=0.9,
             assumptions=[],
-            clarifying_questions=[]
+            clarifying_questions=[],
         )
 
         issues = sql_agent._validate_sql(invalid_sql, sample_sql_agent_input)
@@ -437,7 +417,7 @@ class TestValidation:
             used_datapoints=["table_fact_sales_001"],
             confidence=0.95,
             assumptions=[],
-            clarifying_questions=[]
+            clarifying_questions=[],
         )
 
         issues = sql_agent._validate_sql(valid_sql, sample_sql_agent_input)
@@ -456,7 +436,7 @@ class TestValidation:
             used_datapoints=["table_fact_sales_001"],
             confidence=0.95,
             assumptions=[],
-            clarifying_questions=[]
+            clarifying_questions=[],
         )
 
         issues = sql_agent._validate_sql(cte_sql, sample_sql_agent_input)
@@ -475,7 +455,7 @@ class TestValidation:
             used_datapoints=["table_fact_sales_001"],
             confidence=0.95,
             assumptions=[],
-            clarifying_questions=[]
+            clarifying_questions=[],
         )
 
         issues = sql_agent._validate_sql(multi_cte_sql, sample_sql_agent_input)
@@ -511,14 +491,14 @@ class TestPromptBuilding:
             used_datapoints=[],
             confidence=0.8,
             assumptions=[],
-            clarifying_questions=[]
+            clarifying_questions=[],
         )
 
         issues = [
             ValidationIssue(
                 issue_type="missing_table",
                 message="Table 'wrong_table' not found",
-                suggested_fix="Use analytics.fact_sales"
+                suggested_fix="Use analytics.fact_sales",
             )
         ]
 
@@ -550,7 +530,7 @@ class TestErrorHandling:
             model="gpt-4o",
             usage=LLMUsage(prompt_tokens=500, completion_tokens=150, total_tokens=650),
             finish_reason="stop",
-            provider="openai"
+            provider="openai",
         )
 
         sql_agent.llm.generate.return_value = invalid_response
@@ -562,17 +542,14 @@ class TestErrorHandling:
     async def test_handles_missing_required_fields(self, sql_agent, sample_sql_agent_input):
         """Test handles JSON missing required fields."""
         # Response missing 'sql' field
-        bad_response_json = {
-            "explanation": "Query explanation",
-            "confidence": 0.9
-        }
+        bad_response_json = {"explanation": "Query explanation", "confidence": 0.9}
 
         bad_response = LLMResponse(
             content=f"```json\n{json.dumps(bad_response_json)}\n```",
             model="gpt-4o",
             usage=LLMUsage(prompt_tokens=500, completion_tokens=150, total_tokens=650),
             finish_reason="stop",
-            provider="openai"
+            provider="openai",
         )
 
         sql_agent.llm.generate.return_value = bad_response

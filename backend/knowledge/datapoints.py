@@ -8,7 +8,6 @@ Supports single file and directory loading with error handling.
 import json
 import logging
 from pathlib import Path
-from typing import List, Union
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -54,11 +53,11 @@ class DataPointLoader:
         """Initialize the DataPoint loader."""
         self.loaded_count = 0
         self.failed_count = 0
-        self.failed_files: List[tuple[Path, str]] = []
+        self.failed_files: list[tuple[Path, str]] = []
 
         logger.info("DataPointLoader initialized")
 
-    def load_file(self, file_path: Union[str, Path]) -> DataPoint:
+    def load_file(self, file_path: str | Path) -> DataPoint:
         """
         Load and validate a single DataPoint from a JSON file.
 
@@ -77,7 +76,7 @@ class DataPointLoader:
 
         try:
             # Read JSON file
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 data = json.load(f)
 
             # Validate against Pydantic model using TypeAdapter
@@ -95,33 +94,33 @@ class DataPointLoader:
             self.failed_count += 1
             self.failed_files.append((file_path, "File not found"))
             logger.error(f"File not found: {file_path}")
-            raise DataPointLoadError(file_path, "File not found", e)
+            raise DataPointLoadError(file_path, "File not found", e) from e
 
         except json.JSONDecodeError as e:
             self.failed_count += 1
             self.failed_files.append((file_path, f"Invalid JSON: {e}"))
             logger.error(f"Invalid JSON in {file_path}: {e}")
-            raise DataPointLoadError(file_path, f"Invalid JSON: {e}", e)
+            raise DataPointLoadError(file_path, f"Invalid JSON: {e}", e) from e
 
         except ValidationError as e:
             self.failed_count += 1
             error_msg = self._format_validation_error(e)
             self.failed_files.append((file_path, error_msg))
             logger.error(f"Validation failed for {file_path}: {error_msg}")
-            raise DataPointLoadError(file_path, f"Validation failed: {error_msg}", e)
+            raise DataPointLoadError(file_path, f"Validation failed: {error_msg}", e) from e
 
         except Exception as e:
             self.failed_count += 1
             self.failed_files.append((file_path, str(e)))
             logger.error(f"Unexpected error loading {file_path}: {e}")
-            raise DataPointLoadError(file_path, f"Unexpected error: {e}", e)
+            raise DataPointLoadError(file_path, f"Unexpected error: {e}", e) from e
 
     def load_directory(
         self,
-        directory_path: Union[str, Path],
+        directory_path: str | Path,
         recursive: bool = False,
         skip_errors: bool = True,
-    ) -> List[DataPoint]:
+    ) -> list[DataPoint]:
         """
         Load all DataPoint JSON files from a directory.
 
@@ -142,9 +141,7 @@ class DataPointLoader:
 
         if not directory_path.exists():
             logger.error(f"Directory not found: {directory_path}")
-            raise DataPointLoadError(
-                directory_path, "Directory not found", FileNotFoundError()
-            )
+            raise DataPointLoadError(directory_path, "Directory not found", FileNotFoundError())
 
         if not directory_path.is_dir():
             logger.error(f"Path is not a directory: {directory_path}")
@@ -168,7 +165,7 @@ class DataPointLoader:
             try:
                 datapoint = self.load_file(json_file)
                 datapoints.append(datapoint)
-            except DataPointLoadError as e:
+            except DataPointLoadError:
                 if not skip_errors:
                     raise
                 # Error already logged in load_file
@@ -192,8 +189,7 @@ class DataPointLoader:
             "loaded_count": self.loaded_count,
             "failed_count": self.failed_count,
             "failed_files": [
-                {"path": str(path), "error": error}
-                for path, error in self.failed_files
+                {"path": str(path), "error": error} for path, error in self.failed_files
             ],
         }
 

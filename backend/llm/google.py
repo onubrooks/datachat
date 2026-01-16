@@ -6,7 +6,7 @@ Supports Gemini 1.5 Pro, Gemini 1.5 Flash, etc.
 """
 
 import logging
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
 
 from backend.llm.base import BaseLLMProvider
 from backend.llm.models import (
@@ -49,6 +49,7 @@ class GoogleProvider(BaseLLMProvider):
 
         try:
             import google.generativeai as genai
+
             genai.configure(api_key=api_key)
             self.genai = genai
             self.client = genai.GenerativeModel(model)
@@ -60,10 +61,7 @@ class GoogleProvider(BaseLLMProvider):
             self.genai = None
             self.client = None
 
-        logger.info(
-            f"Google provider initialized with model: {model}",
-            extra={"model": model}
-        )
+        logger.info(f"Google provider initialized with model: {model}", extra={"model": model})
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         """Generate completion using Google Gemini API."""
@@ -154,7 +152,7 @@ class GoogleProvider(BaseLLMProvider):
         # Rough approximation
         return len(text) // 4
 
-    def get_model_info(self, model_name: Optional[str] = None) -> ModelInfo:
+    def get_model_info(self, model_name: str | None = None) -> ModelInfo:
         """Get Google model information."""
         model = model_name or self.model
 

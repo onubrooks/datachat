@@ -6,7 +6,7 @@ Supports Ollama, vLLM, llama.cpp server, and any OpenAI-compatible endpoint.
 """
 
 import logging
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -61,7 +61,7 @@ class LocalProvider(BaseLLMProvider):
 
         logger.info(
             f"Local provider initialized: {base_url} with model: {model}",
-            extra={"base_url": base_url, "model": model}
+            extra={"base_url": base_url, "model": model},
         )
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
@@ -76,10 +76,7 @@ class LocalProvider(BaseLLMProvider):
         # Build OpenAI-compatible request
         payload = {
             "model": request.model or self.model,
-            "messages": [
-                {"role": msg.role, "content": msg.content}
-                for msg in request.messages
-            ],
+            "messages": [{"role": msg.role, "content": msg.content} for msg in request.messages],
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
         }
@@ -91,11 +88,14 @@ class LocalProvider(BaseLLMProvider):
             response = await self._call_openai_compatible(payload)
 
         llm_response = LLMResponse(
-            content=response.get("message", {}).get("content", "") or response.get("choices", [{}])[0].get("message", {}).get("content", ""),
+            content=response.get("message", {}).get("content", "")
+            or response.get("choices", [{}])[0].get("message", {}).get("content", ""),
             model=response.get("model", self.model),
             usage=LLMUsage(
-                prompt_tokens=response.get("prompt_eval_count", 0) or response.get("usage", {}).get("prompt_tokens", 0),
-                completion_tokens=response.get("eval_count", 0) or response.get("usage", {}).get("completion_tokens", 0),
+                prompt_tokens=response.get("prompt_eval_count", 0)
+                or response.get("usage", {}).get("prompt_tokens", 0),
+                completion_tokens=response.get("eval_count", 0)
+                or response.get("usage", {}).get("completion_tokens", 0),
                 total_tokens=0,  # Calculated below
             ),
             finish_reason="stop",
@@ -117,10 +117,7 @@ class LocalProvider(BaseLLMProvider):
 
         payload = {
             "model": request.model or self.model,
-            "messages": [
-                {"role": msg.role, "content": msg.content}
-                for msg in request.messages
-            ],
+            "messages": [{"role": msg.role, "content": msg.content} for msg in request.messages],
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
             "stream": True,
@@ -136,6 +133,7 @@ class LocalProvider(BaseLLMProvider):
                 async for line in response.aiter_lines():
                     if line.strip():
                         import json
+
                         chunk_data = json.loads(line)
                         if content := chunk_data.get("message", {}).get("content"):
                             yield LLMStreamChunk(content=content, finish_reason=None)
@@ -149,15 +147,20 @@ class LocalProvider(BaseLLMProvider):
                 async for line in response.aiter_lines():
                     if line.startswith("data: ") and not line.endswith("[DONE]"):
                         import json
+
                         chunk_data = json.loads(line[6:])
-                        if content := chunk_data.get("choices", [{}])[0].get("delta", {}).get("content"):
+                        if (
+                            content := chunk_data.get("choices", [{}])[0]
+                            .get("delta", {})
+                            .get("content")
+                        ):
                             yield LLMStreamChunk(content=content, finish_reason=None)
 
     def count_tokens(self, text: str) -> int:
         """Count tokens (rough approximation for local models)."""
         return len(text) // 4
 
-    def get_model_info(self, model_name: Optional[str] = None) -> ModelInfo:
+    def get_model_info(self, model_name: str | None = None) -> ModelInfo:
         """Get local model information."""
         model = model_name or self.model
 

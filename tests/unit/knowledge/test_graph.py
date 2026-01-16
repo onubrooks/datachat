@@ -5,8 +5,8 @@ Tests NetworkX-based knowledge graph operations with DataPoints.
 """
 
 import json
+
 import pytest
-from pathlib import Path
 
 from backend.knowledge.graph import (
     EdgeType,
@@ -151,9 +151,7 @@ class TestInitialization:
 class TestAddSchemaDataPoint:
     """Test adding Schema DataPoints to graph."""
 
-    def test_add_table_creates_table_node(
-        self, knowledge_graph, sample_schema_datapoint
-    ):
+    def test_add_table_creates_table_node(self, knowledge_graph, sample_schema_datapoint):
         """Test adding table creates table node."""
         nodes_added = knowledge_graph.add_datapoint(sample_schema_datapoint)
 
@@ -169,25 +167,19 @@ class TestAddSchemaDataPoint:
         assert table_node["table_name"] == "analytics.fact_sales"
         assert table_node["schema"] == "analytics"
 
-    def test_add_table_creates_column_nodes(
-        self, knowledge_graph, sample_schema_datapoint
-    ):
+    def test_add_table_creates_column_nodes(self, knowledge_graph, sample_schema_datapoint):
         """Test adding table creates column nodes."""
         knowledge_graph.add_datapoint(sample_schema_datapoint)
 
         # Check column nodes
-        col_node = knowledge_graph.get_node(
-            "table_fact_sales_001__col__sale_id"
-        )
+        col_node = knowledge_graph.get_node("table_fact_sales_001__col__sale_id")
         assert col_node is not None
         assert col_node["node_type"] == NodeType.COLUMN
         assert col_node["name"] == "sale_id"
         assert col_node["column_type"] == "INTEGER"
         assert col_node["parent_table"] == "table_fact_sales_001"
 
-    def test_add_table_creates_belongs_to_edges(
-        self, knowledge_graph, sample_schema_datapoint
-    ):
+    def test_add_table_creates_belongs_to_edges(self, knowledge_graph, sample_schema_datapoint):
         """Test column->table edges are created."""
         knowledge_graph.add_datapoint(sample_schema_datapoint)
 
@@ -210,13 +202,9 @@ class TestAddSchemaDataPoint:
         knowledge_graph.add_datapoint(sample_schema_datapoint)
 
         # Check join edge
-        assert knowledge_graph.graph.has_edge(
-            "table_fact_sales_001", "table_dim_customer_001"
-        )
+        assert knowledge_graph.graph.has_edge("table_fact_sales_001", "table_dim_customer_001")
 
-        edge_data = knowledge_graph.graph["table_fact_sales_001"][
-            "table_dim_customer_001"
-        ]
+        edge_data = knowledge_graph.graph["table_fact_sales_001"]["table_dim_customer_001"]
         assert edge_data["edge_type"] == EdgeType.JOINS_WITH
         assert edge_data["join_column"] == "customer_id"
         assert edge_data["cardinality"] == "N:1"
@@ -225,9 +213,7 @@ class TestAddSchemaDataPoint:
 class TestAddBusinessDataPoint:
     """Test adding Business DataPoints to graph."""
 
-    def test_add_metric_creates_metric_node(
-        self, knowledge_graph, sample_business_datapoint
-    ):
+    def test_add_metric_creates_metric_node(self, knowledge_graph, sample_business_datapoint):
         """Test adding metric creates metric node."""
         nodes_added = knowledge_graph.add_datapoint(sample_business_datapoint)
 
@@ -250,13 +236,9 @@ class TestAddBusinessDataPoint:
         knowledge_graph.add_datapoint(sample_business_datapoint)
 
         # Check edge from metric to table
-        assert knowledge_graph.graph.has_edge(
-            "metric_revenue_001", "table_fact_sales_001"
-        )
+        assert knowledge_graph.graph.has_edge("metric_revenue_001", "table_fact_sales_001")
 
-        edge_data = knowledge_graph.graph["metric_revenue_001"][
-            "table_fact_sales_001"
-        ]
+        edge_data = knowledge_graph.graph["metric_revenue_001"]["table_fact_sales_001"]
         assert edge_data["edge_type"] == EdgeType.CALCULATES
 
     def test_add_metrics_with_synonyms_creates_synonym_edges(self, knowledge_graph):
@@ -295,9 +277,7 @@ class TestAddBusinessDataPoint:
 class TestAddProcessDataPoint:
     """Test adding Process DataPoints to graph."""
 
-    def test_add_process_creates_process_node(
-        self, knowledge_graph, sample_process_datapoint
-    ):
+    def test_add_process_creates_process_node(self, knowledge_graph, sample_process_datapoint):
         """Test adding process creates process node."""
         nodes_added = knowledge_graph.add_datapoint(sample_process_datapoint)
 
@@ -319,13 +299,9 @@ class TestAddProcessDataPoint:
         knowledge_graph.add_datapoint(sample_process_datapoint)
 
         # Check edge from process to table
-        assert knowledge_graph.graph.has_edge(
-            "proc_daily_sales_etl_001", "table_fact_sales_001"
-        )
+        assert knowledge_graph.graph.has_edge("proc_daily_sales_etl_001", "table_fact_sales_001")
 
-        edge_data = knowledge_graph.graph["proc_daily_sales_etl_001"][
-            "table_fact_sales_001"
-        ]
+        edge_data = knowledge_graph.graph["proc_daily_sales_etl_001"]["table_fact_sales_001"]
         assert edge_data["edge_type"] == EdgeType.USES
 
     def test_add_process_with_process_dependency(self, knowledge_graph):
@@ -357,18 +333,12 @@ class TestAddProcessDataPoint:
         knowledge_graph.add_datapoint(downstream_process)
 
         # Check edge from downstream to upstream process
-        assert knowledge_graph.graph.has_edge(
-            "proc_transform_sales_002", "proc_extract_raw_001"
-        )
+        assert knowledge_graph.graph.has_edge("proc_transform_sales_002", "proc_extract_raw_001")
 
-        edge_data = knowledge_graph.graph["proc_transform_sales_002"][
-            "proc_extract_raw_001"
-        ]
+        edge_data = knowledge_graph.graph["proc_transform_sales_002"]["proc_extract_raw_001"]
         assert edge_data["edge_type"] == EdgeType.DEPENDS_ON
 
-    def test_add_process_with_mixed_dependencies(
-        self, knowledge_graph, sample_schema_datapoint
-    ):
+    def test_add_process_with_mixed_dependencies(self, knowledge_graph, sample_schema_datapoint):
         """Test process with both table and process dependencies."""
         # Add a table
         knowledge_graph.add_datapoint(sample_schema_datapoint)
@@ -403,12 +373,8 @@ class TestAddProcessDataPoint:
         knowledge_graph.add_datapoint(mixed_process)
 
         # Check both edges exist
-        assert knowledge_graph.graph.has_edge(
-            "proc_mixed_002", "table_fact_sales_001"
-        )  # Table dep
-        assert knowledge_graph.graph.has_edge(
-            "proc_mixed_002", "proc_upstream_001"
-        )  # Process dep
+        assert knowledge_graph.graph.has_edge("proc_mixed_002", "table_fact_sales_001")  # Table dep
+        assert knowledge_graph.graph.has_edge("proc_mixed_002", "proc_upstream_001")  # Process dep
 
         # Both should be DEPENDS_ON edges
         table_edge = knowledge_graph.graph["proc_mixed_002"]["table_fact_sales_001"]
@@ -444,16 +410,12 @@ class TestGetRelated:
         assert len(related) >= 1  # At least the table
 
         # Check table is in results
-        table_result = next(
-            (r for r in related if r["node_id"] == "table_fact_sales_001"), None
-        )
+        table_result = next((r for r in related if r["node_id"] == "table_fact_sales_001"), None)
         assert table_result is not None
         assert table_result["distance"] == 1
         assert table_result["edge_type"] == EdgeType.CALCULATES
 
-    def test_get_related_respects_max_depth(
-        self, knowledge_graph, sample_schema_datapoint
-    ):
+    def test_get_related_respects_max_depth(self, knowledge_graph, sample_schema_datapoint):
         """Test get_related respects max_depth parameter."""
         knowledge_graph.add_datapoint(sample_schema_datapoint)
 
@@ -465,9 +427,7 @@ class TestGetRelated:
         related_2 = knowledge_graph.get_related("table_fact_sales_001", max_depth=2)
         assert len(related_2) >= len(related_1)
 
-    def test_get_related_filters_by_edge_type(
-        self, knowledge_graph, sample_schema_datapoint
-    ):
+    def test_get_related_filters_by_edge_type(self, knowledge_graph, sample_schema_datapoint):
         """Test get_related filters by edge type."""
         knowledge_graph.add_datapoint(sample_schema_datapoint)
 
@@ -499,9 +459,7 @@ class TestFindPath:
         knowledge_graph.add_datapoint(sample_dimension_datapoint)
         knowledge_graph.add_datapoint(sample_schema_datapoint)
 
-        path = knowledge_graph.find_path(
-            "table_fact_sales_001", "table_dim_customer_001"
-        )
+        path = knowledge_graph.find_path("table_fact_sales_001", "table_dim_customer_001")
 
         assert path is not None
         assert len(path) == 2
@@ -543,15 +501,11 @@ class TestFindPath:
         knowledge_graph.add_datapoint(sample_schema_datapoint)
 
         # Path exists within cutoff
-        path = knowledge_graph.find_path(
-            "table_fact_sales_001", "table_dim_customer_001", cutoff=5
-        )
+        path = knowledge_graph.find_path("table_fact_sales_001", "table_dim_customer_001", cutoff=5)
         assert path is not None
 
         # Path doesn't exist with cutoff=1 (path length is 2)
-        path = knowledge_graph.find_path(
-            "table_fact_sales_001", "table_dim_customer_001", cutoff=1
-        )
+        path = knowledge_graph.find_path("table_fact_sales_001", "table_dim_customer_001", cutoff=1)
         assert path is None
 
     def test_find_path_raises_for_nonexistent_nodes(self, knowledge_graph):
@@ -563,9 +517,7 @@ class TestFindPath:
 class TestSerialization:
     """Test JSON serialization and deserialization."""
 
-    def test_save_to_file_creates_json(
-        self, knowledge_graph, sample_schema_datapoint, tmp_path
-    ):
+    def test_save_to_file_creates_json(self, knowledge_graph, sample_schema_datapoint, tmp_path):
         """Test save_to_file creates JSON file."""
         knowledge_graph.add_datapoint(sample_schema_datapoint)
 
@@ -575,7 +527,7 @@ class TestSerialization:
         assert file_path.exists()
 
         # Check JSON is valid
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             data = json.load(f)
 
         assert "graph" in data
@@ -634,9 +586,7 @@ class TestSerialization:
         assert len(related) >= 1
 
         # Verify edges preserved
-        assert loaded_graph.graph.has_edge(
-            "metric_revenue_001", "table_fact_sales_001"
-        )
+        assert loaded_graph.graph.has_edge("metric_revenue_001", "table_fact_sales_001")
 
 
 class TestGetStats:
@@ -679,9 +629,7 @@ class TestGetStats:
 class TestClear:
     """Test clearing graph."""
 
-    def test_clear_removes_all_nodes_and_edges(
-        self, knowledge_graph, sample_schema_datapoint
-    ):
+    def test_clear_removes_all_nodes_and_edges(self, knowledge_graph, sample_schema_datapoint):
         """Test clear removes all data."""
         knowledge_graph.add_datapoint(sample_schema_datapoint)
 

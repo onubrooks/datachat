@@ -8,7 +8,7 @@ Supports semantic search, persistence, and metadata storage.
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import chromadb
 from chromadb.config import Settings
@@ -49,10 +49,10 @@ class VectorStore:
 
     def __init__(
         self,
-        collection_name: Optional[str] = None,
-        persist_directory: Optional[Union[str, Path]] = None,
-        embedding_model: Optional[str] = None,
-        openai_api_key: Optional[str] = None,
+        collection_name: str | None = None,
+        persist_directory: str | Path | None = None,
+        embedding_model: str | None = None,
+        openai_api_key: str | None = None,
     ):
         """
         Initialize the vector store.
@@ -81,9 +81,9 @@ class VectorStore:
             self.embedding_model = embedding_model
             self.openai_api_key = openai_api_key
 
-        self.client: Optional[chromadb.ClientAPI] = None
-        self.collection: Optional[chromadb.Collection] = None
-        self.embedding_function: Optional[OpenAIEmbeddingFunction] = None
+        self.client: chromadb.ClientAPI | None = None
+        self.collection: chromadb.Collection | None = None
+        self.embedding_function: OpenAIEmbeddingFunction | None = None
 
         logger.info(
             f"VectorStore initialized: collection={self.collection_name}, "
@@ -107,7 +107,7 @@ class VectorStore:
             # Initialize Chroma client (sync, will wrap in to_thread)
             await asyncio.to_thread(self._init_client)
 
-            logger.info(f"VectorStore initialized successfully")
+            logger.info("VectorStore initialized successfully")
 
         except Exception as e:
             logger.error(f"Failed to initialize VectorStore: {e}")
@@ -143,7 +143,7 @@ class VectorStore:
 
     async def add_datapoints(
         self,
-        datapoints: List[DataPoint],
+        datapoints: list[DataPoint],
         batch_size: int = 100,
     ) -> int:
         """
@@ -203,8 +203,8 @@ class VectorStore:
         self,
         query: str,
         top_k: int = 10,
-        filter_metadata: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
+        filter_metadata: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Search for similar DataPoints using semantic search.
 
@@ -238,7 +238,9 @@ class VectorStore:
                     formatted_results.append(
                         {
                             "datapoint_id": results["ids"][0][i],
-                            "distance": results["distances"][0][i] if results["distances"] else None,
+                            "distance": results["distances"][0][i]
+                            if results["distances"]
+                            else None,
                             "metadata": results["metadatas"][0][i] if results["metadatas"] else {},
                             "document": results["documents"][0][i] if results["documents"] else "",
                         }
@@ -251,7 +253,7 @@ class VectorStore:
             logger.error(f"Search failed: {e}")
             raise VectorStoreError(f"Search failed: {e}") from e
 
-    async def delete(self, datapoint_ids: List[str]) -> int:
+    async def delete(self, datapoint_ids: list[str]) -> int:
         """
         Delete DataPoints from the vector store.
 
@@ -381,7 +383,7 @@ class VectorStore:
 
         return "\n".join(parts)
 
-    def _create_metadata(self, datapoint: DataPoint) -> Dict[str, Any]:
+    def _create_metadata(self, datapoint: DataPoint) -> dict[str, Any]:
         """
         Create metadata dictionary for a DataPoint.
 

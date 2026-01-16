@@ -6,14 +6,14 @@ Supports OpenAI, Anthropic, Google, and Local providers with fallback logic.
 """
 
 import logging
-from typing import Literal, Optional
+from typing import Literal
 
 from backend.config import LLMSettings
-from backend.llm.base import BaseLLMProvider
-from backend.llm.openai import OpenAIProvider
 from backend.llm.anthropic import AnthropicProvider
+from backend.llm.base import BaseLLMProvider
 from backend.llm.google import GoogleProvider
 from backend.llm.local import LocalProvider
+from backend.llm.openai import OpenAIProvider
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ class LLMProviderFactory:
 
         logger.info(
             f"Creating {provider_type} provider with {model_type} model",
-            extra={"provider": provider_type, "model_type": model_type}
+            extra={"provider": provider_type, "model_type": model_type},
         )
 
         # Create provider based on type
@@ -128,8 +128,9 @@ class LLMProviderFactory:
             extra={
                 "agent": agent_name,
                 "provider": provider_type,
-                "has_override": hasattr(config, override_attr) and getattr(config, override_attr) is not None,
-            }
+                "has_override": hasattr(config, override_attr)
+                and getattr(config, override_attr) is not None,
+            },
         )
 
         return LLMProviderFactory.create_provider(

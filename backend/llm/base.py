@@ -7,7 +7,7 @@ Ensures consistent API across OpenAI, Anthropic, Google, Local, etc.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
 
 from backend.llm.models import (
     LLMRequest,
@@ -60,7 +60,7 @@ class BaseLLMProvider(ABC):
                 "provider": provider_name,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
-            }
+            },
         )
 
     @abstractmethod
@@ -118,7 +118,7 @@ class BaseLLMProvider(ABC):
         pass  # pragma: no cover - abstract method
 
     @abstractmethod
-    def get_model_info(self, model_name: Optional[str] = None) -> ModelInfo:
+    def get_model_info(self, model_name: str | None = None) -> ModelInfo:
         """
         Get information about a model.
 
@@ -156,7 +156,7 @@ class BaseLLMProvider(ABC):
                 "temperature": request.temperature,
                 "max_tokens": request.max_tokens,
                 "stream": request.stream,
-            }
+            },
         )
 
     def _log_response(self, response: LLMResponse) -> None:
@@ -170,5 +170,5 @@ class BaseLLMProvider(ABC):
                 "completion_tokens": response.usage.completion_tokens,
                 "total_tokens": response.usage.total_tokens,
                 "finish_reason": response.finish_reason,
-            }
+            },
         )

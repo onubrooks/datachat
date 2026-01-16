@@ -4,18 +4,14 @@ Unit tests for configuration module.
 Tests settings loading, validation, nested configuration, and caching.
 """
 
-import os
-from pathlib import Path
-from unittest.mock import patch
-
 import pytest
 from pydantic import ValidationError
 
 from backend.config import (
     ChromaSettings,
     DatabaseSettings,
-    LoggingSettings,
     LLMSettings,
+    LoggingSettings,
     Settings,
     clear_settings_cache,
     get_settings,
@@ -94,10 +90,7 @@ class TestDatabaseSettings:
 
     def test_valid_database_settings(self, monkeypatch):
         """Valid database settings load correctly."""
-        monkeypatch.setenv(
-            "DATABASE_URL",
-            "postgresql://user:pass@localhost:5432/testdb"
-        )
+        monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
 
         settings = DatabaseSettings()
 
@@ -108,10 +101,7 @@ class TestDatabaseSettings:
 
     def test_asyncpg_url_scheme(self, monkeypatch):
         """PostgreSQL+asyncpg scheme is valid."""
-        monkeypatch.setenv(
-            "DATABASE_URL",
-            "postgresql+asyncpg://user:pass@localhost:5432/testdb"
-        )
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://user:pass@localhost:5432/testdb")
 
         settings = DatabaseSettings()
 
@@ -126,10 +116,7 @@ class TestDatabaseSettings:
 
     def test_custom_pool_settings(self, monkeypatch):
         """Custom pool settings override defaults."""
-        monkeypatch.setenv(
-            "DATABASE_URL",
-            "postgresql://user:pass@localhost:5432/testdb"
-        )
+        monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
         monkeypatch.setenv("DATABASE_POOL_SIZE", "10")
         monkeypatch.setenv("DATABASE_MAX_OVERFLOW", "20")
         monkeypatch.setenv("DATABASE_ECHO", "true")
@@ -142,10 +129,7 @@ class TestDatabaseSettings:
 
     def test_pool_size_validation(self, monkeypatch):
         """Pool size must be within valid range."""
-        monkeypatch.setenv(
-            "DATABASE_URL",
-            "postgresql://user:pass@localhost:5432/testdb"
-        )
+        monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
         monkeypatch.setenv("DATABASE_POOL_SIZE", "25")
 
         with pytest.raises(ValidationError, match="less than or equal to 20"):
@@ -384,14 +368,12 @@ class TestGetSettings:
 # Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def mock_env_vars(monkeypatch, tmp_path):
     """Set up mock environment variables for testing."""
     monkeypatch.setenv("LLM_OPENAI_API_KEY", "sk-test-key-1234567890abcdefghij")
-    monkeypatch.setenv(
-        "DATABASE_URL",
-        "postgresql://user:pass@localhost:5432/testdb"
-    )
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
     monkeypatch.setenv("CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
     monkeypatch.setenv("LOG_LEVEL", "INFO")
     monkeypatch.setenv("ENVIRONMENT", "development")

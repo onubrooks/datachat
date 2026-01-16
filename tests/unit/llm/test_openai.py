@@ -4,11 +4,12 @@ Tests for OpenAI Provider.
 Tests OpenAI provider implementation with mocked API calls.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from backend.llm.models import LLMMessage, LLMRequest
 from backend.llm.openai import OpenAIProvider
-from backend.llm.models import LLMRequest, LLMMessage
 
 
 @pytest.fixture
@@ -94,9 +95,7 @@ class TestGenerate:
 
         mock_create = AsyncMock(return_value=mock_response)
 
-        with patch.object(
-            provider.client.chat.completions, "create", mock_create
-        ):
+        with patch.object(provider.client.chat.completions, "create", mock_create):
             request = LLMRequest(
                 messages=[LLMMessage(role="user", content="Test")],
             )
@@ -124,9 +123,7 @@ class TestGenerate:
 
         mock_create = AsyncMock(return_value=mock_response)
 
-        with patch.object(
-            provider.client.chat.completions, "create", mock_create
-        ):
+        with patch.object(provider.client.chat.completions, "create", mock_create):
             request = LLMRequest(
                 messages=[LLMMessage(role="user", content="Test")],
                 temperature=0.7,
@@ -211,6 +208,7 @@ class TestCountTokens:
 
     def test_count_tokens_fallback(self, provider):
         """Test token counting fallback without tiktoken."""
+
         # Mock tiktoken.encoding_for_model to raise ImportError
         def mock_import_error(*args, **kwargs):
             raise ImportError("tiktoken not available")
@@ -286,8 +284,9 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_api_error(self, provider):
         """Test handling of general API errors."""
-        import openai
         from unittest.mock import Mock
+
+        import openai
 
         # Create a mock request for the error
         mock_request = Mock()
@@ -310,8 +309,9 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_streaming_api_error(self, provider):
         """Test handling of streaming API errors."""
-        import openai
         from unittest.mock import Mock
+
+        import openai
 
         # Create a mock request for the error
         mock_request = Mock()

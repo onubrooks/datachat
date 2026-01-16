@@ -9,7 +9,7 @@ import json
 import logging
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any
 
 import networkx as nx
 from networkx.readwrite import json_graph
@@ -108,14 +108,11 @@ class KnowledgeGraph:
             elif isinstance(datapoint, ProcessDataPoint):
                 nodes_added = self._add_process_datapoint(datapoint)
             else:
-                raise KnowledgeGraphError(
-                    f"Unknown DataPoint type: {type(datapoint)}"
-                )
+                raise KnowledgeGraphError(f"Unknown DataPoint type: {type(datapoint)}")
 
             self._datapoint_count += 1
             logger.debug(
-                f"Added {datapoint.type} datapoint '{datapoint.datapoint_id}' "
-                f"({nodes_added} nodes)"
+                f"Added {datapoint.type} datapoint '{datapoint.datapoint_id}' ({nodes_added} nodes)"
             )
 
             return nodes_added
@@ -160,9 +157,7 @@ class KnowledgeGraph:
                     parent_table=table_id,
                 )
                 # Edge: Column -> Table
-                self.graph.add_edge(
-                    col_id, table_id, edge_type=EdgeType.BELONGS_TO, weight=1.0
-                )
+                self.graph.add_edge(col_id, table_id, edge_type=EdgeType.BELONGS_TO, weight=1.0)
                 nodes_added += 1
 
         # Add relationship edges (foreign keys)
@@ -256,9 +251,7 @@ class KnowledgeGraph:
                 table_id = self._find_table_by_name(table_name)
                 if table_id:
                     # Edge: Process -> Table (populates)
-                    self.graph.add_edge(
-                        process_id, table_id, edge_type=EdgeType.USES, weight=0.85
-                    )
+                    self.graph.add_edge(process_id, table_id, edge_type=EdgeType.USES, weight=0.85)
 
         # Add edges to dependencies
         if datapoint.dependencies:
@@ -282,8 +275,8 @@ class KnowledgeGraph:
         self,
         node_id: str,
         max_depth: int = 2,
-        edge_types: Optional[List[EdgeType]] = None,
-    ) -> List[Dict[str, Any]]:
+        edge_types: list[EdgeType] | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Get related nodes within max_depth hops.
 
@@ -349,15 +342,14 @@ class KnowledgeGraph:
                 )
 
         logger.debug(
-            f"Found {len(related_nodes)} related nodes for '{node_id}' "
-            f"(max_depth={max_depth})"
+            f"Found {len(related_nodes)} related nodes for '{node_id}' (max_depth={max_depth})"
         )
 
         return related_nodes
 
     def find_path(
-        self, source_id: str, target_id: str, cutoff: Optional[int] = 5
-    ) -> Optional[List[Dict[str, Any]]]:
+        self, source_id: str, target_id: str, cutoff: int | None = 5
+    ) -> list[dict[str, Any]] | None:
         """
         Find shortest path between two nodes.
 
@@ -417,10 +409,7 @@ class KnowledgeGraph:
                     }
                 )
 
-            logger.debug(
-                f"Found path from '{source_id}' to '{target_id}': "
-                f"{len(path)} nodes"
-            )
+            logger.debug(f"Found path from '{source_id}' to '{target_id}': {len(path)} nodes")
 
             return path_with_edges
 
@@ -429,10 +418,10 @@ class KnowledgeGraph:
             return None
         except nx.NodeNotFound:
             # This shouldn't happen since we check above, but handle it
-            logger.debug(f"Node not found when finding path")
+            logger.debug("Node not found when finding path")
             return None
 
-    def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
+    def get_node(self, node_id: str) -> dict[str, Any] | None:
         """
         Get node data by ID.
 
@@ -447,7 +436,7 @@ class KnowledgeGraph:
 
         return dict(self.graph.nodes[node_id])
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get graph statistics.
 
@@ -455,12 +444,12 @@ class KnowledgeGraph:
             Dict with node counts, edge counts, etc.
         """
         node_type_counts = {}
-        for node, data in self.graph.nodes(data=True):
+        for _node, data in self.graph.nodes(data=True):
             node_type = data.get("node_type", "unknown")
             node_type_counts[node_type] = node_type_counts.get(node_type, 0) + 1
 
         edge_type_counts = {}
-        for source, target, data in self.graph.edges(data=True):
+        for _source, _target, data in self.graph.edges(data=True):
             edge_type = data.get("edge_type", "unknown")
             edge_type_counts[edge_type] = edge_type_counts.get(edge_type, 0) + 1
 
@@ -475,7 +464,7 @@ class KnowledgeGraph:
             else False,
         }
 
-    def save_to_file(self, file_path: Union[str, Path]) -> None:
+    def save_to_file(self, file_path: str | Path) -> None:
         """
         Save graph to JSON file.
 
@@ -507,7 +496,7 @@ class KnowledgeGraph:
             logger.error(f"Failed to save graph to {file_path}: {e}")
             raise KnowledgeGraphError(f"Failed to save graph: {e}") from e
 
-    def load_from_file(self, file_path: Union[str, Path]) -> None:
+    def load_from_file(self, file_path: str | Path) -> None:
         """
         Load graph from JSON file.
 
@@ -520,7 +509,7 @@ class KnowledgeGraph:
         try:
             file_path = Path(file_path)
 
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 data = json.load(f)
 
             # Reconstruct graph
@@ -545,17 +534,14 @@ class KnowledgeGraph:
 
     # Helper methods
 
-    def _find_table_by_name(self, table_name: str) -> Optional[str]:
+    def _find_table_by_name(self, table_name: str) -> str | None:
         """Find table node ID by table name."""
         for node, data in self.graph.nodes(data=True):
-            if (
-                data.get("node_type") == NodeType.TABLE
-                and data.get("table_name") == table_name
-            ):
+            if data.get("node_type") == NodeType.TABLE and data.get("table_name") == table_name:
                 return node
         return None
 
-    def _find_process_by_id(self, process_id: str) -> Optional[str]:
+    def _find_process_by_id(self, process_id: str) -> str | None:
         """Find process node by datapoint ID."""
         # Direct lookup if the ID is already in the graph
         if process_id in self.graph:
@@ -564,14 +550,14 @@ class KnowledgeGraph:
                 return process_id
         return None
 
-    def _find_metrics_by_synonyms(self, synonyms: List[str]) -> List[str]:
+    def _find_metrics_by_synonyms(self, synonyms: list[str]) -> list[str]:
         """Find metric node IDs that share synonyms."""
         matching_metrics = []
-        synonym_set = set(s.lower() for s in synonyms)
+        synonym_set = {s.lower() for s in synonyms}
 
         for node, data in self.graph.nodes(data=True):
             if data.get("node_type") == NodeType.METRIC:
-                node_synonyms = set(s.lower() for s in data.get("synonyms", []))
+                node_synonyms = {s.lower() for s in data.get("synonyms", [])}
                 if synonym_set & node_synonyms:  # Intersection
                     matching_metrics.append(node)
 

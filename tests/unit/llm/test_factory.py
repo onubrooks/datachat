@@ -5,14 +5,13 @@ Tests provider creation, configuration, and agent-specific overrides.
 """
 
 import pytest
-from unittest.mock import patch
 
 from backend.config import LLMSettings
-from backend.llm.factory import LLMProviderFactory
-from backend.llm.openai import OpenAIProvider
 from backend.llm.anthropic import AnthropicProvider
+from backend.llm.factory import LLMProviderFactory
 from backend.llm.google import GoogleProvider
 from backend.llm.local import LocalProvider
+from backend.llm.openai import OpenAIProvider
 
 
 @pytest.fixture
@@ -70,9 +69,7 @@ class TestCreateProvider:
 
     def test_create_openai_mini(self, mock_config):
         """Test creating OpenAI provider with mini model."""
-        provider = LLMProviderFactory.create_provider(
-            "openai", mock_config, model_type="mini"
-        )
+        provider = LLMProviderFactory.create_provider("openai", mock_config, model_type="mini")
         assert isinstance(provider, OpenAIProvider)
         assert provider.model == "gpt-4o-mini"
 
@@ -84,9 +81,7 @@ class TestCreateProvider:
 
     def test_create_anthropic_mini(self, mock_config):
         """Test creating Anthropic provider with mini model."""
-        provider = LLMProviderFactory.create_provider(
-            "anthropic", mock_config, model_type="mini"
-        )
+        provider = LLMProviderFactory.create_provider("anthropic", mock_config, model_type="mini")
         assert isinstance(provider, AnthropicProvider)
         assert provider.model == "claude-3-5-haiku-20241022"
 
@@ -98,9 +93,7 @@ class TestCreateProvider:
 
     def test_create_google_mini(self, mock_config):
         """Test creating Google provider with mini model."""
-        provider = LLMProviderFactory.create_provider(
-            "google", mock_config, model_type="mini"
-        )
+        provider = LLMProviderFactory.create_provider("google", mock_config, model_type="mini")
         assert isinstance(provider, GoogleProvider)
         assert provider.model == "gemini-1.5-flash"
 
@@ -150,9 +143,7 @@ class TestCreateDefaultProvider:
 
     def test_can_use_mini_model(self, mock_config):
         """Test can specify mini model."""
-        provider = LLMProviderFactory.create_default_provider(
-            mock_config, model_type="mini"
-        )
+        provider = LLMProviderFactory.create_default_provider(mock_config, model_type="mini")
         assert provider.model == "gpt-4o-mini"
 
     def test_respects_default_provider_setting(self, mock_config):
@@ -167,9 +158,7 @@ class TestCreateAgentProvider:
 
     def test_classifier_uses_override(self, mock_config):
         """Test classifier agent uses classifier_provider override."""
-        provider = LLMProviderFactory.create_agent_provider(
-            "classifier", mock_config
-        )
+        provider = LLMProviderFactory.create_agent_provider("classifier", mock_config)
         assert isinstance(provider, AnthropicProvider)
 
     def test_sql_uses_override(self, mock_config):
@@ -179,9 +168,7 @@ class TestCreateAgentProvider:
 
     def test_fallback_to_default(self, mock_config):
         """Test falls back to default_provider when no override."""
-        provider = LLMProviderFactory.create_agent_provider(
-            "context", mock_config
-        )
+        provider = LLMProviderFactory.create_agent_provider("context", mock_config)
         assert isinstance(provider, OpenAIProvider)
 
     def test_uses_mini_model(self, mock_config):
@@ -195,17 +182,13 @@ class TestCreateAgentProvider:
     def test_nonexistent_override_uses_default(self, mock_config):
         """Test nonexistent override attribute uses default."""
         # "executor" agent doesn't have executor_provider override
-        provider = LLMProviderFactory.create_agent_provider(
-            "executor", mock_config
-        )
+        provider = LLMProviderFactory.create_agent_provider("executor", mock_config)
         assert isinstance(provider, OpenAIProvider)
 
     def test_none_override_uses_default(self, mock_config):
         """Test None override value uses default."""
         mock_config.classifier_provider = None
-        provider = LLMProviderFactory.create_agent_provider(
-            "classifier", mock_config
-        )
+        provider = LLMProviderFactory.create_agent_provider("classifier", mock_config)
         assert isinstance(provider, OpenAIProvider)
 
 

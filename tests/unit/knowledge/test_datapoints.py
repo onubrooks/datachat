@@ -16,7 +16,6 @@ from backend.models.datapoint import (
     SchemaDataPoint,
 )
 
-
 # Path to test fixtures
 FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures" / "datapoints"
 
@@ -171,8 +170,10 @@ class TestLoadDirectory:
         datapoints = loader.load_directory(FIXTURES_DIR, skip_errors=True)
 
         # Should only load .json files
-        assert all(isinstance(dp, (SchemaDataPoint, BusinessDataPoint, ProcessDataPoint))
-                   for dp in datapoints)
+        assert all(
+            isinstance(dp, (SchemaDataPoint, BusinessDataPoint, ProcessDataPoint))
+            for dp in datapoints
+        )
 
     def test_load_directory_with_errors_skip(self, loader):
         """Test loading directory with skip_errors=True."""
@@ -337,7 +338,7 @@ class TestErrorMessages:
         assert len(stats["failed_files"]) == 1
         # Should mention either number of errors or specific field
         error_text = stats["failed_files"][0]["error"]
-        assert ("validation error" in error_text.lower() or "datapoint_id" in error_text)
+        assert "validation error" in error_text.lower() or "datapoint_id" in error_text
 
 
 class TestDataPointTypes:

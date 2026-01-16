@@ -5,11 +5,12 @@ Tests the context retrieval agent that gathers relevant DataPoints
 without making LLM calls.
 """
 
-import pytest
 from unittest.mock import AsyncMock, Mock
 
+import pytest
+
 from backend.agents.context import ContextAgent
-from backend.knowledge.retriever import Retriever, RetrievalMode, RetrievalResult, RetrievedItem
+from backend.knowledge.retriever import RetrievalMode, RetrievalResult, RetrievedItem, Retriever
 from backend.models.agent import (
     ContextAgentInput,
     ContextAgentOutput,
@@ -336,9 +337,7 @@ class TestErrorHandling:
     """Test error handling."""
 
     @pytest.mark.asyncio
-    async def test_retrieval_error_raises_retrieval_error(
-        self, context_agent, mock_retriever
-    ):
+    async def test_retrieval_error_raises_retrieval_error(self, context_agent, mock_retriever):
         """Test retrieval failures raise RetrievalError."""
         mock_retriever.retrieve.side_effect = Exception("Retriever failed")
 
@@ -357,7 +356,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_invalid_input_type_raises_error(self, context_agent):
         """Test invalid input type raises AgentError (ValueError wrapped by BaseAgent)."""
-        from backend.models.agent import AgentInput, AgentError
+        from backend.models.agent import AgentError, AgentInput
 
         invalid_input = AgentInput(query="test")
 
@@ -400,9 +399,7 @@ class TestMetadata:
     """Test metadata tracking."""
 
     @pytest.mark.asyncio
-    async def test_metadata_tracking(
-        self, context_agent, mock_retriever, sample_retrieval_result
-    ):
+    async def test_metadata_tracking(self, context_agent, mock_retriever, sample_retrieval_result):
         """Test execution metadata is tracked correctly."""
         mock_retriever.retrieve.return_value = sample_retrieval_result
 
@@ -444,10 +441,10 @@ class TestInputValidation:
         mock_retriever.retrieve.return_value = sample_retrieval_result
 
         # Valid range is 1-50
-        with pytest.raises(Exception):  # Pydantic validation error
+        with pytest.raises(ValueError):  # Pydantic validation error
             ContextAgentInput(query="test", max_datapoints=0)
 
-        with pytest.raises(Exception):  # Pydantic validation error
+        with pytest.raises(ValueError):  # Pydantic validation error
             ContextAgentInput(query="test", max_datapoints=51)
 
     @pytest.mark.asyncio
@@ -462,7 +459,7 @@ class TestInputValidation:
         assert valid_input.retrieval_mode == "hybrid"
 
         # Invalid mode should fail Pydantic validation
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             ContextAgentInput(
                 query="test",
                 retrieval_mode="invalid_mode",
@@ -474,9 +471,7 @@ class TestDataPointMapping:
     """Test mapping from RetrievedItem to RetrievedDataPoint."""
 
     @pytest.mark.asyncio
-    async def test_maps_node_type_to_datapoint_type(
-        self, context_agent, mock_retriever
-    ):
+    async def test_maps_node_type_to_datapoint_type(self, context_agent, mock_retriever):
         """Test correct mapping from node_type (graph) to DataPoint type."""
         # Create items with node_type instead of type (from knowledge graph)
         result = RetrievalResult(
@@ -525,9 +520,7 @@ class TestDataPointMapping:
         assert datapoints[3].datapoint_type == "Process"  # process → Process
 
     @pytest.mark.asyncio
-    async def test_prefers_type_over_node_type(
-        self, context_agent, mock_retriever
-    ):
+    async def test_prefers_type_over_node_type(self, context_agent, mock_retriever):
         """Test type field takes precedence over node_type (vector store priority)."""
         # Item has both type and node_type - type should win
         result = RetrievalResult(
@@ -558,9 +551,7 @@ class TestDataPointMapping:
         assert dp.datapoint_type == "Business"
 
     @pytest.mark.asyncio
-    async def test_handles_missing_metadata_fields(
-        self, context_agent, mock_retriever
-    ):
+    async def test_handles_missing_metadata_fields(self, context_agent, mock_retriever):
         """Test handles missing optional metadata fields gracefully."""
         # Create item with minimal metadata
         result = RetrievalResult(
