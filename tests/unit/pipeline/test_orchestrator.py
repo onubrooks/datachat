@@ -26,6 +26,7 @@ from backend.models import (
     QueryResult,
     RetrievedDataPoint,
     SQLAgentOutput,
+    SQLValidationError,
     ValidatedSQL,
     ValidatorAgentOutput,
 )
@@ -127,7 +128,7 @@ class TestPipelineExecution:
                     sql="SELECT * FROM test_table",
                     explanation="Simple select query",
                     confidence=0.95,
-                    used_datapoint_ids=["table_001"],
+                    used_datapoints=["table_001"],
                     assumptions=[],
                     clarifying_questions=[],
                 ),
@@ -323,8 +324,6 @@ class TestRetryLogic:
         )
 
         # ValidatorAgent fails first time, passes second time
-        from backend.models import ValidationIssue
-
         validation_call_count = 0
 
         async def validator_side_effect(*args, **kwargs):
@@ -340,10 +339,9 @@ class TestRetryLogic:
                         is_valid=False,
                         is_safe=False,
                         errors=[
-                            ValidationIssue(
-                                issue_type="other",
+                            SQLValidationError(
+                                error_type="schema",
                                 message="Table 'invalid_table' does not exist",
-                                suggestion="Check table name",
                             )
                         ],
                         warnings=[],
@@ -438,7 +436,7 @@ class TestRetryLogic:
                     sql="SELECT * FROM bad_table",
                     explanation="Query",
                     confidence=0.8,
-                    used_datapoint_ids=[],
+                    used_datapoints=[],
                     assumptions=[],
                     clarifying_questions=[],
                 ),
@@ -447,8 +445,6 @@ class TestRetryLogic:
         )
 
         # ValidatorAgent always fails
-        from backend.models import ValidationIssue
-
         pipeline.validator.execute = AsyncMock(
             return_value=ValidatorAgentOutput(
                 success=False,
@@ -457,10 +453,9 @@ class TestRetryLogic:
                     is_valid=False,
                     is_safe=False,
                     errors=[
-                        ValidationIssue(
-                            issue_type="other",
+                        SQLValidationError(
+                            error_type="schema",
                             message="Table does not exist",
-                            suggestion="Fix table name",
                         )
                     ],
                     warnings=[],
@@ -559,7 +554,7 @@ class TestStreaming:
                     sql="SELECT 1",
                     explanation="Test",
                     confidence=0.9,
-                    used_datapoint_ids=[],
+                    used_datapoints=[],
                     assumptions=[],
                     clarifying_questions=[],
                 ),
@@ -700,7 +695,7 @@ class TestErrorHandling:
                     sql="SELECT 1",
                     explanation="Test",
                     confidence=0.9,
-                    used_datapoint_ids=[],
+                    used_datapoints=[],
                     assumptions=[],
                     clarifying_questions=[],
                 ),
@@ -709,8 +704,6 @@ class TestErrorHandling:
         )
 
         # ValidatorAgent always fails to trigger max retries
-        from backend.models import ValidationIssue
-
         pipeline.validator.execute = AsyncMock(
             return_value=ValidatorAgentOutput(
                 success=False,
@@ -718,7 +711,12 @@ class TestErrorHandling:
                     sql="SELECT 1",
                     is_valid=False,
                     is_safe=False,
-                    errors=[ValidationIssue(issue_type="other", message="Error", suggestion="Fix")],
+                    errors=[
+                        SQLValidationError(
+                            error_type="other",
+                            message="Error",
+                        )
+                    ],
                     warnings=[],
                     performance_score=0.0,
                 ),
