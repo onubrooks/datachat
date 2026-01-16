@@ -33,6 +33,18 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "unit: mark test as unit test (default)")
 
 
+def pytest_collection_modifyitems(config, items):
+    """Skip integration tests unless explicitly enabled."""
+    if config.getoption("--run-integration"):
+        return
+    skip_integration = pytest.mark.skip(
+        reason="Integration tests disabled (use --run-integration to enable)."
+    )
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_integration)
+
+
 # ============================================================================
 # Event Loop Configuration
 # ============================================================================
