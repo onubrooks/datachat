@@ -12,6 +12,7 @@ LangGraph-based pipeline that orchestrates all agents:
 import logging
 import time
 from collections.abc import AsyncIterator
+from datetime import UTC
 from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -420,9 +421,7 @@ class DataChatPipeline:
             state["validation_passed"] = (
                 output.validated_sql.is_valid if output.validated_sql else output.success
             )
-            state["is_safe"] = (
-                output.validated_sql.is_safe if output.validated_sql else None
-            )
+            state["is_safe"] = output.validated_sql.is_safe if output.validated_sql else None
             state["validation_errors"] = (
                 [
                     {
@@ -588,9 +587,7 @@ class DataChatPipeline:
 
         retry_count = state.get("retry_count", 0)
         if retry_count <= self.max_retries:
-            logger.info(
-                f"Retrying SQL generation (attempt {retry_count}/{self.max_retries})"
-            )
+            logger.info(f"Retrying SQL generation (attempt {retry_count}/{self.max_retries})")
             return "retry"
 
         return "error"
@@ -708,6 +705,140 @@ class DataChatPipeline:
                 }
 
         logger.info("Pipeline streaming complete")
+
+    async def run_with_streaming(
+        self,
+        query: str,
+        conversation_history: list[Message] | None = None,
+        database_type: str = "postgresql",
+        event_callback: Any = None,
+    ) -> PipelineState:
+        """
+        Run pipeline with callback-based streaming for WebSocket support.
+
+        Args:
+            query: User's natural language query
+            conversation_history: Previous conversation messages
+            database_type: Database type
+            event_callback: Async callback function for streaming events
+                           Signature: async def callback(event_type: str, event_data: dict)
+
+        Returns:
+            Final pipeline state with all outputs
+
+        Event Types:
+            - agent_start: Agent begins execution
+            - agent_complete: Agent finishes execution
+            - data_chunk: Intermediate data from agent (optional)
+        """
+        from datetime import datetime
+
+        initial_state: PipelineState = {
+            "query": query,
+            "conversation_history": conversation_history or [],
+            "database_type": database_type,
+            "current_agent": None,
+            "error": None,
+            "total_cost": 0.0,
+            "total_latency_ms": 0.0,
+            "agent_timings": {},
+            "llm_calls": 0,
+            "retry_count": 0,
+            "retries_exhausted": False,
+            "clarification_needed": False,
+            "clarifying_questions": [],
+            "entities": [],
+            "validation_passed": False,
+            "validation_errors": [],
+            "validation_warnings": [],
+            "key_insights": [],
+            "used_datapoints": [],
+            "assumptions": [],
+        }
+
+        logger.info(f"Starting streaming pipeline for query: {query[:100]}...")
+        pipeline_start = time.time()
+
+        # Stream graph execution and emit events
+        agent_start_times: dict[str, float] = {}
+        final_state: PipelineState | None = None
+
+        async for update in self.graph.astream(initial_state):
+            for _node_name, state_update in update.items():
+                current_agent = state_update.get("current_agent")
+
+                # Agent start event
+                if current_agent and current_agent not in agent_start_times:
+                    agent_start_times[current_agent] = time.time()
+                    if event_callback:
+                        await event_callback(
+                            "agent_start",
+                            {
+                                "agent": current_agent,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            },
+                        )
+
+                # Agent complete event
+                if current_agent and current_agent in agent_start_times:
+                    duration_ms = (time.time() - agent_start_times[current_agent]) * 1000
+                    if event_callback:
+                        # Extract relevant data for this agent
+                        agent_data = {}
+                        if current_agent == "ClassifierAgent":
+                            agent_data = {
+                                "intent": state_update.get("intent"),
+                                "entities": state_update.get("entities", []),
+                                "complexity": state_update.get("complexity"),
+                            }
+                        elif current_agent == "ContextAgent":
+                            agent_data = {
+                                "datapoints_found": len(
+                                    state_update.get("retrieved_datapoints", [])
+                                ),
+                            }
+                        elif current_agent == "SQLAgent":
+                            agent_data = {
+                                "sql_generated": bool(state_update.get("generated_sql")),
+                                "confidence": state_update.get("sql_confidence"),
+                            }
+                        elif current_agent == "ValidatorAgent":
+                            agent_data = {
+                                "validation_passed": state_update.get("validation_passed", False),
+                                "issues_found": len(state_update.get("validation_errors", [])),
+                            }
+                        elif current_agent == "ExecutorAgent":
+                            query_result = state_update.get("query_result")
+                            agent_data = {
+                                "rows_returned": (
+                                    query_result.get("row_count", 0) if query_result else 0
+                                ),
+                                "visualization_hint": state_update.get("visualization_hint"),
+                            }
+
+                        await event_callback(
+                            "agent_complete",
+                            {
+                                "agent": current_agent,
+                                "data": agent_data,
+                                "duration_ms": duration_ms,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            },
+                        )
+
+                final_state = state_update
+
+        # Calculate total latency
+        total_latency_ms = (time.time() - pipeline_start) * 1000
+        if final_state:
+            final_state["total_latency_ms"] = total_latency_ms
+
+        logger.info(
+            f"Pipeline streaming complete in {total_latency_ms:.1f}ms "
+            f"({final_state.get('llm_calls', 0) if final_state else 0} LLM calls)"
+        )
+
+        return final_state or initial_state
 
 
 # ============================================================================

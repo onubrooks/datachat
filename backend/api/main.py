@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 
 from backend.agents.base import AgentError
 from backend.api.routes import chat, health
+from backend.api import websocket
 from backend.config import get_settings
 from backend.connectors.base import ConnectionError as ConnectorConnectionError
 from backend.connectors.base import QueryError
@@ -187,6 +188,7 @@ async def query_error_handler(request: Request, exc: QueryError) -> JSONResponse
 # Include routers
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
+app.include_router(websocket.router, tags=["websocket"])
 
 
 # Root endpoint
