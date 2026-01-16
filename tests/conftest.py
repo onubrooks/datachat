@@ -261,6 +261,7 @@ def mock_llm_provider():
             result = await agent.execute(input)
     """
     from unittest.mock import AsyncMock
+
     from backend.llm.models import LLMResponse, LLMUsage
 
     class MockLLMProvider:

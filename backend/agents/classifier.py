@@ -37,18 +37,26 @@ class ClassifierAgent(BaseAgent):
     Fast and cheap - optimized for speed over complex reasoning.
     """
 
-    def __init__(self):
-        """Initialize ClassifierAgent with LLM provider."""
+    def __init__(self, llm_provider=None):
+        """
+        Initialize ClassifierAgent with LLM provider.
+
+        Args:
+            llm_provider: Optional LLM provider. If None, creates default provider.
+        """
         super().__init__(name="ClassifierAgent")
 
         # Get configuration
         self.config = get_settings()
 
         # Get LLM provider (use mini model for speed/cost)
-        self.llm = LLMProviderFactory.create_default_provider(
-            self.config.llm,
-            model_type="mini"
-        )
+        if llm_provider is None:
+            self.llm = LLMProviderFactory.create_default_provider(
+                self.config.llm,
+                model_type="mini"
+            )
+        else:
+            self.llm = llm_provider
 
     async def execute(self, input: ClassifierAgentInput) -> ClassifierAgentOutput:
         """
