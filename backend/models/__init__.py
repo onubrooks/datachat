@@ -24,13 +24,19 @@ Available Models:
         - ColumnMetadata: Column information
         - Relationship: Table relationships
 
-    API Models (TODO):
+    API Models:
         - ChatRequest: API request model
         - ChatResponse: API response model
+        - HealthResponse: Health check response
+        - ReadinessResponse: Readiness check response
+        - ErrorResponse: Error response
+        - DataSource: Data source information
+        - ChatMetrics: Performance metrics
 
 Usage:
     from backend.models.agent import AgentInput, AgentOutput, AgentError
     from backend.models.datapoint import DataPoint, SchemaDataPoint
+    from backend.models.api import ChatRequest, ChatResponse
     from backend.models import Message
 """
 
@@ -72,6 +78,15 @@ from backend.models.agent import (
     ValidationWarning,
     ValidatorAgentInput,
     ValidatorAgentOutput,
+)
+from backend.models.api import (
+    ChatMetrics,
+    ChatRequest,
+    ChatResponse,
+    DataSource,
+    ErrorResponse,
+    HealthResponse,
+    ReadinessResponse,
 )
 from backend.models.datapoint import (
     BaseDataPoint,
@@ -131,4 +146,12 @@ __all__ = [
     "ProcessDataPoint",
     "ColumnMetadata",
     "Relationship",
+    # API models
+    "ChatRequest",
+    "ChatResponse",
+    "ChatMetrics",
+    "DataSource",
+    "HealthResponse",
+    "ReadinessResponse",
+    "ErrorResponse",
 ]

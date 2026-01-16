@@ -30,6 +30,7 @@ from backend.models import (
     ClassifierAgentInput,
     ContextAgentInput,
     ExecutorAgentInput,
+    GeneratedSQL,
     Message,
     SQLAgentInput,
     ValidatorAgentInput,
@@ -80,6 +81,9 @@ class PipelineState(TypedDict, total=False):
     validation_warnings: list[dict[str, Any]]
     performance_score: float | None
     retry_count: int
+    retries_exhausted: bool
+    validated_sql_object: Any
+    is_safe: bool | None
 
     # Executor output
     query_result: dict[str, Any] | None
@@ -308,6 +312,9 @@ class DataChatPipeline:
         start_time = time.time()
         state["current_agent"] = "SQLAgent"
 
+        if state.get("error"):
+            return state
+
         try:
             # Reconstruct InvestigationMemory from state
             from backend.models import InvestigationMemory, RetrievedDataPoint
@@ -346,18 +353,17 @@ class DataChatPipeline:
                 database_type=state.get("database_type", "postgresql"),
             )
 
-            # Include validation errors from previous attempt if retrying
-            if state.get("retry_count", 0) > 0:
-                input_data.previous_attempt = state.get("generated_sql")
-                input_data.validation_errors = state.get("validation_errors", [])
-
             output = await self.sql.execute(input_data)
 
             # Update state
             state["generated_sql"] = output.generated_sql.sql
             state["sql_explanation"] = output.generated_sql.explanation
             state["sql_confidence"] = output.generated_sql.confidence
-            state["used_datapoints"] = output.generated_sql.used_datapoint_ids
+            state["used_datapoints"] = getattr(
+                output.generated_sql,
+                "used_datapoints",
+                getattr(output.generated_sql, "used_datapoint_ids", []),
+            )
             state["assumptions"] = output.generated_sql.assumptions
 
             # Update metadata
@@ -382,26 +388,49 @@ class DataChatPipeline:
         start_time = time.time()
         state["current_agent"] = "ValidatorAgent"
 
+        if state.get("error"):
+            return state
+
         try:
+            if not state.get("generated_sql"):
+                raise ValueError("Missing generated SQL for validation")
+
+            generated_sql = GeneratedSQL(
+                sql=state["generated_sql"],
+                explanation=state.get("sql_explanation", ""),
+                used_datapoints=state.get("used_datapoints", []),
+                confidence=state.get("sql_confidence", 0.0),
+                assumptions=state.get("assumptions", []),
+                clarifying_questions=state.get("clarifying_questions", []),
+            )
+
             input_data = ValidatorAgentInput(
                 query=state["query"],
                 conversation_history=state.get("conversation_history", []),
-                sql=state["generated_sql"],
-                database_type=state.get("database_type", "postgresql"),
-                available_tables=[
-                    dp["datapoint_id"] for dp in state.get("retrieved_datapoints", [])
-                ],
+                generated_sql=generated_sql,
+                target_database=state.get("database_type", "postgresql"),
                 strict_mode=False,  # Allow warnings
             )
 
             output = await self.validator.execute(input_data)
 
             # Update state
-            state["validated_sql"] = output.validated_sql.sql if output.success else None
-            state["validation_passed"] = output.success
+            state["validated_sql_object"] = output.validated_sql
+            state["validated_sql"] = output.validated_sql.sql if output.validated_sql else None
+            state["validation_passed"] = (
+                output.validated_sql.is_valid if output.validated_sql else output.success
+            )
+            state["is_safe"] = (
+                output.validated_sql.is_safe if output.validated_sql else None
+            )
             state["validation_errors"] = (
                 [
-                    {"message": e.message, "suggestion": e.suggestion}
+                    {
+                        "message": e.message,
+                        "error_type": getattr(e, "error_type", None),
+                        "severity": getattr(e, "severity", None),
+                        "location": getattr(e, "location", None),
+                    }
                     for e in output.validated_sql.errors
                 ]
                 if hasattr(output.validated_sql, "errors")
@@ -409,7 +438,11 @@ class DataChatPipeline:
             )
             state["validation_warnings"] = (
                 [
-                    {"message": w.message, "suggestion": w.suggestion, "severity": w.severity}
+                    {
+                        "message": w.message,
+                        "warning_type": getattr(w, "warning_type", None),
+                        "suggestion": getattr(w, "suggestion", None),
+                    }
                     for w in output.validated_sql.warnings
                 ]
                 if hasattr(output.validated_sql, "warnings")
@@ -431,6 +464,16 @@ class DataChatPipeline:
                     f"ValidatorAgent complete: PASSED (warnings: {len(state['validation_warnings'])})"
                 )
             else:
+                next_retry = state.get("retry_count", 0) + 1
+                if next_retry > self.max_retries:
+                    state["retry_count"] = self.max_retries
+                    state["retries_exhausted"] = True
+                    state["error"] = (
+                        f"Failed to generate valid SQL after {self.max_retries} attempts"
+                    )
+                else:
+                    state["retry_count"] = next_retry
+                    state["retries_exhausted"] = False
                 logger.warning(
                     f"ValidatorAgent complete: FAILED (errors: {len(state['validation_errors'])})"
                 )
@@ -447,16 +490,23 @@ class DataChatPipeline:
         start_time = time.time()
         state["current_agent"] = "ExecutorAgent"
 
+        if state.get("error"):
+            return state
+
         try:
             from backend.models import ValidatedSQL
 
-            validated_sql = ValidatedSQL(
-                sql=state["validated_sql"],
-                is_valid=True,
-                errors=[],
-                warnings=[],
-                performance_score=state.get("performance_score", 1.0),
-            )
+            validated_sql = state.get("validated_sql_object")
+            if validated_sql is None:
+                validated_sql = ValidatedSQL(
+                    sql=state["validated_sql"],
+                    is_valid=True,
+                    errors=[],
+                    warnings=[],
+                    suggestions=[],
+                    is_safe=state.get("is_safe", True),
+                    performance_score=state.get("performance_score", 1.0),
+                )
 
             input_data = ExecutorAgentInput(
                 query=state["query"],
@@ -532,16 +582,17 @@ class DataChatPipeline:
         if state.get("validation_passed"):
             return "execute"
 
+        if state.get("retries_exhausted"):
+            logger.error(f"Max retries ({self.max_retries}) exceeded")
+            return "error"
+
         retry_count = state.get("retry_count", 0)
-        if retry_count < self.max_retries:
-            state["retry_count"] = retry_count + 1
+        if retry_count <= self.max_retries:
             logger.info(
-                f"Retrying SQL generation (attempt {state['retry_count']}/{self.max_retries})"
+                f"Retrying SQL generation (attempt {retry_count}/{self.max_retries})"
             )
             return "retry"
 
-        logger.error(f"Max retries ({self.max_retries}) exceeded")
-        state["error"] = f"Failed to generate valid SQL after {self.max_retries} attempts"
         return "error"
 
     # ========================================================================
@@ -576,6 +627,7 @@ class DataChatPipeline:
             "agent_timings": {},
             "llm_calls": 0,
             "retry_count": 0,
+            "retries_exhausted": False,
             "clarification_needed": False,
             "clarifying_questions": [],
             "entities": [],
@@ -630,6 +682,7 @@ class DataChatPipeline:
             "agent_timings": {},
             "llm_calls": 0,
             "retry_count": 0,
+            "retries_exhausted": False,
             "clarification_needed": False,
             "clarifying_questions": [],
             "entities": [],
