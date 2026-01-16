@@ -274,6 +274,7 @@ class DataChatPipeline:
                 "datapoints": [
                     {
                         "datapoint_id": dp.datapoint_id,
+                        "datapoint_type": dp.datapoint_type,
                         "name": dp.name,
                         "score": dp.score,
                         "source": dp.source,
@@ -281,8 +282,9 @@ class DataChatPipeline:
                     }
                     for dp in output.investigation_memory.datapoints
                 ],
-                "total_found": output.investigation_memory.total_found,
-                "sources": output.investigation_memory.sources,
+                "total_retrieved": output.investigation_memory.total_retrieved,
+                "retrieval_mode": output.investigation_memory.retrieval_mode,
+                "sources_used": output.investigation_memory.sources_used,
             }
             state["retrieved_datapoints"] = state["investigation_memory"]["datapoints"]
 
@@ -313,6 +315,7 @@ class DataChatPipeline:
             datapoints = [
                 RetrievedDataPoint(
                     datapoint_id=dp["datapoint_id"],
+                    datapoint_type=dp["datapoint_type"],
                     name=dp["name"],
                     score=dp["score"],
                     source=dp["source"],
@@ -324,8 +327,16 @@ class DataChatPipeline:
             investigation_memory = InvestigationMemory(
                 query=state["query"],
                 datapoints=datapoints,
-                total_found=len(datapoints),
-                sources=list({dp["source"] for dp in state.get("retrieved_datapoints", [])}),
+                total_retrieved=state.get("investigation_memory", {}).get(
+                    "total_retrieved", len(datapoints)
+                ),
+                retrieval_mode=state.get("investigation_memory", {}).get(
+                    "retrieval_mode", "hybrid"
+                ),
+                sources_used=state.get("investigation_memory", {}).get(
+                    "sources_used",
+                    list({dp["source"] for dp in state.get("retrieved_datapoints", [])}),
+                ),
             )
 
             input_data = SQLAgentInput(
