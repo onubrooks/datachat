@@ -52,8 +52,6 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # Mount source code for development (comment out for production)
-      - ./backend:/app
       # Persistent data
       - chroma_data:/app/chroma_data
       - backend_logs:/app/logs
@@ -77,6 +75,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+        NEXT_PUBLIC_WS_URL: ws://localhost:8000
     container_name: datachat-frontend
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000

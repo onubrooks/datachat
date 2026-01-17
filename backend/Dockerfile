@@ -13,11 +13,11 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 
 # Copy dependency files
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 
-# Install dependencies to virtual environment
+# Install dependencies to virtual environment from lockfile
 RUN uv venv /app/.venv && \
-    uv pip install --no-cache -r pyproject.toml
+    uv pip sync --python /app/.venv/bin/python --frozen --no-cache
 
 # =============================================================================
 # Stage 2: Runtime - Run application

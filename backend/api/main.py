@@ -12,6 +12,7 @@ Usage:
 """
 
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -128,9 +129,15 @@ app = FastAPI(
 
 # CORS middleware for frontend
 config = get_settings()
+cors_origins_env = os.getenv("CORS_ORIGINS", "")
+cors_origins = (
+    [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
+    if cors_origins_env
+    else ["http://localhost:3000", "http://localhost:3001"]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],  # Frontend URLs
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

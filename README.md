@@ -49,6 +49,7 @@ docker-compose up
 ```
 
 That's it! DataChat is now running with:
+
 - **Frontend** on port 3000
 - **Backend API** on port 8000
 - **PostgreSQL** on port 5432
@@ -86,7 +87,7 @@ cp ../.env.example .env
 uvicorn api.main:app --reload --port 8000
 ```
 
-Backend will be available at http://localhost:8000
+Backend will be available at <http://localhost:8000>
 
 ### Frontend Setup
 
@@ -105,7 +106,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Frontend will be available at http://localhost:3000
+Frontend will be available at <http://localhost:3000>
 
 ### Database Setup
 
@@ -125,7 +126,7 @@ CREATE DATABASE datachat;
 
 ### Multi-Agent Pipeline
 
-```
+```text
 User Query
     ↓
 ┌─────────────────┐
@@ -154,6 +155,7 @@ Response + SQL + Data
 ### Tech Stack
 
 **Backend:**
+
 - FastAPI - API framework
 - LangGraph - Agent orchestration
 - Pydantic v2 - Data validation
@@ -163,6 +165,7 @@ Response + SQL + Data
 - OpenAI/Anthropic/Gemini - LLM providers
 
 **Frontend:**
+
 - Next.js 15 - React framework
 - TypeScript - Type safety
 - Tailwind CSS - Styling
@@ -179,6 +182,7 @@ Response + SQL + Data
 See [`.env.example`](.env.example) for all available options.
 
 **Required:**
+
 ```env
 # LLM Provider
 OPENAI_API_KEY=sk-...
@@ -188,6 +192,7 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/datachat
 ```
 
 **Optional:**
+
 ```env
 # Application
 ENVIRONMENT=development
@@ -206,6 +211,7 @@ CHROMA_PERSIST_DIR=./chroma_data
 DataChat supports multiple LLM providers:
 
 **OpenAI (Default):**
+
 ```env
 LLM_DEFAULT_PROVIDER=openai
 LLM_OPENAI_API_KEY=sk-...
@@ -213,6 +219,7 @@ LLM_OPENAI_MODEL=gpt-4o
 ```
 
 **Anthropic (Claude):**
+
 ```env
 LLM_DEFAULT_PROVIDER=anthropic
 LLM_ANTHROPIC_API_KEY=sk-ant-...
@@ -220,6 +227,7 @@ LLM_ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
 ```
 
 **Google (Gemini):**
+
 ```env
 LLM_DEFAULT_PROVIDER=google
 LLM_GOOGLE_API_KEY=...
@@ -227,6 +235,7 @@ LLM_GOOGLE_MODEL=gemini-1.5-pro
 ```
 
 **Per-Agent Overrides:**
+
 ```env
 LLM_CLASSIFIER_PROVIDER=openai    # Fast, cheap model
 LLM_SQL_PROVIDER=anthropic        # Powerful model
@@ -239,7 +248,7 @@ LLM_FALLBACK_PROVIDER=google      # Backup if primary fails
 
 ### Web UI
 
-1. Open http://localhost:3000
+1. Open <http://localhost:3000>
 2. Type your question in natural language
 3. Watch agents process your query in real-time
 4. View SQL, results, and sources
@@ -344,7 +353,7 @@ datachat dp sync --datapoints-dir ./datapoints
 
 ### Project Structure
 
-```
+```text
 datachat/
 ├── backend/                # Python backend
 │   ├── agents/            # Multi-agent pipeline
@@ -430,7 +439,7 @@ See [`k8s/`](k8s/) directory for Kubernetes manifests (coming soon).
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-### Quick Start
+### Quick Starts
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
@@ -489,6 +498,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 ## Acknowledgments
 
 Built with:
+
 - [LangGraph](https://langchain-ai.github.io/langgraph/) - Agent orchestration
 - [FastAPI](https://fastapi.tiangolo.com/) - API framework
 - [Next.js](https://nextjs.org/) - Frontend framework
@@ -497,4 +507,4 @@ Built with:
 
 ---
 
-**Made with ❤️ by the DataChat team**
+## **Made with ❤️ by the DataChat team**
