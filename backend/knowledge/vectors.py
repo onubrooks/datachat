@@ -308,6 +308,43 @@ class VectorStore:
             logger.error(f"Failed to get count: {e}")
             raise VectorStoreError(f"Failed to get count: {e}") from e
 
+    async def list_datapoints(self, limit: int = 1000, offset: int = 0) -> list[dict[str, Any]]:
+        """
+        List DataPoints without embedding calls.
+
+        Args:
+            limit: Maximum number of datapoints to return
+            offset: Offset for pagination
+
+        Returns:
+            List of datapoints with metadata
+        """
+        if not self.collection:
+            raise VectorStoreError("VectorStore not initialized. Call initialize() first.")
+
+        try:
+            results = await asyncio.to_thread(
+                self.collection.get,
+                limit=limit,
+                offset=offset,
+                include=["metadatas"],
+            )
+            items = []
+            ids = results.get("ids") or []
+            metadatas = results.get("metadatas") or []
+            for idx, datapoint_id in enumerate(ids):
+                metadata = metadatas[idx] if idx < len(metadatas) else {}
+                items.append(
+                    {
+                        "datapoint_id": datapoint_id,
+                        "metadata": metadata,
+                    }
+                )
+            return items
+        except Exception as e:
+            logger.error(f"Failed to list datapoints: {e}")
+            raise VectorStoreError(f"Failed to list datapoints: {e}") from e
+
     async def clear(self):
         """
         Clear all DataPoints from the vector store.

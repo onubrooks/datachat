@@ -191,6 +191,9 @@ class OpenAIProvider(BaseLLMProvider):
             # Rough approximation if tiktoken not available
             # ~4 characters per token average
             return len(text) // 4
+        except Exception:
+            # Fallback when tiktoken can't load encodings (e.g., offline)
+            return len(text) // 4
 
     def get_model_info(self, model_name: str | None = None) -> ModelInfo:
         """
