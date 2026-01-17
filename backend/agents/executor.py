@@ -55,8 +55,7 @@ class ExecutorAgent(BaseAgent):
         # Get LLM provider (use mini model for summarization/cost)
         if llm_provider is None:
             self.llm = LLMProviderFactory.create_default_provider(
-                self.config.llm,
-                model_type="mini"
+                self.config.llm, model_type="mini"
             )
         else:
             self.llm = llm_provider
