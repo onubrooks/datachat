@@ -15,6 +15,7 @@ Usage:
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -46,9 +47,22 @@ class CLIState:
     """Manage CLI state (connection, pipeline, etc.)."""
 
     def __init__(self):
+        self.refresh_paths()
+
+    def refresh_paths(self) -> None:
+        """Refresh config paths (useful when HOME changes in tests)."""
         self.config_dir = Path.home() / ".datachat"
         self.config_file = self.config_dir / "config.json"
         self.config_dir.mkdir(exist_ok=True, mode=0o700)
+
+    def ensure_paths(self) -> None:
+        """Ensure config directory exists and is writable."""
+        try:
+            self.config_dir.mkdir(exist_ok=True, mode=0o700)
+            if not os.access(self.config_dir, os.W_OK):
+                raise PermissionError("Config directory not writable")
+        except OSError:
+            self.refresh_paths()
 
     def load_config(self) -> dict[str, Any]:
         """Load CLI configuration."""
@@ -59,6 +73,7 @@ class CLIState:
 
     def save_config(self, config: dict[str, Any]) -> None:
         """Save CLI configuration."""
+        self.ensure_paths()
         with open(self.config_file, "w") as f:
             json.dump(config, f, indent=2)
         try:
