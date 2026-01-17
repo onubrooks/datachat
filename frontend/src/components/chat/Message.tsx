@@ -23,6 +23,16 @@ interface MessageProps {
 
 export function Message({ message }: MessageProps) {
   const isUser = message.role === "user";
+  const columnNames = message.data ? Object.keys(message.data) : [];
+  const rowCount =
+    columnNames.length > 0
+      ? Math.max(
+          ...columnNames.map((column) => message.data?.[column]?.length ?? 0)
+        )
+      : 0;
+  const rows = Array.from({ length: rowCount }, (_, rowIndex) =>
+    columnNames.map((column) => message.data?.[column]?.[rowIndex])
+  );
 
   return (
     <div
@@ -69,12 +79,12 @@ export function Message({ message }: MessageProps) {
           )}
 
           {/* Data Table */}
-          {message.data && message.data.length > 0 && (
+          {message.data && rowCount > 0 && (
             <Card className="mt-4">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm flex items-center gap-2">
                   <TableIcon size={16} />
-                  Results ({message.data.length} rows)
+                  Results ({rowCount} rows)
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -82,7 +92,7 @@ export function Message({ message }: MessageProps) {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b">
-                        {Object.keys(message.data[0]).map((key) => (
+                        {columnNames.map((key) => (
                           <th key={key} className="text-left p-2 font-medium">
                             {key}
                           </th>
@@ -90,9 +100,9 @@ export function Message({ message }: MessageProps) {
                       </tr>
                     </thead>
                     <tbody>
-                      {message.data.slice(0, 10).map((row, idx) => (
+                      {rows.slice(0, 10).map((row, idx) => (
                         <tr key={idx} className="border-b last:border-0">
-                          {Object.values(row).map((value, vidx) => (
+                          {row.map((value, vidx) => (
                             <td key={vidx} className="p-2">
                               {String(value)}
                             </td>
@@ -101,9 +111,9 @@ export function Message({ message }: MessageProps) {
                       ))}
                     </tbody>
                   </table>
-                  {message.data.length > 10 && (
+                  {rowCount > 10 && (
                     <p className="text-xs text-muted-foreground mt-2">
-                      Showing 10 of {message.data.length} rows
+                      Showing 10 of {rowCount} rows
                     </p>
                   )}
                 </div>

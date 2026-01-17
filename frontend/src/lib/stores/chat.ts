@@ -11,7 +11,7 @@ export interface Message extends ChatMessage {
   id: string;
   timestamp: Date;
   sql?: string | null;
-  data?: Record<string, unknown>[] | null;
+  data?: Record<string, unknown[]> | null;
   visualization_hint?: string | null;
   sources?: Array<{
     datapoint_id: string;
@@ -57,9 +57,10 @@ interface ChatState {
   setConnected: (connected: boolean) => void;
   clearMessages: () => void;
   addChatResponse: (query: string, response: ChatResponse) => void;
+  appendToLastMessage: (content: string) => void;
 }
 
-export const useChatStore = create<ChatState>((set) => ({
+export const useChatStore = create<ChatState>((set, get) => ({
   // Initial state
   messages: [],
   conversationId: null,
@@ -157,5 +158,19 @@ export const useChatStore = create<ChatState>((set) => ({
         messages: [...state.messages, userMessage, assistantMessage],
         conversationId: response.conversation_id,
       };
+    }),
+
+  appendToLastMessage: (content) =>
+    set(() => {
+      const messages = [...get().messages];
+      const lastMessage = messages[messages.length - 1];
+      if (!lastMessage) {
+        return { messages };
+      }
+      messages[messages.length - 1] = {
+        ...lastMessage,
+        content: `${lastMessage.content}${content}`,
+      };
+      return { messages };
     }),
 }));

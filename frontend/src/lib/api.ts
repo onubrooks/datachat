@@ -33,7 +33,7 @@ export interface ChatMetrics {
 export interface ChatResponse {
   answer: string;
   sql: string | null;
-  data: Record<string, unknown>[] | null;
+  data: Record<string, unknown[]> | null;
   visualization_hint: string | null;
   sources: DataSource[];
   metrics: ChatMetrics;
@@ -45,6 +45,15 @@ export interface AgentUpdate {
   status: "running" | "completed" | "error";
   message?: string;
   error?: string;
+}
+
+export interface StreamChatHandlers {
+  onOpen?: () => void;
+  onClose?: () => void;
+  onAgentUpdate?: (update: AgentUpdate) => void;
+  onAnswerChunk?: (chunk: string) => void;
+  onComplete?: (response: ChatResponse) => void;
+  onError?: (message: string) => void;
 }
 
 export interface HealthResponse {
@@ -126,34 +135,66 @@ export class DataChatAPI {
 export class DataChatWebSocket {
   private ws: WebSocket | null = null;
   private baseUrl: string;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectDelay = 1000;
 
   constructor(baseUrl: string = WS_BASE_URL) {
     this.baseUrl = baseUrl;
   }
 
   /**
-   * Connect to WebSocket and listen for agent updates
+   * Start a streaming chat session over WebSocket.
    */
-  connect(
-    onUpdate: (update: AgentUpdate) => void,
-    onError?: (error: Event) => void,
-    onClose?: () => void
-  ): void {
+  streamChat(request: ChatRequest, handlers: StreamChatHandlers): void {
     try {
-      this.ws = new WebSocket(`${this.baseUrl}/ws`);
+      this.ws = new WebSocket(`${this.baseUrl}/ws/chat`);
 
       this.ws.onopen = () => {
-        console.log("WebSocket connected");
-        this.reconnectAttempts = 0;
+        this.ws?.send(JSON.stringify(request));
+        handlers.onOpen?.();
       };
 
       this.ws.onmessage = (event) => {
         try {
-          const update: AgentUpdate = JSON.parse(event.data);
-          onUpdate(update);
+          const payload = JSON.parse(event.data) as {
+            event?: string;
+            agent?: string;
+            message?: string;
+            error?: string;
+            chunk?: string;
+          };
+
+          if (payload.event === "agent_start" && payload.agent) {
+            handlers.onAgentUpdate?.({
+              current_agent: payload.agent,
+              status: "running",
+              message: payload.message,
+            });
+            return;
+          }
+
+          if (payload.event === "agent_complete" && payload.agent) {
+            handlers.onAgentUpdate?.({
+              current_agent: payload.agent,
+              status: "completed",
+              message: payload.message,
+            });
+            return;
+          }
+
+          if (payload.event === "answer_chunk" && payload.chunk) {
+            handlers.onAnswerChunk?.(payload.chunk);
+            return;
+          }
+
+          if (payload.event === "complete") {
+            handlers.onComplete?.(payload as ChatResponse);
+            this.disconnect();
+            return;
+          }
+
+          if (payload.event === "error") {
+            handlers.onError?.(payload.message || "WebSocket error");
+            this.disconnect();
+          }
         } catch (error) {
           console.error("Failed to parse WebSocket message:", error);
         }
@@ -161,26 +202,15 @@ export class DataChatWebSocket {
 
       this.ws.onerror = (error) => {
         console.error("WebSocket error:", error);
-        onError?.(error);
+        handlers.onError?.("WebSocket connection error");
       };
 
       this.ws.onclose = () => {
-        console.log("WebSocket disconnected");
-        onClose?.();
-
-        // Attempt to reconnect
-        if (this.reconnectAttempts < this.maxReconnectAttempts) {
-          this.reconnectAttempts++;
-          const delay = this.reconnectDelay * this.reconnectAttempts;
-          console.log(`Reconnecting in ${delay}ms... (attempt ${this.reconnectAttempts})`);
-          setTimeout(() => {
-            this.connect(onUpdate, onError, onClose);
-          }, delay);
-        }
+        handlers.onClose?.();
       };
     } catch (error) {
       console.error("Failed to create WebSocket:", error);
-      onError?.(error as Event);
+      handlers.onError?.("Failed to create WebSocket");
     }
   }
 
@@ -200,7 +230,6 @@ export class DataChatWebSocket {
    */
   disconnect(): void {
     if (this.ws) {
-      this.reconnectAttempts = this.maxReconnectAttempts; // Prevent reconnection
       this.ws.close();
       this.ws = null;
     }

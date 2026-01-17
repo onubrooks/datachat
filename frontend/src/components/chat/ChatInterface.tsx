@@ -19,7 +19,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Card } from "../ui/card";
 import { useChatStore } from "@/lib/stores/chat";
-import { apiClient, wsClient } from "@/lib/api";
+import { wsClient } from "@/lib/api";
 
 export function ChatInterface() {
   const {
@@ -27,12 +27,15 @@ export function ChatInterface() {
     conversationId,
     isLoading,
     isConnected,
-    addChatResponse,
     setLoading,
     setConnected,
     setAgentUpdate,
     resetAgentStatus,
     clearMessages,
+    addMessage,
+    updateLastMessage,
+    setConversationId,
+    appendToLastMessage,
   } = useChatStore();
 
   const [input, setInput] = useState("");
@@ -44,61 +47,79 @@ export function ChatInterface() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Initialize WebSocket connection
-  useEffect(() => {
-    // Connect to WebSocket
-    wsClient.connect(
-      (update) => {
-        setAgentUpdate(update);
-      },
-      (error) => {
-        console.error("WebSocket error:", error);
-        setConnected(false);
-      },
-      () => {
-        setConnected(false);
-      }
-    );
-
-    // Update connection status
-    const interval = setInterval(() => {
-      setConnected(wsClient.isConnected());
-    }, 1000);
-
-    // Cleanup
-    return () => {
-      clearInterval(interval);
-      wsClient.disconnect();
-    };
-  }, [setAgentUpdate, setConnected]);
-
   // Handle send message
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
 
     const query = input.trim();
+    const conversationHistory = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
     setInput("");
     setError(null);
     setLoading(true);
     resetAgentStatus();
 
-    try {
-      const response = await apiClient.chat({
-        message: query,
-        conversation_id: conversationId || undefined,
-        conversation_history: messages.map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
-      });
+    addMessage({
+      role: "user",
+      content: query,
+    });
 
-      addChatResponse(query, response);
+    addMessage({
+      role: "assistant",
+      content: "",
+    });
+
+    try {
+      wsClient.streamChat(
+        {
+          message: query,
+          conversation_id: conversationId || undefined,
+          conversation_history: conversationHistory,
+        },
+        {
+          onOpen: () => {
+            setConnected(true);
+          },
+          onClose: () => {
+            setConnected(false);
+            setLoading(false);
+          },
+          onAgentUpdate: (update) => {
+            setAgentUpdate(update);
+          },
+          onAnswerChunk: (chunk) => {
+            appendToLastMessage(chunk);
+          },
+          onComplete: (response) => {
+            updateLastMessage({
+              content: response.answer,
+              sql: response.sql,
+              data: response.data,
+              visualization_hint: response.visualization_hint,
+              sources: response.sources,
+              metrics: response.metrics,
+            });
+            if (response.conversation_id) {
+              setConversationId(response.conversation_id);
+            }
+            setLoading(false);
+            resetAgentStatus();
+          },
+          onError: (message) => {
+            setError(message);
+            setLoading(false);
+            resetAgentStatus();
+          },
+        }
+      );
     } catch (err) {
       console.error("Chat error:", err);
       setError(
         err instanceof Error ? err.message : "Failed to send message"
       );
-    } finally {
       setLoading(false);
       resetAgentStatus();
     }
@@ -216,7 +237,7 @@ export function ChatInterface() {
           </Button>
         </div>
         <p className="text-xs text-muted-foreground mt-2">
-          Press Enter to send, Shift+Enter for new line
+          Press Enter to send
         </p>
       </div>
     </div>

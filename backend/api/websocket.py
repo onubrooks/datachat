@@ -139,6 +139,11 @@ async def websocket_chat(websocket: WebSocket) -> None:
         data_result = None
         if query_result and isinstance(query_result, dict):
             data_result = query_result.get("data")
+            if data_result is None:
+                rows = query_result.get("rows")
+                columns = query_result.get("columns")
+                if isinstance(rows, list) and isinstance(columns, list):
+                    data_result = {col: [row.get(col) for row in rows] for col in columns}
 
         visualization_hint = result.get("visualization_hint")
 
