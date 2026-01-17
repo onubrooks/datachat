@@ -48,7 +48,7 @@ class CLIState:
     def __init__(self):
         self.config_dir = Path.home() / ".datachat"
         self.config_file = self.config_dir / "config.json"
-        self.config_dir.mkdir(exist_ok=True)
+        self.config_dir.mkdir(exist_ok=True, mode=0o700)
 
     def load_config(self) -> dict[str, Any]:
         """Load CLI configuration."""
@@ -61,6 +61,10 @@ class CLIState:
         """Save CLI configuration."""
         with open(self.config_file, "w") as f:
             json.dump(config, f, indent=2)
+        try:
+            self.config_file.chmod(0o600)
+        except OSError:
+            pass
 
     def get_connection_string(self) -> str | None:
         """Get stored connection string."""
@@ -171,6 +175,20 @@ def format_answer(answer: str, sql: str | None = None, data: dict | None = None)
         console.print(table)
 
 
+def _build_columnar_data(query_result: dict[str, Any] | None) -> dict[str, list] | None:
+    """Build columnar data from query results."""
+    if not query_result:
+        return None
+    data = query_result.get("data")
+    if data is not None:
+        return data
+    rows = query_result.get("rows")
+    columns = query_result.get("columns")
+    if isinstance(rows, list) and isinstance(columns, list):
+        return {col: [row.get(col) for row in rows] for col in columns}
+    return None
+
+
 # ============================================================================
 # CLI Commands
 # ============================================================================
@@ -227,7 +245,7 @@ def chat():
                     answer = result.get("natural_language_answer", "No answer generated")
                     sql = result.get("validated_sql") or result.get("generated_sql")
                     query_result = result.get("query_result")
-                    data = query_result.get("data") if query_result else None
+                    data = _build_columnar_data(query_result)
 
                     # Display results
                     console.print()
@@ -286,7 +304,7 @@ def ask(query: str):
             answer = result.get("natural_language_answer", "No answer generated")
             sql = result.get("validated_sql") or result.get("generated_sql")
             query_result = result.get("query_result")
-            data = query_result.get("data") if query_result else None
+            data = _build_columnar_data(query_result)
 
             # Display results
             console.print()
@@ -433,9 +451,8 @@ def list_datapoints():
             vector_store = VectorStore()
             await vector_store.initialize()
 
-            # Get all datapoints from vector store
-            # Note: This is a simple implementation - in production you might want pagination
-            results = await vector_store.search("", k=1000)
+            # Get all datapoints without embedding calls
+            results = await vector_store.list_datapoints(limit=1000)
 
             if not results:
                 console.print("[yellow]No DataPoints found[/yellow]")
@@ -454,11 +471,13 @@ def list_datapoints():
 
             for result in results:
                 metadata = result.get("metadata", {})
+                score = result.get("distance")
+                score_text = f"{score:.3f}" if isinstance(score, (int, float)) else "-"
                 table.add_row(
                     metadata.get("datapoint_id", "unknown"),
                     metadata.get("type", "unknown"),
                     metadata.get("name", "unknown"),
-                    f"{result.get('distance', 0):.3f}",
+                    score_text,
                 )
 
             console.print(table)
