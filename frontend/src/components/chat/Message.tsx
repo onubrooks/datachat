@@ -1,0 +1,172 @@
+/**
+ * Message Component
+ *
+ * Displays a single chat message with support for:
+ * - User and assistant messages
+ * - SQL code blocks
+ * - Data tables
+ * - Source citations
+ * - Performance metrics
+ */
+
+"use client";
+
+import React from "react";
+import { User, Bot, Code, Table as TableIcon, BookOpen, Clock } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
+import { cn } from "@/lib/utils";
+import type { Message as MessageType } from "@/lib/stores/chat";
+
+interface MessageProps {
+  message: MessageType;
+}
+
+export function Message({ message }: MessageProps) {
+  const isUser = message.role === "user";
+
+  return (
+    <div
+      className={cn(
+        "flex gap-3 mb-4",
+        isUser ? "justify-end" : "justify-start"
+      )}
+    >
+      {/* Avatar */}
+      {!isUser && (
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground">
+          <Bot size={18} />
+        </div>
+      )}
+
+      {/* Message Content */}
+      <div className={cn("flex-1 max-w-3xl", isUser && "flex justify-end")}>
+        <div
+          className={cn(
+            "rounded-lg px-4 py-3",
+            isUser
+              ? "bg-primary text-primary-foreground"
+              : "bg-muted text-muted-foreground"
+          )}
+        >
+          {/* Main message text */}
+          <div className="whitespace-pre-wrap">{message.content}</div>
+
+          {/* SQL Query */}
+          {message.sql && (
+            <Card className="mt-4">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Code size={16} />
+                  Generated SQL
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <pre className="bg-secondary p-3 rounded text-sm overflow-x-auto">
+                  <code>{message.sql}</code>
+                </pre>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Data Table */}
+          {message.data && message.data.length > 0 && (
+            <Card className="mt-4">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <TableIcon size={16} />
+                  Results ({message.data.length} rows)
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        {Object.keys(message.data[0]).map((key) => (
+                          <th key={key} className="text-left p-2 font-medium">
+                            {key}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {message.data.slice(0, 10).map((row, idx) => (
+                        <tr key={idx} className="border-b last:border-0">
+                          {Object.values(row).map((value, vidx) => (
+                            <td key={vidx} className="p-2">
+                              {String(value)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {message.data.length > 10 && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Showing 10 of {message.data.length} rows
+                    </p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Sources */}
+          {message.sources && message.sources.length > 0 && (
+            <Card className="mt-4">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <BookOpen size={16} />
+                  Sources
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-2">
+                  {message.sources.map((source) => (
+                    <li
+                      key={source.datapoint_id}
+                      className="text-sm flex items-start gap-2"
+                    >
+                      <span className="text-xs px-2 py-0.5 rounded bg-secondary">
+                        {source.type}
+                      </span>
+                      <span className="flex-1">
+                        {source.name}
+                        <span className="text-xs text-muted-foreground ml-2">
+                          (score: {source.relevance_score.toFixed(2)})
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Metrics */}
+          {message.metrics && (
+            <div className="mt-3 flex items-center gap-4 text-xs text-muted-foreground">
+              <div className="flex items-center gap-1">
+                <Clock size={12} />
+                {message.metrics.total_latency_ms}ms
+              </div>
+              {message.metrics.llm_calls > 0 && (
+                <div>LLM calls: {message.metrics.llm_calls}</div>
+              )}
+              {message.metrics.retry_count > 0 && (
+                <div>Retries: {message.metrics.retry_count}</div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* User Avatar */}
+      {isUser && (
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-secondary flex items-center justify-center text-secondary-foreground">
+          <User size={18} />
+        </div>
+      )}
+    </div>
+  );
+}
