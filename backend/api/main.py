@@ -20,8 +20,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.agents.base import AgentError
-from backend.api.routes import chat, health
 from backend.api import websocket
+from backend.api.routes import chat, health
 from backend.config import get_settings
 from backend.connectors.base import ConnectionError as ConnectorConnectionError
 from backend.connectors.base import QueryError
