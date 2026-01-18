@@ -205,6 +205,13 @@ DATABASE_CREDENTIALS_KEY=replace_with_fernet_key
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
+### Database Registry
+
+DataChat stores database connections in the system PostgreSQL database with encrypted URLs. Set
+`DATABASE_CREDENTIALS_KEY` in your environment and use the API endpoints under `/api/v1/databases`
+to add connections and set a default. Chat requests can target a specific connection by passing
+`target_database` (connection ID) in the chat request.
+
 **Optional:**
 
 ```env
