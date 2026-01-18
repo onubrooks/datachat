@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 
 from backend.agents.base import AgentError
 from backend.api import websocket
-from backend.api.routes import chat, databases, health, system
+from backend.api.routes import chat, databases, health, profiling, system
 from backend.config import get_settings
 from backend.connectors.base import ConnectionError as ConnectorConnectionError
 from backend.connectors.base import QueryError
@@ -41,6 +41,7 @@ app_state = {
     "knowledge_graph": None,
     "connector": None,
     "database_manager": None,
+    "profiling_store": None,
 }
 
 
@@ -105,6 +106,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.warning(f"Database registry unavailable: {e}")
             app_state["database_manager"] = None
 
+        # Initialize profiling store
+        logger.info("Initializing profiling store...")
+        try:
+            from backend.profiling.store import ProfilingStore
+
+            profiling_store = ProfilingStore()
+            await profiling_store.initialize()
+            app_state["profiling_store"] = profiling_store
+        except Exception as e:
+            logger.warning(f"Profiling store unavailable: {e}")
+            app_state["profiling_store"] = None
+
         # Initialize pipeline
         logger.info("Initializing pipeline orchestrator...")
         pipeline = DataChatPipeline(
@@ -135,6 +148,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 logger.info("Database registry closed")
             except Exception as e:
                 logger.error(f"Error closing database registry: {e}")
+
+        if app_state["profiling_store"]:
+            try:
+                await app_state["profiling_store"].close()
+                logger.info("Profiling store closed")
+            except Exception as e:
+                logger.error(f"Error closing profiling store: {e}")
 
         logger.info("DataChat API server shut down complete")
 
@@ -217,6 +237,7 @@ app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
 app.include_router(system.router, prefix="/api/v1", tags=["system"])
 app.include_router(databases.router, prefix="/api/v1", tags=["databases"])
+app.include_router(profiling.router, prefix="/api/v1", tags=["profiling"])
 app.include_router(websocket.router, tags=["websocket"])
 
 

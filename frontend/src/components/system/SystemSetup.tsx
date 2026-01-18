@@ -88,7 +88,7 @@ export function SystemSetup({
               onChange={(event) => setAutoProfile(event.target.checked)}
               disabled={isSubmitting}
             />
-            Auto-profile the database (coming soon)
+            Auto-profile the database (generate DataPoints draft)
           </label>
           {error && (
             <div className="text-xs text-destructive">{error}</div>
