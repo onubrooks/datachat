@@ -133,6 +133,50 @@ class ReadinessResponse(BaseModel):
     }
 
 
+class SetupStep(BaseModel):
+    """Setup step required to initialize the system."""
+
+    step: str = Field(..., description="Setup step identifier")
+    title: str = Field(..., description="Short step title")
+    description: str = Field(..., description="Description of the setup step")
+    action: str = Field(..., description="Suggested action key for clients")
+
+
+class SystemStatusResponse(BaseModel):
+    """Initialization status response."""
+
+    is_initialized: bool = Field(..., description="Whether the system is ready for queries")
+    has_databases: bool = Field(..., description="Whether a database connection is available")
+    has_datapoints: bool = Field(..., description="Whether DataPoints are loaded")
+    setup_required: list[SetupStep] = Field(
+        default_factory=list, description="Required setup steps"
+    )
+
+
+class SystemInitializeRequest(BaseModel):
+    """Initialization request payload."""
+
+    database_url: str | None = Field(
+        None, description="Database URL to use for initialization"
+    )
+    auto_profile: bool = Field(
+        default=False,
+        description="Whether to auto-profile the database (not implemented yet)",
+    )
+
+
+class SystemInitializeResponse(BaseModel):
+    """Initialization response payload."""
+
+    message: str = Field(..., description="Initialization status message")
+    is_initialized: bool = Field(..., description="Whether the system is ready for queries")
+    has_databases: bool = Field(..., description="Whether a database connection is available")
+    has_datapoints: bool = Field(..., description="Whether DataPoints are loaded")
+    setup_required: list[SetupStep] = Field(
+        default_factory=list, description="Required setup steps"
+    )
+
+
 class ErrorResponse(BaseModel):
     """Error response model."""
 

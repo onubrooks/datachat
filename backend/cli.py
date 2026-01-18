@@ -29,6 +29,7 @@ from rich.table import Table
 
 from backend.config import get_settings
 from backend.connectors.postgres import PostgresConnector
+from backend.initialization.initializer import SystemInitializer
 from backend.knowledge.datapoints import DataPointLoader
 from backend.knowledge.graph import KnowledgeGraph
 from backend.knowledge.retriever import Retriever
@@ -143,6 +144,20 @@ async def create_pipeline_from_config() -> DataChatPipeline:
         console.print(f"[red]Failed to connect to database: {e}[/red]")
         console.print("[yellow]Hint: Use 'datachat connect' to set connection string[/yellow]")
         raise
+
+    initializer = SystemInitializer(
+        {
+            "connector": connector,
+            "vector_store": vector_store,
+        }
+    )
+    status_state = await initializer.status()
+    if not status_state.is_initialized:
+        console.print("[red]DataChat requires setup before queries can run.[/red]")
+        for step in status_state.setup_required:
+            console.print(f"[yellow]- {step.title}: {step.description}[/yellow]")
+        console.print("[cyan]Hint: Run 'datachat setup' to continue.[/cyan]")
+        raise click.ClickException("System not initialized")
 
     # Create pipeline
     pipeline = DataChatPipeline(
@@ -444,6 +459,48 @@ def status():
         console.print(table)
 
     asyncio.run(check_status())
+
+
+@cli.command()
+def setup():
+    """Guide system initialization for first-time setup."""
+
+    async def run_setup():
+        settings = get_settings()
+        default_url = state.get_connection_string() or str(settings.database.url)
+
+        console.print(
+            Panel.fit(
+                "[bold green]DataChat Setup[/bold green]\n"
+                "Initialize your database connection and load DataPoints.",
+                border_style="green",
+            )
+        )
+
+        database_url = click.prompt("Database URL", default=default_url, show_default=True)
+        auto_profile = click.confirm(
+            "Auto-profile database (coming soon)", default=False, show_default=True
+        )
+
+        vector_store = VectorStore()
+        await vector_store.initialize()
+
+        initializer = SystemInitializer({"vector_store": vector_store})
+        status_state, message = await initializer.initialize(
+            database_url=database_url,
+            auto_profile=auto_profile,
+        )
+
+        console.print(f"[green]{message}[/green]")
+        if status_state.setup_required:
+            console.print("[yellow]Remaining setup steps:[/yellow]")
+            for step in status_state.setup_required:
+                console.print(f"- {step.title}: {step.description}")
+            console.print("[cyan]Hint: Run 'datachat dp sync' after adding DataPoints.[/cyan]")
+        else:
+            console.print("[green]✓ System initialized. You're ready to query.[/green]")
+
+    asyncio.run(run_setup())
 
 
 # ============================================================================

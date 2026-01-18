@@ -7,6 +7,7 @@ Tests the DataChat CLI commands.
 import json
 from unittest.mock import AsyncMock, patch
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -15,8 +16,11 @@ from backend.cli import (
     cli,
     connect,
     datapoint,
+    create_pipeline_from_config,
+    setup,
     status,
 )
+from backend.initialization.initializer import SystemStatus
 
 
 class TestCLIBasics:
@@ -63,6 +67,12 @@ class TestCLIBasics:
         result = runner.invoke(cli, ["status", "--help"])
         assert result.exit_code == 0
         assert "Show connection and system status" in result.output
+
+    def test_setup_command_exists(self, runner):
+        """Test that setup command exists."""
+        result = runner.invoke(cli, ["setup", "--help"])
+        assert result.exit_code == 0
+        assert "Guide system initialization" in result.output
 
     def test_datapoint_group_exists(self, runner):
         """Test that datapoint command group exists."""
@@ -334,6 +344,55 @@ class TestCLIErrorHandling:
         result = runner.invoke(datapoint, ["add", "schema", str(non_existent)])
         assert result.exit_code != 0
 
+    @pytest.mark.asyncio
+    async def test_cli_blocks_when_system_not_initialized(self):
+        """Ensure CLI prevents queries when setup is incomplete."""
+        not_initialized = SystemStatus(
+            is_initialized=False,
+            has_databases=True,
+            has_datapoints=False,
+            setup_required=[],
+        )
+        with patch(
+            "backend.cli.SystemInitializer.status",
+            new=AsyncMock(return_value=not_initialized),
+        ):
+            with patch("backend.cli.VectorStore.initialize", new=AsyncMock()):
+                with patch("backend.cli.PostgresConnector.connect", new=AsyncMock()):
+                    with pytest.raises(click.ClickException):
+                        await create_pipeline_from_config()
+
+
+class TestCLISetup:
+    """Test setup command."""
+
+    @pytest.fixture
+    def runner(self):
+        return CliRunner()
+
+    def test_setup_command_runs(self, runner):
+        with (
+            patch("backend.cli.VectorStore.initialize", new=AsyncMock()),
+            patch(
+                "backend.cli.SystemInitializer.initialize",
+                new=AsyncMock(
+                    return_value=(
+                        SystemStatus(
+                            is_initialized=True,
+                            has_databases=True,
+                            has_datapoints=True,
+                            setup_required=[],
+                        ),
+                        "Initialization completed.",
+                    )
+                ),
+            ),
+            patch("click.prompt", return_value="postgresql://user@localhost/db"),
+            patch("click.confirm", return_value=False),
+        ):
+            result = runner.invoke(setup)
+            assert result.exit_code == 0
+
 
 class TestCLIIntegration:
     """Integration-style tests for CLI commands."""
@@ -350,6 +409,7 @@ class TestCLIIntegration:
             ["chat", "--help"],
             ["ask", "--help"],
             ["connect", "--help"],
+            ["setup", "--help"],
             ["status", "--help"],
             ["dp", "--help"],
             ["dp", "list", "--help"],
@@ -371,6 +431,7 @@ class TestCLIIntegration:
         assert "chat" in result.output
         assert "ask" in result.output
         assert "connect" in result.output
+        assert "setup" in result.output
         assert "status" in result.output
         assert "dp" in result.output
 

@@ -47,6 +47,33 @@ export interface AgentUpdate {
   error?: string;
 }
 
+export interface SetupStep {
+  step: string;
+  title: string;
+  description: string;
+  action: string;
+}
+
+export interface SystemStatusResponse {
+  is_initialized: boolean;
+  has_databases: boolean;
+  has_datapoints: boolean;
+  setup_required: SetupStep[];
+}
+
+export interface SystemInitializeRequest {
+  database_url?: string;
+  auto_profile: boolean;
+}
+
+export interface SystemInitializeResponse {
+  message: string;
+  is_initialized: boolean;
+  has_databases: boolean;
+  has_datapoints: boolean;
+  setup_required: SetupStep[];
+}
+
 export interface StreamChatHandlers {
   onOpen?: () => void;
   onClose?: () => void;
@@ -54,6 +81,7 @@ export interface StreamChatHandlers {
   onAnswerChunk?: (chunk: string) => void;
   onComplete?: (response: ChatResponse) => void;
   onError?: (message: string) => void;
+  onSystemNotInitialized?: (steps: SetupStep[], message: string) => void;
 }
 
 export interface HealthResponse {
@@ -127,6 +155,43 @@ export class DataChatAPI {
 
     return response.json();
   }
+
+  /**
+   * Check system initialization status
+   */
+  async systemStatus(): Promise<SystemStatusResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/system/status`);
+
+    if (!response.ok) {
+      throw new Error(`System status failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Initialize system with database connection
+   */
+  async systemInitialize(
+    payload: SystemInitializeRequest
+  ): Promise<SystemInitializeResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/system/initialize`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({
+        message: response.statusText,
+      }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+
+    return response.json();
+  }
 }
 
 /**
@@ -192,7 +257,14 @@ export class DataChatWebSocket {
           }
 
           if (payload.event === "error") {
-            handlers.onError?.(payload.message || "WebSocket error");
+            if (payload.error === "system_not_initialized") {
+              handlers.onSystemNotInitialized?.(
+                (payload as { setup_steps?: SetupStep[] }).setup_steps || [],
+                payload.message || "DataChat requires setup."
+              );
+            } else {
+              handlers.onError?.(payload.message || "WebSocket error");
+            }
             this.disconnect();
           }
         } catch (error) {
