@@ -55,6 +55,16 @@ That's it! DataChat is now running with:
 - **PostgreSQL** on port 5432
 - **ChromaDB** for vector storage
 
+> **⚠️ Important:** Before you can query your data, you must create **DataPoints** (JSON files describing your database schema). DataPoints tell DataChat about your tables, columns, and business logic.
+>
+> **Quick Setup:**
+>
+> 1. Create DataPoint files in `datapoints/tables/` (see examples in [GETTING_STARTED.md](GETTING_STARTED.md))
+> 2. Load them: `docker-compose exec backend datachat dp sync`
+> 3. Verify: `docker-compose exec backend datachat dp list`
+>
+> **Without DataPoints, queries will fail.** See [GETTING_STARTED.md](GETTING_STARTED.md) for complete instructions.
+
 ---
 
 ## Manual Installation
@@ -69,22 +79,19 @@ That's it! DataChat is now running with:
 ### Backend Setup
 
 ```bash
-# 1. Navigate to backend
-cd backend
-
-# 2. Create virtual environment
+# 1. Create virtual environment (run from repo root)
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# 3. Install dependencies
+# 2. Install dependencies
 pip install -e .
 
-# 4. Set up environment
-cp ../.env.example .env
+# 3. Set up environment
+cp .env.example .env
 # Edit .env with your configuration
 
-# 5. Start the server
-uvicorn api.main:app --reload --port 8000
+# 4. Start the server
+uvicorn backend.api.main:app --reload --port 8000
 ```
 
 Backend will be available at <http://localhost:8000>
@@ -185,7 +192,7 @@ See [`.env.example`](.env.example) for all available options.
 
 ```env
 # LLM Provider
-OPENAI_API_KEY=sk-...
+LLM_OPENAI_API_KEY=sk-...
 
 # Database
 DATABASE_URL=postgresql://user:pass@localhost:5432/datachat
@@ -199,8 +206,8 @@ ENVIRONMENT=development
 LOG_LEVEL=INFO
 
 # Alternative LLM providers
-ANTHROPIC_API_KEY=sk-ant-...
-GOOGLE_API_KEY=...
+LLM_ANTHROPIC_API_KEY=sk-ant-...
+LLM_GOOGLE_API_KEY=...
 
 # ChromaDB
 CHROMA_PERSIST_DIR=./chroma_data
