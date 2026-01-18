@@ -17,6 +17,7 @@ from backend.cli import (
     connect,
     datapoint,
     create_pipeline_from_config,
+    setup,
     status,
 )
 from backend.initialization.initializer import SystemStatus
@@ -66,6 +67,12 @@ class TestCLIBasics:
         result = runner.invoke(cli, ["status", "--help"])
         assert result.exit_code == 0
         assert "Show connection and system status" in result.output
+
+    def test_setup_command_exists(self, runner):
+        """Test that setup command exists."""
+        result = runner.invoke(cli, ["setup", "--help"])
+        assert result.exit_code == 0
+        assert "Guide system initialization" in result.output
 
     def test_datapoint_group_exists(self, runner):
         """Test that datapoint command group exists."""
@@ -356,6 +363,37 @@ class TestCLIErrorHandling:
                         await create_pipeline_from_config()
 
 
+class TestCLISetup:
+    """Test setup command."""
+
+    @pytest.fixture
+    def runner(self):
+        return CliRunner()
+
+    def test_setup_command_runs(self, runner):
+        with (
+            patch("backend.cli.VectorStore.initialize", new=AsyncMock()),
+            patch(
+                "backend.cli.SystemInitializer.initialize",
+                new=AsyncMock(
+                    return_value=(
+                        SystemStatus(
+                            is_initialized=True,
+                            has_databases=True,
+                            has_datapoints=True,
+                            setup_required=[],
+                        ),
+                        "Initialization completed.",
+                    )
+                ),
+            ),
+            patch("click.prompt", return_value="postgresql://user@localhost/db"),
+            patch("click.confirm", return_value=False),
+        ):
+            result = runner.invoke(setup)
+            assert result.exit_code == 0
+
+
 class TestCLIIntegration:
     """Integration-style tests for CLI commands."""
 
@@ -371,6 +409,7 @@ class TestCLIIntegration:
             ["chat", "--help"],
             ["ask", "--help"],
             ["connect", "--help"],
+            ["setup", "--help"],
             ["status", "--help"],
             ["dp", "--help"],
             ["dp", "list", "--help"],
@@ -392,6 +431,7 @@ class TestCLIIntegration:
         assert "chat" in result.output
         assert "ask" in result.output
         assert "connect" in result.output
+        assert "setup" in result.output
         assert "status" in result.output
         assert "dp" in result.output
 
