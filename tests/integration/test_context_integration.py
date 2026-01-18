@@ -6,6 +6,7 @@ These tests verify that the agent can successfully retrieve relevant context
 from the knowledge base.
 """
 
+import os
 import tempfile
 
 import pytest
@@ -165,12 +166,15 @@ async def populated_vector_store(
     sample_schema_datapoints, sample_business_datapoints, sample_process_datapoints
 ):
     """Create and populate VectorStore with sample data."""
+    openai_key = os.getenv("LLM_OPENAI_API_KEY")
+    if not openai_key:
+        pytest.skip("LLM_OPENAI_API_KEY not set for integration test.")
     with tempfile.TemporaryDirectory() as tmpdir:
         vector_store = VectorStore(
             collection_name="test_context_integration",
             persist_directory=tmpdir,
             embedding_model="text-embedding-3-small",
-            openai_api_key="sk-test-key-for-integration-tests-12345678901234567890123456789012",
+            openai_api_key=openai_key,
         )
 
         await vector_store.initialize()

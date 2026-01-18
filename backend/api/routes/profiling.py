@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from backend.database.manager import DatabaseConnectionManager
 from backend.profiling.generator import DataPointGenerator
@@ -240,7 +240,7 @@ async def approve_datapoint(
     from backend.models.datapoint import DataPoint
     from backend.sync.orchestrator import save_datapoint_to_disk
 
-    datapoint = DataPoint.model_validate(pending.datapoint)
+    datapoint = TypeAdapter(DataPoint).validate_python(pending.datapoint)
     save_datapoint_to_disk(
         datapoint.model_dump(mode="json"), _datapoint_path(datapoint.datapoint_id)
     )
@@ -272,7 +272,7 @@ async def bulk_approve_datapoints() -> PendingDataPointListResponse:
     from backend.models.datapoint import DataPoint
     from backend.sync.orchestrator import save_datapoint_to_disk
 
-    datapoints = [DataPoint.model_validate(item.datapoint) for item in approved]
+    datapoints = [TypeAdapter(DataPoint).validate_python(item.datapoint) for item in approved]
     if datapoints:
         for datapoint in datapoints:
             save_datapoint_to_disk(

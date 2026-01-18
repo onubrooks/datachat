@@ -21,6 +21,17 @@ class TestWebSocketStreaming:
         """Create test client."""
         return TestClient(app)
 
+    def _app_state_for_pipeline(self, pipeline: AsyncMock | None):
+        vector_store = AsyncMock()
+        vector_store.get_count = AsyncMock(return_value=1)
+        connector = AsyncMock()
+        connector.connect = AsyncMock(return_value=None)
+        return {
+            "pipeline": pipeline,
+            "vector_store": vector_store,
+            "connector": connector,
+        }
+
     @pytest.fixture
     def mock_pipeline_result(self):
         """Mock successful pipeline result."""
@@ -58,19 +69,20 @@ class TestWebSocketStreaming:
 
     def test_websocket_connects_successfully(self, client):
         """Test that WebSocket connection is established successfully."""
-        with patch("backend.api.main.app_state") as mock_app_state:
-            mock_pipeline = AsyncMock()
-            mock_pipeline.run_with_streaming = AsyncMock(
-                return_value={
-                    "natural_language_answer": "Test answer",
-                    "total_latency_ms": 1000.0,
-                    "agent_timings": {},
-                    "llm_calls": 1,
-                    "retry_count": 0,
-                }
-            )
-            mock_app_state.get.return_value = mock_pipeline
-
+        mock_pipeline = AsyncMock()
+        mock_pipeline.run_with_streaming = AsyncMock(
+            return_value={
+                "natural_language_answer": "Test answer",
+                "total_latency_ms": 1000.0,
+                "agent_timings": {},
+                "llm_calls": 1,
+                "retry_count": 0,
+                "retrieved_datapoints": [],
+            }
+        )
+        with patch(
+            "backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)
+        ):
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send message
                 websocket.send_json({"message": "Test query"})
@@ -91,34 +103,35 @@ class TestWebSocketStreaming:
 
     def test_websocket_receives_agent_status_events(self, client):
         """Test that WebSocket receives agent_start and agent_complete events."""
-        with patch("backend.api.main.app_state") as mock_app_state:
-            # Create mock pipeline that will call the callback
-            async def mock_run_with_streaming(query, conversation_history, event_callback):
-                # Simulate agent events
-                await event_callback(
-                    "agent_start", {"agent": "ClassifierAgent", "timestamp": "2026-01-16T12:00:00Z"}
-                )
-                await event_callback(
-                    "agent_complete",
-                    {
-                        "agent": "ClassifierAgent",
-                        "data": {"intent": "data_query"},
-                        "duration_ms": 234.5,
-                        "timestamp": "2026-01-16T12:00:00Z",
-                    },
-                )
-                return {
-                    "natural_language_answer": "Test answer",
-                    "total_latency_ms": 1000.0,
-                    "agent_timings": {},
-                    "llm_calls": 1,
-                    "retry_count": 0,
-                    "retrieved_datapoints": [],
-                }
+        # Create mock pipeline that will call the callback
+        async def mock_run_with_streaming(query, conversation_history, event_callback):
+            # Simulate agent events
+            await event_callback(
+                "agent_start", {"agent": "ClassifierAgent", "timestamp": "2026-01-16T12:00:00Z"}
+            )
+            await event_callback(
+                "agent_complete",
+                {
+                    "agent": "ClassifierAgent",
+                    "data": {"intent": "data_query"},
+                    "duration_ms": 234.5,
+                    "timestamp": "2026-01-16T12:00:00Z",
+                },
+            )
+            return {
+                "natural_language_answer": "Test answer",
+                "total_latency_ms": 1000.0,
+                "agent_timings": {},
+                "llm_calls": 1,
+                "retry_count": 0,
+                "retrieved_datapoints": [],
+            }
 
-            mock_pipeline = AsyncMock()
-            mock_pipeline.run_with_streaming = mock_run_with_streaming
-            mock_app_state.get.return_value = mock_pipeline
+        mock_pipeline = AsyncMock()
+        mock_pipeline.run_with_streaming = mock_run_with_streaming
+        with patch(
+            "backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)
+        ):
 
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send message
@@ -147,10 +160,9 @@ class TestWebSocketStreaming:
 
     def test_websocket_final_message_contains_complete_response(self, client, mock_pipeline_result):
         """Test that final WebSocket message contains complete response."""
-        with patch("backend.api.main.app_state") as mock_app_state:
-            mock_pipeline = AsyncMock()
-            mock_pipeline.run_with_streaming = AsyncMock(return_value=mock_pipeline_result)
-            mock_app_state.get.return_value = mock_pipeline
+        mock_pipeline = AsyncMock()
+        mock_pipeline.run_with_streaming = AsyncMock(return_value=mock_pipeline_result)
+        with patch("backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)):
 
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send message
@@ -186,18 +198,18 @@ class TestWebSocketStreaming:
 
     def test_websocket_handles_client_disconnect(self, client):
         """Test that WebSocket handles client disconnect gracefully."""
-        with patch("backend.api.main.app_state") as mock_app_state:
-            mock_pipeline = AsyncMock()
-            mock_pipeline.run_with_streaming = AsyncMock(
-                return_value={
-                    "natural_language_answer": "Test answer",
-                    "total_latency_ms": 1000.0,
-                    "agent_timings": {},
-                    "llm_calls": 1,
-                    "retry_count": 0,
-                }
-            )
-            mock_app_state.get.return_value = mock_pipeline
+        mock_pipeline = AsyncMock()
+        mock_pipeline.run_with_streaming = AsyncMock(
+            return_value={
+                "natural_language_answer": "Test answer",
+                "total_latency_ms": 1000.0,
+                "agent_timings": {},
+                "llm_calls": 1,
+                "retry_count": 0,
+                "retrieved_datapoints": [],
+            }
+        )
+        with patch("backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)):
 
             # Connect and immediately disconnect
             with client.websocket_connect("/ws/chat") as websocket:
@@ -209,9 +221,7 @@ class TestWebSocketStreaming:
 
     def test_websocket_validates_request_message(self, client):
         """Test that WebSocket validates incoming message."""
-        with patch("backend.api.main.app_state") as mock_app_state:
-            mock_pipeline = AsyncMock()
-            mock_app_state.get.return_value = mock_pipeline
+        with patch("backend.api.main.app_state", {"pipeline": AsyncMock()}):
 
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send invalid message (missing required field)
@@ -224,9 +234,8 @@ class TestWebSocketStreaming:
 
     def test_websocket_handles_pipeline_not_initialized(self, client):
         """Test that WebSocket handles uninitialized pipeline."""
-        with patch("backend.api.main.app_state") as mock_app_state:
-            # Pipeline not initialized
-            mock_app_state.get.return_value = None
+        # Pipeline not initialized
+        with patch("backend.api.main.app_state", {"pipeline": None}):
 
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send message
@@ -239,19 +248,18 @@ class TestWebSocketStreaming:
 
     def test_websocket_supports_conversation_id(self, client):
         """Test that WebSocket preserves conversation_id."""
-        with patch("backend.api.main.app_state") as mock_app_state:
-            mock_pipeline = AsyncMock()
-            mock_pipeline.run_with_streaming = AsyncMock(
-                return_value={
-                    "natural_language_answer": "Test answer",
-                    "total_latency_ms": 1000.0,
-                    "agent_timings": {},
-                    "llm_calls": 1,
-                    "retry_count": 0,
-                    "retrieved_datapoints": [],
-                }
-            )
-            mock_app_state.get.return_value = mock_pipeline
+        mock_pipeline = AsyncMock()
+        mock_pipeline.run_with_streaming = AsyncMock(
+            return_value={
+                "natural_language_answer": "Test answer",
+                "total_latency_ms": 1000.0,
+                "agent_timings": {},
+                "llm_calls": 1,
+                "retry_count": 0,
+                "retrieved_datapoints": [],
+            }
+        )
+        with patch("backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)):
 
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send message with conversation_id
@@ -274,19 +282,18 @@ class TestWebSocketStreaming:
 
     def test_websocket_generates_conversation_id_if_not_provided(self, client):
         """Test that WebSocket generates conversation_id if not provided."""
-        with patch("backend.api.main.app_state") as mock_app_state:
-            mock_pipeline = AsyncMock()
-            mock_pipeline.run_with_streaming = AsyncMock(
-                return_value={
-                    "natural_language_answer": "Test answer",
-                    "total_latency_ms": 1000.0,
-                    "agent_timings": {},
-                    "llm_calls": 1,
-                    "retry_count": 0,
-                    "retrieved_datapoints": [],
-                }
-            )
-            mock_app_state.get.return_value = mock_pipeline
+        mock_pipeline = AsyncMock()
+        mock_pipeline.run_with_streaming = AsyncMock(
+            return_value={
+                "natural_language_answer": "Test answer",
+                "total_latency_ms": 1000.0,
+                "agent_timings": {},
+                "llm_calls": 1,
+                "retry_count": 0,
+                "retrieved_datapoints": [],
+            }
+        )
+        with patch("backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)):
 
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send message without conversation_id
