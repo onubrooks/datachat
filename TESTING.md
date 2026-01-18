@@ -392,6 +392,26 @@ datachat dp list
 1 DataPoint(s) found
 ```
 
+#### 3.7 Load Demo Data (Optional)
+
+Use the built-in demo to seed a small dataset and load demo DataPoints.
+
+```bash
+# Create demo tables + rows and load datapoints/demo into the vector store + graph
+datachat demo
+
+# Expected output:
+✓ Demo tables created
+✓ Demo rows inserted
+✓ Demo DataPoints loaded
+```
+
+After this, you can ask:
+
+```bash
+datachat ask "How many users signed up in the last 30 days?"
+```
+
 ### Step 4: Start Frontend
 
 Open a new terminal:
