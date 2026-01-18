@@ -75,11 +75,12 @@ class TestChatEndpoint:
             "backend.api.routes.chat.SystemInitializer.status",
             new=AsyncMock(return_value=initialized_status),
         ):
-            with patch("backend.api.main.app_state") as mock_app_state:
-                # Setup mock
-                mock_pipeline = AsyncMock()
-                mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
-                mock_app_state.get.return_value = mock_pipeline
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
 
                 # Make request
                 response = client.post(
@@ -100,11 +101,12 @@ class TestChatEndpoint:
             "backend.api.routes.chat.SystemInitializer.status",
             new=AsyncMock(return_value=initialized_status),
         ):
-            with patch("backend.api.main.app_state") as mock_app_state:
-                # Setup mock
-                mock_pipeline = AsyncMock()
-                mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
-                mock_app_state.get.return_value = mock_pipeline
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
 
                 # Make request
                 response = client.post(
@@ -139,11 +141,12 @@ class TestChatEndpoint:
             "backend.api.routes.chat.SystemInitializer.status",
             new=AsyncMock(return_value=initialized_status),
         ):
-            with patch("backend.api.main.app_state") as mock_app_state:
-                # Setup mock
-                mock_pipeline = AsyncMock()
-                mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
-                mock_app_state.get.return_value = mock_pipeline
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
 
                 # Make request with conversation history
                 response = client.post(
@@ -175,11 +178,12 @@ class TestChatEndpoint:
             "backend.api.routes.chat.SystemInitializer.status",
             new=AsyncMock(return_value=initialized_status),
         ):
-            with patch("backend.api.main.app_state") as mock_app_state:
-                # Setup mock to raise exception
-                mock_pipeline = AsyncMock()
-                mock_pipeline.run = AsyncMock(side_effect=Exception("Pipeline failed"))
-                mock_app_state.get.return_value = mock_pipeline
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(side_effect=Exception("Pipeline failed"))
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
 
                 # Make request
                 response = client.post(
@@ -231,9 +235,10 @@ class TestChatEndpoint:
             "backend.api.routes.chat.SystemInitializer.status",
             new=AsyncMock(return_value=initialized_status),
         ):
-            with patch("backend.api.main.app_state") as mock_app_state:
-                # Setup mock to return None (uninitialized)
-                mock_app_state.get.return_value = None
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": None, "database_manager": None},
+            ):
 
                 # Make request
                 response = client.post(
@@ -256,20 +261,21 @@ class TestChatEndpoint:
             "backend.api.routes.chat.SystemInitializer.status",
             new=AsyncMock(return_value=initialized_status),
         ):
-            with patch("backend.api.main.app_state") as mock_app_state:
-                # Setup mock with error in result
-                mock_pipeline = AsyncMock()
-                mock_pipeline.run = AsyncMock(
-                    return_value={
-                        "error": "SQL generation failed",
-                        "natural_language_answer": None,
-                        "total_latency_ms": 500.0,
-                        "agent_timings": {},
-                        "llm_calls": 1,
-                        "retry_count": 3,
-                    }
-                )
-                mock_app_state.get.return_value = mock_pipeline
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(
+                return_value={
+                    "error": "SQL generation failed",
+                    "natural_language_answer": None,
+                    "total_latency_ms": 500.0,
+                    "agent_timings": {},
+                    "llm_calls": 1,
+                    "retry_count": 3,
+                }
+            )
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
 
                 # Make request
                 response = client.post(
@@ -292,11 +298,12 @@ class TestChatEndpoint:
             "backend.api.routes.chat.SystemInitializer.status",
             new=AsyncMock(return_value=initialized_status),
         ):
-            with patch("backend.api.main.app_state") as mock_app_state:
-                # Setup mock
-                mock_pipeline = AsyncMock()
-                mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
-                mock_app_state.get.return_value = mock_pipeline
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
 
                 # Make request without conversation_id
                 response = client.post(
@@ -320,11 +327,12 @@ class TestChatEndpoint:
             "backend.api.routes.chat.SystemInitializer.status",
             new=AsyncMock(return_value=initialized_status),
         ):
-            with patch("backend.api.main.app_state") as mock_app_state:
-                # Setup mock
-                mock_pipeline = AsyncMock()
-                mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
-                mock_app_state.get.return_value = mock_pipeline
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
 
                 # Make request with conversation_id
                 response = client.post(

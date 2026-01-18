@@ -196,6 +196,13 @@ LLM_OPENAI_API_KEY=sk-...
 
 # Database
 DATABASE_URL=postgresql://user:pass@localhost:5432/datachat
+DATABASE_CREDENTIALS_KEY=replace_with_fernet_key
+```
+
+`DATABASE_CREDENTIALS_KEY` is required to store database registry credentials. Generate one with:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
 **Optional:**

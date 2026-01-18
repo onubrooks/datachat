@@ -56,6 +56,7 @@ class PipelineState(TypedDict, total=False):
     query: str
     conversation_history: list[Message]
     database_type: str
+    database_url: str | None
 
     # Classifier output
     intent: str | None
@@ -512,6 +513,7 @@ class DataChatPipeline:
                 conversation_history=state.get("conversation_history", []),
                 validated_sql=validated_sql,
                 database_type=state.get("database_type", "postgresql"),
+                database_url=state.get("database_url"),
                 max_rows=1000,
                 timeout_seconds=30,
                 source_datapoints=state.get("used_datapoints", []),
@@ -601,6 +603,7 @@ class DataChatPipeline:
         query: str,
         conversation_history: list[Message] | None = None,
         database_type: str = "postgresql",
+        database_url: str | None = None,
     ) -> PipelineState:
         """
         Run pipeline synchronously (wait for completion).
@@ -609,6 +612,7 @@ class DataChatPipeline:
             query: User's natural language query
             conversation_history: Previous conversation messages
             database_type: Database type (postgresql, clickhouse, mysql)
+            database_url: Database URL override for execution
 
         Returns:
             Final pipeline state with all outputs
@@ -617,6 +621,7 @@ class DataChatPipeline:
             "query": query,
             "conversation_history": conversation_history or [],
             "database_type": database_type,
+            "database_url": database_url,
             "current_agent": None,
             "error": None,
             "total_cost": 0.0,
@@ -654,6 +659,7 @@ class DataChatPipeline:
         query: str,
         conversation_history: list[Message] | None = None,
         database_type: str = "postgresql",
+        database_url: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """
         Run pipeline with streaming updates.
@@ -664,6 +670,7 @@ class DataChatPipeline:
             query: User's natural language query
             conversation_history: Previous conversation messages
             database_type: Database type
+            database_url: Database URL override for execution
 
         Yields:
             Status updates with current agent and progress
@@ -672,6 +679,7 @@ class DataChatPipeline:
             "query": query,
             "conversation_history": conversation_history or [],
             "database_type": database_type,
+            "database_url": database_url,
             "current_agent": None,
             "error": None,
             "total_cost": 0.0,
@@ -711,6 +719,7 @@ class DataChatPipeline:
         query: str,
         conversation_history: list[Message] | None = None,
         database_type: str = "postgresql",
+        database_url: str | None = None,
         event_callback: Any = None,
     ) -> PipelineState:
         """
@@ -720,6 +729,7 @@ class DataChatPipeline:
             query: User's natural language query
             conversation_history: Previous conversation messages
             database_type: Database type
+            database_url: Database URL override for execution
             event_callback: Async callback function for streaming events
                            Signature: async def callback(event_type: str, event_data: dict)
 
@@ -737,6 +747,7 @@ class DataChatPipeline:
             "query": query,
             "conversation_history": conversation_history or [],
             "database_type": database_type,
+            "database_url": database_url,
             "current_agent": None,
             "error": None,
             "total_cost": 0.0,

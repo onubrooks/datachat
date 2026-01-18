@@ -19,6 +19,9 @@ class ChatRequest(BaseModel):
 
     message: str = Field(..., min_length=1, description="User's natural language query")
     conversation_id: str | None = Field(None, description="Optional conversation ID for context")
+    target_database: str | None = Field(
+        None, description="Optional database connection ID to target"
+    )
     conversation_history: list[Message] = Field(
         default_factory=list,
         description="Previous messages in the conversation",
@@ -29,6 +32,7 @@ class ChatRequest(BaseModel):
             "example": {
                 "message": "What's the total revenue?",
                 "conversation_id": "conv_123",
+                "target_database": "3a1f2d3e-4b5c-6d7e-8f90-1234567890ab",
                 "conversation_history": [],
             }
         }
