@@ -9,7 +9,9 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 
+from backend.initialization.initializer import SystemInitializer
 from backend.models.api import ChatMetrics, ChatRequest, ChatResponse, DataSource
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,26 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
     try:
         # Get pipeline from app state
         from backend.api.main import app_state
+
+        initializer = SystemInitializer(app_state)
+        status_state = await initializer.status()
+        if not status_state.is_initialized:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={
+                    "error": "system_not_initialized",
+                    "message": "DataChat requires setup. Please initialize first.",
+                    "setup_steps": [
+                        {
+                            "step": step.step,
+                            "title": step.title,
+                            "description": step.description,
+                            "action": step.action,
+                        }
+                        for step in status_state.setup_required
+                    ],
+                },
+            )
 
         pipeline = app_state.get("pipeline")
         if pipeline is None:

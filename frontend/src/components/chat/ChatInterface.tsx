@@ -19,7 +19,8 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Card } from "../ui/card";
 import { useChatStore } from "@/lib/stores/chat";
-import { wsClient } from "@/lib/api";
+import { apiClient, wsClient, type SetupStep } from "@/lib/api";
+import { SystemSetup } from "../system/SystemSetup";
 
 export function ChatInterface() {
   const {
@@ -40,6 +41,10 @@ export function ChatInterface() {
 
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [setupSteps, setSetupSteps] = useState<SetupStep[]>([]);
+  const [isInitialized, setIsInitialized] = useState(true);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -47,9 +52,27 @@ export function ChatInterface() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  useEffect(() => {
+    let isMounted = true;
+    apiClient
+      .systemStatus()
+      .then((status) => {
+        if (!isMounted) return;
+        setIsInitialized(status.is_initialized);
+        setSetupSteps(status.setup_required || []);
+      })
+      .catch((err) => {
+        if (!isMounted) return;
+        console.error("System status error:", err);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   // Handle send message
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || !isInitialized) return;
 
     const query = input.trim();
     const conversationHistory = messages.map((m) => ({
@@ -113,6 +136,13 @@ export function ChatInterface() {
             setLoading(false);
             resetAgentStatus();
           },
+          onSystemNotInitialized: (steps, message) => {
+            setIsInitialized(false);
+            setSetupSteps(steps);
+            setSetupError(message);
+            setLoading(false);
+            resetAgentStatus();
+          },
         }
       );
     } catch (err) {
@@ -138,6 +168,29 @@ export function ChatInterface() {
     if (confirm("Clear all messages?")) {
       clearMessages();
       setError(null);
+    }
+  };
+
+  const handleInitialize = async (databaseUrl: string, autoProfile: boolean) => {
+    setSetupError(null);
+    setIsInitializing(true);
+    try {
+      const response = await apiClient.systemInitialize({
+        database_url: databaseUrl,
+        auto_profile: autoProfile,
+      });
+      setIsInitialized(response.is_initialized);
+      setSetupSteps(response.setup_required || []);
+      if (!response.is_initialized) {
+        setSetupError(response.message);
+      }
+    } catch (err) {
+      console.error("Initialization error:", err);
+      setSetupError(
+        err instanceof Error ? err.message : "Initialization failed"
+      );
+    } finally {
+      setIsInitializing(false);
     }
   };
 
@@ -181,6 +234,14 @@ export function ChatInterface() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4">
+        {!isInitialized && (
+          <SystemSetup
+            steps={setupSteps}
+            onInitialize={handleInitialize}
+            isSubmitting={isInitializing}
+            error={setupError}
+          />
+        )}
         {messages.length === 0 && (
           <div className="flex items-center justify-center h-full text-muted-foreground">
             <div className="text-center">
@@ -225,12 +286,12 @@ export function ChatInterface() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyPress}
             placeholder="Ask a question about your data..."
-            disabled={isLoading}
+            disabled={isLoading || !isInitialized}
             className="flex-1"
           />
           <Button
             onClick={handleSend}
-            disabled={!input.trim() || isLoading}
+            disabled={!input.trim() || isLoading || !isInitialized}
             size="icon"
           >
             <Send size={18} />

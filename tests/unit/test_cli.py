@@ -7,6 +7,7 @@ Tests the DataChat CLI commands.
 import json
 from unittest.mock import AsyncMock, patch
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -15,8 +16,10 @@ from backend.cli import (
     cli,
     connect,
     datapoint,
+    create_pipeline_from_config,
     status,
 )
+from backend.initialization.initializer import SystemStatus
 
 
 class TestCLIBasics:
@@ -333,6 +336,24 @@ class TestCLIErrorHandling:
         non_existent = tmp_path / "does_not_exist.json"
         result = runner.invoke(datapoint, ["add", "schema", str(non_existent)])
         assert result.exit_code != 0
+
+    @pytest.mark.asyncio
+    async def test_cli_blocks_when_system_not_initialized(self):
+        """Ensure CLI prevents queries when setup is incomplete."""
+        not_initialized = SystemStatus(
+            is_initialized=False,
+            has_databases=True,
+            has_datapoints=False,
+            setup_required=[],
+        )
+        with patch(
+            "backend.cli.SystemInitializer.status",
+            new=AsyncMock(return_value=not_initialized),
+        ):
+            with patch("backend.cli.VectorStore.initialize", new=AsyncMock()):
+                with patch("backend.cli.PostgresConnector.connect", new=AsyncMock()):
+                    with pytest.raises(click.ClickException):
+                        await create_pipeline_from_config()
 
 
 class TestCLIIntegration:

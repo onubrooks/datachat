@@ -29,6 +29,7 @@ from rich.table import Table
 
 from backend.config import get_settings
 from backend.connectors.postgres import PostgresConnector
+from backend.initialization.initializer import SystemInitializer
 from backend.knowledge.datapoints import DataPointLoader
 from backend.knowledge.graph import KnowledgeGraph
 from backend.knowledge.retriever import Retriever
@@ -143,6 +144,20 @@ async def create_pipeline_from_config() -> DataChatPipeline:
         console.print(f"[red]Failed to connect to database: {e}[/red]")
         console.print("[yellow]Hint: Use 'datachat connect' to set connection string[/yellow]")
         raise
+
+    initializer = SystemInitializer(
+        {
+            "connector": connector,
+            "vector_store": vector_store,
+        }
+    )
+    status_state = await initializer.status()
+    if not status_state.is_initialized:
+        console.print("[red]DataChat requires setup before queries can run.[/red]")
+        for step in status_state.setup_required:
+            console.print(f"[yellow]- {step.title}: {step.description}[/yellow]")
+        console.print("[cyan]Hint: Run 'datachat dp sync' after adding DataPoints.[/cyan]")
+        raise click.ClickException("System not initialized")
 
     # Create pipeline
     pipeline = DataChatPipeline(

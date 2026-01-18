@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 
+from backend.initialization.initializer import SystemInitializer
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -92,6 +93,28 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 }
             )
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+            return
+
+        initializer = SystemInitializer(app_state)
+        status_state = await initializer.status()
+        if not status_state.is_initialized:
+            await websocket.send_json(
+                {
+                    "event": "error",
+                    "error": "system_not_initialized",
+                    "message": "DataChat requires setup. Please initialize first.",
+                    "setup_steps": [
+                        {
+                            "step": step.step,
+                            "title": step.title,
+                            "description": step.description,
+                            "action": step.action,
+                        }
+                        for step in status_state.setup_required
+                    ],
+                }
+            )
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
         # Extract request data
