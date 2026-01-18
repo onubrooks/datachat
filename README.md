@@ -55,6 +55,16 @@ That's it! DataChat is now running with:
 - **PostgreSQL** on port 5432
 - **ChromaDB** for vector storage
 
+> **⚠️ Important:** Before you can query your data, you must create **DataPoints** (JSON files describing your database schema). DataPoints tell DataChat about your tables, columns, and business logic.
+>
+> **Quick Setup:**
+>
+> 1. Create DataPoint files in `datapoints/tables/` (see examples in [GETTING_STARTED.md](GETTING_STARTED.md))
+> 2. Load them: `docker-compose exec backend datachat dp sync`
+> 3. Verify: `docker-compose exec backend datachat dp list`
+>
+> **Without DataPoints, queries will fail.** See [GETTING_STARTED.md](GETTING_STARTED.md) for complete instructions.
+
 ---
 
 ## Manual Installation
