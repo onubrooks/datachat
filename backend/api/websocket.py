@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 
 from backend.initialization.initializer import SystemInitializer
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()

@@ -88,6 +88,7 @@ from backend.models.api import (
     HealthResponse,
     ReadinessResponse,
 )
+from backend.models.database import DatabaseConnection
 from backend.models.datapoint import (
     BaseDataPoint,
     BusinessDataPoint,
@@ -106,7 +107,6 @@ from backend.profiling.models import (
     ProfilingProgress,
     TableProfile,
 )
-from backend.models.database import DatabaseConnection
 
 __all__ = [
     # Core agent models

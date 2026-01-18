@@ -11,6 +11,7 @@ Usage:
     uvicorn backend.api.main:app --reload --port 8000
 """
 
+import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -22,7 +23,7 @@ from fastapi.responses import JSONResponse
 
 from backend.agents.base import AgentError
 from backend.api import websocket
-from backend.api.routes import chat, databases, health, profiling, system
+from backend.api.routes import chat, databases, datapoints, health, profiling, system
 from backend.config import get_settings
 from backend.connectors.base import ConnectionError as ConnectorConnectionError
 from backend.connectors.base import QueryError
@@ -42,6 +43,8 @@ app_state = {
     "connector": None,
     "database_manager": None,
     "profiling_store": None,
+    "sync_orchestrator": None,
+    "datapoint_watcher": None,
 }
 
 
@@ -127,6 +130,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         app_state["pipeline"] = pipeline
 
+        # Initialize sync orchestrator and watcher
+        logger.info("Initializing sync orchestrator...")
+        try:
+            from backend.sync.orchestrator import SyncOrchestrator
+            from backend.sync.watcher import DataPointWatcher
+
+            loop = asyncio.get_running_loop()
+            sync_orchestrator = SyncOrchestrator(
+                vector_store=vector_store,
+                knowledge_graph=knowledge_graph,
+                loop=loop,
+            )
+            app_state["sync_orchestrator"] = sync_orchestrator
+
+            watcher = DataPointWatcher(
+                datapoints_dir="datapoints",
+                on_change=sync_orchestrator.enqueue_sync_all,
+                debounce_seconds=5.0,
+            )
+            watcher.start()
+            app_state["datapoint_watcher"] = watcher
+        except Exception as e:
+            logger.warning(f"Sync watcher unavailable: {e}")
+            app_state["sync_orchestrator"] = None
+            app_state["datapoint_watcher"] = None
+
         logger.info("DataChat API server started successfully")
 
         yield  # Application runs here
@@ -155,6 +184,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 logger.info("Profiling store closed")
             except Exception as e:
                 logger.error(f"Error closing profiling store: {e}")
+
+        if app_state["datapoint_watcher"]:
+            try:
+                app_state["datapoint_watcher"].stop()
+                logger.info("Datapoint watcher stopped")
+            except Exception as e:
+                logger.error(f"Error stopping datapoint watcher: {e}")
 
         logger.info("DataChat API server shut down complete")
 
@@ -238,6 +274,7 @@ app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
 app.include_router(system.router, prefix="/api/v1", tags=["system"])
 app.include_router(databases.router, prefix="/api/v1", tags=["databases"])
 app.include_router(profiling.router, prefix="/api/v1", tags=["profiling"])
+app.include_router(datapoints.router, prefix="/api/v1", tags=["datapoints"])
 app.include_router(websocket.router, tags=["websocket"])
 
 
