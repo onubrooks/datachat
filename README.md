@@ -123,6 +123,23 @@ npm run dev
 
 Frontend will be available at <http://localhost:3000>
 
+---
+
+## Demo Data (Optional)
+
+Want to try DataChat without wiring your own schema? Use the demo dataset:
+
+```bash
+# 1. Seed demo tables
+psql "$DATABASE_URL" -f scripts/demo_seed.sql
+
+# 2. Load demo DataPoints
+datachat dp sync --datapoints-dir datapoints/demo
+
+# 3. Try a query
+datachat ask "How many users are active?"
+```
+
 ### Database Setup
 
 ```bash

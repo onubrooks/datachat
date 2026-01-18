@@ -52,6 +52,18 @@ LLM_OPENAI_API_KEY=sk-...
 
 **Important:** Replace `your_database` with your actual database name that contains the data you want to query.
 
+### Optional: Load Demo Data
+
+If you want to try DataChat quickly, load the demo dataset:
+
+```bash
+# Seed demo tables
+psql "$DATABASE_URL" -f scripts/demo_seed.sql
+
+# Load demo DataPoints
+datachat dp sync --datapoints-dir datapoints/demo
+```
+
 ### Step 3: Initialize DataPoints (REQUIRED)
 
 ⚠️ **Without DataPoints, DataChat cannot understand your database schema.**
