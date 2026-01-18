@@ -226,13 +226,14 @@ class ProfilingStore:
         pending_id: UUID,
         status: str,
         review_note: str | None = None,
+        datapoint: dict | None = None,
     ) -> PendingDataPoint:
         self._ensure_pool()
         reviewed_at = datetime.now(UTC)
         row = await self._pool.fetchrow(
             """
             UPDATE pending_datapoints
-            SET status = $2, reviewed_at = $3, review_note = $4
+            SET status = $2, reviewed_at = $3, review_note = $4, datapoint = COALESCE($5, datapoint)
             WHERE pending_id = $1
             RETURNING pending_id, profile_id, datapoint, confidence, status,
                       created_at, reviewed_at, review_note
@@ -241,6 +242,7 @@ class ProfilingStore:
             status,
             reviewed_at,
             review_note,
+            datapoint,
         )
         if row is None:
             raise KeyError(f"Pending DataPoint not found: {pending_id}")

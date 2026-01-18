@@ -329,6 +329,7 @@ print(result["data"])
 - [Getting Started](GETTING_STARTED.md)
 - [API Reference](docs/API.md)
 - [Multi-Database Guide](docs/MULTI_DATABASE.md)
+- [Operations Guide](docs/OPERATIONS.md)
 
 ---
 

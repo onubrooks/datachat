@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -50,6 +51,14 @@ class PendingDataPointListResponse(BaseModel):
 
 class ReviewNoteRequest(BaseModel):
     review_note: str | None = None
+    datapoint: dict | None = None
+
+
+DATA_DIR = Path("datapoints") / "managed"
+
+
+def _datapoint_path(datapoint_id: str) -> Path:
+    return DATA_DIR / f"{datapoint_id}.json"
 
 
 def _get_store() -> ProfilingStore:
@@ -222,12 +231,19 @@ async def approve_datapoint(
     graph = _get_knowledge_graph()
 
     pending = await store.update_pending_status(
-        pending_id, status="approved", review_note=payload.review_note if payload else None
+        pending_id,
+        status="approved",
+        review_note=payload.review_note if payload else None,
+        datapoint=payload.datapoint if payload else None,
     )
 
     from backend.models.datapoint import DataPoint
+    from backend.sync.orchestrator import save_datapoint_to_disk
 
     datapoint = DataPoint.model_validate(pending.datapoint)
+    save_datapoint_to_disk(
+        datapoint.model_dump(mode="json"), _datapoint_path(datapoint.datapoint_id)
+    )
     await vector_store.add_datapoints([datapoint])
     graph.add_datapoint(datapoint)
 
@@ -254,9 +270,15 @@ async def bulk_approve_datapoints() -> PendingDataPointListResponse:
     approved = await store.bulk_update_pending(status="approved")
 
     from backend.models.datapoint import DataPoint
+    from backend.sync.orchestrator import save_datapoint_to_disk
 
     datapoints = [DataPoint.model_validate(item.datapoint) for item in approved]
     if datapoints:
+        for datapoint in datapoints:
+            save_datapoint_to_disk(
+                datapoint.model_dump(mode="json"),
+                _datapoint_path(datapoint.datapoint_id),
+            )
         await vector_store.add_datapoints(datapoints)
         for datapoint in datapoints:
             graph.add_datapoint(datapoint)

@@ -21,6 +21,8 @@ export function DatabaseManager() {
   const [job, setJob] = useState<ProfilingJob | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [expandedPendingId, setExpandedPendingId] = useState<string | null>(null);
+  const [pendingEdits, setPendingEdits] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -147,10 +149,25 @@ export function DatabaseManager() {
     }
   };
 
+  const parseEditedDatapoint = (pendingId: string) => {
+    const raw = pendingEdits[pendingId];
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch (err) {
+      setError(`Invalid JSON for ${pendingId}: ${(err as Error).message}`);
+      return null;
+    }
+  };
+
   const handleApprove = async (pendingId: string) => {
     setError(null);
+    const editedDatapoint = parseEditedDatapoint(pendingId);
+    if (pendingEdits[pendingId] && !editedDatapoint) {
+      return;
+    }
     try {
-      await api.approvePendingDatapoint(pendingId);
+      await api.approvePendingDatapoint(pendingId, editedDatapoint || undefined);
       await refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -191,6 +208,17 @@ export function DatabaseManager() {
   const formatTimestamp = (value: string | null) => {
     if (!value) return "—";
     return new Date(value).toLocaleString();
+  };
+
+  const togglePendingDetails = (item: PendingDataPoint) => {
+    const nextId = expandedPendingId === item.pending_id ? null : item.pending_id;
+    setExpandedPendingId(nextId);
+    if (nextId && !pendingEdits[item.pending_id]) {
+      setPendingEdits((current) => ({
+        ...current,
+        [item.pending_id]: JSON.stringify(item.datapoint, null, 2),
+      }));
+    }
   };
 
   return (
@@ -392,17 +420,42 @@ export function DatabaseManager() {
               <div className="flex gap-2 mt-2">
                 <Button
                   variant="secondary"
-                  onClick={() => handleApprove(item.pending_id)}
+                  onClick={() => togglePendingDetails(item)}
                 >
-                  Approve
-                </Button>
-                <Button
-                  variant="destructive"
-                  onClick={() => handleReject(item.pending_id)}
-                >
-                  Reject
+                  {expandedPendingId === item.pending_id ? "Hide Details" : "Review"}
                 </Button>
               </div>
+              {expandedPendingId === item.pending_id && (
+                <div className="mt-3 space-y-3">
+                  <div className="text-xs text-muted-foreground">
+                    Review and edit the JSON before approving.
+                  </div>
+                  <textarea
+                    className="min-h-[160px] w-full rounded-md border border-border bg-background p-2 text-xs font-mono"
+                    value={pendingEdits[item.pending_id] || ""}
+                    onChange={(event) =>
+                      setPendingEdits((current) => ({
+                        ...current,
+                        [item.pending_id]: event.target.value,
+                      }))
+                    }
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => handleApprove(item.pending_id)}
+                    >
+                      Approve
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={() => handleReject(item.pending_id)}
+                    >
+                      Reject
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>

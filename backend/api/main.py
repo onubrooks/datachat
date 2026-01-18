@@ -144,13 +144,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             app_state["sync_orchestrator"] = sync_orchestrator
 
-            watcher = DataPointWatcher(
-                datapoints_dir="datapoints",
-                on_change=sync_orchestrator.enqueue_sync_all,
-                debounce_seconds=5.0,
-            )
-            watcher.start()
-            app_state["datapoint_watcher"] = watcher
+            if config.sync_watcher_enabled:
+                watcher = DataPointWatcher(
+                    datapoints_dir="datapoints",
+                    on_change=sync_orchestrator.enqueue_sync_all,
+                    debounce_seconds=5.0,
+                )
+                watcher.start()
+                app_state["datapoint_watcher"] = watcher
+            else:
+                logger.info("Datapoint watcher disabled via SYNC_WATCHER_ENABLED")
+                app_state["datapoint_watcher"] = None
         except Exception as e:
             logger.warning(f"Sync watcher unavailable: {e}")
             app_state["sync_orchestrator"] = None

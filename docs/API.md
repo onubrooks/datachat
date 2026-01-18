@@ -47,6 +47,14 @@ Request body:
 - `POST /datapoints/pending/{id}/reject` - Reject a DataPoint.
 - `POST /datapoints/pending/bulk-approve` - Approve all pending DataPoints.
 
+Approve payload supports optional edits:
+```json
+{
+  "review_note": "optional",
+  "datapoint": { "datapoint_id": "table_users_001", "...": "..." }
+}
+```
+
 ## DataPoint Sync
 
 - `POST /sync` - Trigger a full sync.

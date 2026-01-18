@@ -352,13 +352,16 @@ export class DataChatAPI {
     return data.pending || [];
   }
 
-  async approvePendingDatapoint(pendingId: string): Promise<PendingDataPoint> {
+  async approvePendingDatapoint(
+    pendingId: string,
+    datapoint?: Record<string, unknown>
+  ): Promise<PendingDataPoint> {
     const response = await fetch(
       `${this.baseUrl}/api/v1/datapoints/pending/${pendingId}/approve`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ datapoint }),
       }
     );
     if (!response.ok) {
