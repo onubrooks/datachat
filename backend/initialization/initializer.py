@@ -128,10 +128,80 @@ class SystemInitializer:
                     max_retries=3,
                 )
 
-        if auto_profile:
-            message = (
-                "Initialization completed. Auto-profiling is not available yet; "
-                "please load DataPoints manually."
-            )
+        if auto_profile and database_url:
+            profiling_store = self._app_state.get("profiling_store")
+            database_manager = self._app_state.get("database_manager")
+            if profiling_store and database_manager:
+                try:
+                    existing = None
+                    for connection in await database_manager.list_connections():
+                        if connection.database_url.get_secret_value() == database_url:
+                            existing = connection
+                            break
+
+                    if existing is None:
+                        existing = await database_manager.add_connection(
+                            name="Primary Database",
+                            database_url=database_url,
+                            database_type="postgresql",
+                            tags=["auto-profiled"],
+                            description="Auto-profiled during setup",
+                            is_default=True,
+                        )
+
+                    from backend.profiling.profiler import SchemaProfiler
+                    from backend.profiling.models import ProfilingProgress
+
+                    job = await profiling_store.create_job(existing.connection_id)
+
+                    async def run_profile_job() -> None:
+                        profiler = SchemaProfiler(database_manager)
+
+                        async def progress_callback(total: int, completed: int) -> None:
+                            await profiling_store.update_job(
+                                job.job_id,
+                                progress=ProfilingProgress(
+                                    total_tables=total, tables_completed=completed
+                                ),
+                            )
+
+                        try:
+                            await profiling_store.update_job(job.job_id, status="running")
+                            profile = await profiler.profile_database(
+                                str(existing.connection_id),
+                                progress_callback=progress_callback,
+                            )
+                            await profiling_store.save_profile(profile)
+                            await profiling_store.update_job(
+                                job.job_id,
+                                status="completed",
+                                profile_id=profile.profile_id,
+                                progress=ProfilingProgress(
+                                    total_tables=len(profile.tables),
+                                    tables_completed=len(profile.tables),
+                                ),
+                            )
+                        except Exception as exc:
+                            await profiling_store.update_job(
+                                job.job_id, status="failed", error=str(exc)
+                            )
+
+                    import asyncio
+
+                    asyncio.create_task(run_profile_job())
+                    message = (
+                        "Initialization completed. Auto-profiling started; "
+                        f"job_id={job.job_id}."
+                    )
+                except Exception as exc:
+                    message = (
+                        "Initialization completed, but auto-profiling failed to start: "
+                        f"{exc}."
+                    )
+            else:
+                message = (
+                    "Initialization completed, but auto-profiling is unavailable. "
+                    "Configure DATABASE_CREDENTIALS_KEY to enable profiling."
+                )
 
         return await self.status(), message

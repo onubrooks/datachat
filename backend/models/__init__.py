@@ -97,6 +97,15 @@ from backend.models.datapoint import (
     Relationship,
     SchemaDataPoint,
 )
+from backend.profiling.models import (
+    DatabaseProfile,
+    GeneratedDataPoint,
+    GeneratedDataPoints,
+    PendingDataPoint,
+    ProfilingJob,
+    ProfilingProgress,
+    TableProfile,
+)
 from backend.models.database import DatabaseConnection
 
 __all__ = [
@@ -148,6 +157,13 @@ __all__ = [
     "ColumnMetadata",
     "Relationship",
     "DatabaseConnection",
+    "DatabaseProfile",
+    "GeneratedDataPoint",
+    "GeneratedDataPoints",
+    "PendingDataPoint",
+    "ProfilingJob",
+    "ProfilingProgress",
+    "TableProfile",
     # API models
     "ChatRequest",
     "ChatResponse",

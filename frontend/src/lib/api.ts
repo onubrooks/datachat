@@ -13,6 +13,7 @@ export interface ChatMessage {
 export interface ChatRequest {
   message: string;
   conversation_id?: string;
+  target_database?: string;
   conversation_history?: ChatMessage[];
 }
 
@@ -88,6 +89,52 @@ export interface HealthResponse {
   status: string;
   version: string;
   timestamp: string;
+}
+
+export interface DatabaseConnection {
+  connection_id: string;
+  name: string;
+  database_url: string;
+  database_type: string;
+  is_active: boolean;
+  is_default: boolean;
+  tags: string[];
+  description?: string | null;
+  created_at: string;
+  last_profiled?: string | null;
+  datapoint_count: number;
+}
+
+export interface DatabaseConnectionCreate {
+  name: string;
+  database_url: string;
+  database_type: string;
+  tags: string[];
+  description?: string;
+  is_default?: boolean;
+}
+
+export interface ProfilingProgress {
+  total_tables: number;
+  tables_completed: number;
+}
+
+export interface ProfilingJob {
+  job_id: string;
+  connection_id: string;
+  status: string;
+  progress?: ProfilingProgress | null;
+  error?: string | null;
+  profile_id?: string | null;
+}
+
+export interface PendingDataPoint {
+  pending_id: string;
+  profile_id: string;
+  datapoint: Record<string, unknown>;
+  confidence: number;
+  status: string;
+  review_note?: string | null;
 }
 
 /**
@@ -191,6 +238,152 @@ export class DataChatAPI {
     }
 
     return response.json();
+  }
+
+  async listDatabases(): Promise<DatabaseConnection[]> {
+    const response = await fetch(`${this.baseUrl}/api/v1/databases`);
+    if (!response.ok) {
+      throw new Error(`List databases failed: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async createDatabase(
+    payload: DatabaseConnectionCreate
+  ): Promise<DatabaseConnection> {
+    const response = await fetch(`${this.baseUrl}/api/v1/databases`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async setDefaultDatabase(connectionId: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/databases/${connectionId}/default`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_default: true }),
+      }
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+  }
+
+  async deleteDatabase(connectionId: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/databases/${connectionId}`,
+      { method: "DELETE" }
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+  }
+
+  async startProfiling(
+    connectionId: string,
+    payload: { sample_size: number; tables?: string[] }
+  ): Promise<ProfilingJob> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/databases/${connectionId}/profile`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async getProfilingJob(jobId: string): Promise<ProfilingJob> {
+    const response = await fetch(`${this.baseUrl}/api/v1/profiling/jobs/${jobId}`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async generateDatapoints(profileId: string): Promise<PendingDataPoint[]> {
+    const response = await fetch(`${this.baseUrl}/api/v1/datapoints/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile_id: profileId }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    return data.pending || [];
+  }
+
+  async listPendingDatapoints(): Promise<PendingDataPoint[]> {
+    const response = await fetch(`${this.baseUrl}/api/v1/datapoints/pending`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    return data.pending || [];
+  }
+
+  async approvePendingDatapoint(pendingId: string): Promise<PendingDataPoint> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/datapoints/pending/${pendingId}/approve`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async rejectPendingDatapoint(pendingId: string, reviewNote?: string): Promise<PendingDataPoint> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/datapoints/pending/${pendingId}/reject`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ review_note: reviewNote || null }),
+      }
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async bulkApproveDatapoints(): Promise<PendingDataPoint[]> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/datapoints/pending/bulk-approve`,
+      { method: "POST" }
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    return data.pending || [];
   }
 }
 
