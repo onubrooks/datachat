@@ -10,6 +10,7 @@ import {
   DatabaseConnection,
   PendingDataPoint,
   ProfilingJob,
+  SyncStatusResponse,
 } from "@/lib/api";
 
 const api = new DataChatAPI();
@@ -18,6 +19,10 @@ export function DatabaseManager() {
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [pending, setPending] = useState<PendingDataPoint[]>([]);
   const [job, setJob] = useState<ProfilingJob | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [expandedPendingId, setExpandedPendingId] = useState<string | null>(null);
+  const [pendingEdits, setPendingEdits] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,6 +46,14 @@ export function DatabaseManager() {
       setError((err as Error).message);
     } finally {
       setIsLoading(false);
+    }
+
+    try {
+      const status = await api.getSyncStatus();
+      setSyncStatus(status);
+      setSyncError(null);
+    } catch (err) {
+      setSyncError((err as Error).message);
     }
   };
 
@@ -67,6 +80,26 @@ export function DatabaseManager() {
 
     return () => clearInterval(interval);
   }, [job]);
+
+  useEffect(() => {
+    if (!syncStatus || syncStatus.status !== "running") {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const status = await api.getSyncStatus();
+        setSyncStatus(status);
+        if (status.status !== "running") {
+          await refresh();
+        }
+      } catch (err) {
+        setSyncError((err as Error).message);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [syncStatus]);
 
   const handleCreate = async () => {
     setIsLoading(true);
@@ -116,10 +149,25 @@ export function DatabaseManager() {
     }
   };
 
+  const parseEditedDatapoint = (pendingId: string) => {
+    const raw = pendingEdits[pendingId];
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch (err) {
+      setError(`Invalid JSON for ${pendingId}: ${(err as Error).message}`);
+      return null;
+    }
+  };
+
   const handleApprove = async (pendingId: string) => {
     setError(null);
+    const editedDatapoint = parseEditedDatapoint(pendingId);
+    if (pendingEdits[pendingId] && !editedDatapoint) {
+      return;
+    }
     try {
-      await api.approvePendingDatapoint(pendingId);
+      await api.approvePendingDatapoint(pendingId, editedDatapoint || undefined);
       await refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -143,6 +191,33 @@ export function DatabaseManager() {
       await refresh();
     } catch (err) {
       setError((err as Error).message);
+    }
+  };
+
+  const handleSync = async () => {
+    setSyncError(null);
+    try {
+      await api.triggerSync();
+      const status = await api.getSyncStatus();
+      setSyncStatus(status);
+    } catch (err) {
+      setSyncError((err as Error).message);
+    }
+  };
+
+  const formatTimestamp = (value: string | null) => {
+    if (!value) return "—";
+    return new Date(value).toLocaleString();
+  };
+
+  const togglePendingDetails = (item: PendingDataPoint) => {
+    const nextId = expandedPendingId === item.pending_id ? null : item.pending_id;
+    setExpandedPendingId(nextId);
+    if (nextId && !pendingEdits[item.pending_id]) {
+      setPendingEdits((current) => ({
+        ...current,
+        [item.pending_id]: JSON.stringify(item.datapoint, null, 2),
+      }));
     }
   };
 
@@ -255,6 +330,48 @@ export function DatabaseManager() {
       </Card>
 
       <Card className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Sync Status</h2>
+          <Button
+            variant="secondary"
+            onClick={handleSync}
+            disabled={syncStatus?.status === "running"}
+          >
+            Sync Now
+          </Button>
+        </div>
+        {syncError && <div className="text-xs text-destructive">{syncError}</div>}
+        {!syncStatus && (
+          <p className="text-sm text-muted-foreground">
+            Sync status unavailable.
+          </p>
+        )}
+        {syncStatus && (
+          <div className="space-y-1 text-sm">
+            <div>Status: {syncStatus.status}</div>
+            {syncStatus.sync_type && (
+              <div className="text-xs text-muted-foreground">
+                Type: {syncStatus.sync_type}
+              </div>
+            )}
+            {syncStatus.total_datapoints > 0 && (
+              <div className="text-xs text-muted-foreground">
+                Progress: {syncStatus.processed_datapoints}/
+                {syncStatus.total_datapoints}
+              </div>
+            )}
+            <div className="text-xs text-muted-foreground">
+              Started: {formatTimestamp(syncStatus.started_at)} · Finished:{" "}
+              {formatTimestamp(syncStatus.finished_at)}
+            </div>
+            {syncStatus.error && (
+              <div className="text-xs text-destructive">{syncStatus.error}</div>
+            )}
+          </div>
+        )}
+      </Card>
+
+      <Card className="p-4 space-y-3">
         <h2 className="text-sm font-semibold">Profiling Jobs</h2>
         {!job && (
           <p className="text-sm text-muted-foreground">No profiling job started.</p>
@@ -303,17 +420,42 @@ export function DatabaseManager() {
               <div className="flex gap-2 mt-2">
                 <Button
                   variant="secondary"
-                  onClick={() => handleApprove(item.pending_id)}
+                  onClick={() => togglePendingDetails(item)}
                 >
-                  Approve
-                </Button>
-                <Button
-                  variant="destructive"
-                  onClick={() => handleReject(item.pending_id)}
-                >
-                  Reject
+                  {expandedPendingId === item.pending_id ? "Hide Details" : "Review"}
                 </Button>
               </div>
+              {expandedPendingId === item.pending_id && (
+                <div className="mt-3 space-y-3">
+                  <div className="text-xs text-muted-foreground">
+                    Review and edit the JSON before approving.
+                  </div>
+                  <textarea
+                    className="min-h-[160px] w-full rounded-md border border-border bg-background p-2 text-xs font-mono"
+                    value={pendingEdits[item.pending_id] || ""}
+                    onChange={(event) =>
+                      setPendingEdits((current) => ({
+                        ...current,
+                        [item.pending_id]: event.target.value,
+                      }))
+                    }
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => handleApprove(item.pending_id)}
+                    >
+                      Approve
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={() => handleReject(item.pending_id)}
+                    >
+                      Reject
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>

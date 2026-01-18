@@ -297,6 +297,7 @@ class Settings(BaseSettings):
         DEBUG: Enable debug mode
         API_HOST: API server host
         API_PORT: API server port
+        SYNC_WATCHER_ENABLED: Enable filesystem DataPoint watcher
         LLM_*: LLM provider configuration (see LLMSettings)
         DATABASE_*: Database configuration (see DatabaseSettings)
         CHROMA_*: Vector store configuration (see ChromaSettings)
@@ -334,6 +335,10 @@ class Settings(BaseSettings):
         gt=0,
         le=65535,
         description="API server port",
+    )
+    sync_watcher_enabled: bool = Field(
+        default=True,
+        description="Enable filesystem watcher for DataPoints (single-node deployments)",
     )
 
     # Nested settings

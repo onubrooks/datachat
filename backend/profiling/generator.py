@@ -96,6 +96,7 @@ class DataPointGenerator:
                 f"{table.schema}.{table.name} GROUP BY 1 ORDER BY 1;"
             )
 
+        row_count = table.row_count if table.row_count is not None and table.row_count >= 0 else None
         schema_datapoint = SchemaDataPoint(
             datapoint_id=self._make_datapoint_id("table", table.name, index),
             name=self._title_case(table.name),
@@ -109,7 +110,7 @@ class DataPointGenerator:
             common_queries=common_queries,
             gotchas=gotchas,
             freshness=freshness,
-            row_count=table.row_count,
+            row_count=row_count,
             owner=_DEFAULT_OWNER,
             tags=["auto-profiled"],
             metadata={"source": "auto-profiler"},
@@ -169,7 +170,7 @@ class DataPointGenerator:
             generated.append(
                 GeneratedDataPoint(
                     datapoint=business_datapoint.model_dump(mode="json"),
-                    confidence=float(metric.get("confidence", 0.6)),
+                    confidence=self._normalize_confidence(metric.get("confidence", 0.6)),
                     explanation=metric.get("explanation"),
                 )
             )
@@ -210,6 +211,24 @@ class DataPointGenerator:
             ):
                 return True
         return False
+
+    @staticmethod
+    def _normalize_confidence(value: object) -> float:
+        if isinstance(value, (int, float)):
+            return max(0.0, min(float(value), 1.0))
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"high", "high confidence"}:
+                return 0.8
+            if lowered in {"medium", "medium confidence"}:
+                return 0.6
+            if lowered in {"low", "low confidence"}:
+                return 0.4
+            try:
+                return max(0.0, min(float(lowered), 1.0))
+            except ValueError:
+                return 0.6
+        return 0.6
 
     @staticmethod
     def _fallback_column_meaning(name: str, samples: Iterable[str]) -> str:

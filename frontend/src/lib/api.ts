@@ -137,6 +137,17 @@ export interface PendingDataPoint {
   review_note?: string | null;
 }
 
+export interface SyncStatusResponse {
+  status: string;
+  job_id: string | null;
+  sync_type: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  total_datapoints: number;
+  processed_datapoints: number;
+  error: string | null;
+}
+
 /**
  * API Client Configuration
  */
@@ -341,13 +352,16 @@ export class DataChatAPI {
     return data.pending || [];
   }
 
-  async approvePendingDatapoint(pendingId: string): Promise<PendingDataPoint> {
+  async approvePendingDatapoint(
+    pendingId: string,
+    datapoint?: Record<string, unknown>
+  ): Promise<PendingDataPoint> {
     const response = await fetch(
       `${this.baseUrl}/api/v1/datapoints/pending/${pendingId}/approve`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ datapoint }),
       }
     );
     if (!response.ok) {
@@ -384,6 +398,24 @@ export class DataChatAPI {
     }
     const data = await response.json();
     return data.pending || [];
+  }
+
+  async triggerSync(): Promise<{ job_id: string }> {
+    const response = await fetch(`${this.baseUrl}/api/v1/sync`, { method: "POST" });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async getSyncStatus(): Promise<SyncStatusResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/sync/status`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
   }
 }
 

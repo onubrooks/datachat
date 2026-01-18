@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from uuid import UUID
 
 import asyncpg
@@ -79,12 +80,12 @@ class ProfilingStore:
             """
             INSERT INTO profiling_jobs (
                 job_id, connection_id, status, progress, error, profile_id, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ) VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
             """,
             job.job_id,
             job.connection_id,
             job.status,
-            job.progress.model_dump() if job.progress else None,
+            json.dumps(job.progress.model_dump()) if job.progress else None,
             job.error,
             job.profile_id,
             job.created_at,
@@ -106,7 +107,7 @@ class ProfilingStore:
             """
             UPDATE profiling_jobs
             SET status = COALESCE($2, status),
-                progress = COALESCE($3, progress),
+                progress = COALESCE($3::jsonb, progress),
                 error = COALESCE($4, error),
                 profile_id = COALESCE($5, profile_id),
                 updated_at = $6
@@ -114,7 +115,7 @@ class ProfilingStore:
             """,
             job_id,
             status,
-            progress.model_dump() if progress else None,
+            json.dumps(progress.model_dump()) if progress else None,
             error,
             profile_id,
             updated_at,
@@ -135,7 +136,10 @@ class ProfilingStore:
             raise KeyError(f"Profiling job not found: {job_id}")
         progress = None
         if row["progress"]:
-            progress = ProfilingProgress(**row["progress"])
+            progress_data = row["progress"]
+            if isinstance(progress_data, str):
+                progress_data = json.loads(progress_data)
+            progress = ProfilingProgress(**progress_data)
         return ProfilingJob(
             job_id=row["job_id"],
             connection_id=row["connection_id"],
@@ -152,11 +156,11 @@ class ProfilingStore:
         await self._pool.execute(
             """
             INSERT INTO profiling_profiles (profile_id, connection_id, payload, created_at)
-            VALUES ($1, $2, $3, $4)
+            VALUES ($1, $2, $3::jsonb, $4)
             """,
             profile.profile_id,
             profile.connection_id,
-            profile.model_dump(mode="json"),
+            json.dumps(profile.model_dump(mode="json")),
             profile.created_at,
         )
         return profile
@@ -173,7 +177,10 @@ class ProfilingStore:
         )
         if row is None:
             raise KeyError(f"Profile not found: {profile_id}")
-        return DatabaseProfile.model_validate(row["payload"])
+        payload = row["payload"]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        return DatabaseProfile.model_validate(payload)
 
     async def add_pending_datapoints(
         self, profile_id: UUID, datapoints: list[PendingDataPoint]
@@ -186,11 +193,11 @@ class ProfilingStore:
                         """
                         INSERT INTO pending_datapoints (
                             pending_id, profile_id, datapoint, confidence, status, created_at
-                        ) VALUES ($1, $2, $3, $4, $5, $6)
+                        ) VALUES ($1, $2, $3::jsonb, $4, $5, $6)
                         """,
                         item.pending_id,
                         profile_id,
-                        item.datapoint,
+                        json.dumps(item.datapoint),
                         item.confidence,
                         item.status,
                         item.created_at,
@@ -226,13 +233,16 @@ class ProfilingStore:
         pending_id: UUID,
         status: str,
         review_note: str | None = None,
+        datapoint: dict | None = None,
     ) -> PendingDataPoint:
         self._ensure_pool()
         reviewed_at = datetime.now(UTC)
+        datapoint_payload = json.dumps(datapoint) if datapoint else None
         row = await self._pool.fetchrow(
             """
             UPDATE pending_datapoints
-            SET status = $2, reviewed_at = $3, review_note = $4
+            SET status = $2, reviewed_at = $3, review_note = $4,
+                datapoint = COALESCE($5::jsonb, datapoint)
             WHERE pending_id = $1
             RETURNING pending_id, profile_id, datapoint, confidence, status,
                       created_at, reviewed_at, review_note
@@ -241,6 +251,7 @@ class ProfilingStore:
             status,
             reviewed_at,
             review_note,
+            datapoint_payload,
         )
         if row is None:
             raise KeyError(f"Pending DataPoint not found: {pending_id}")
@@ -264,10 +275,13 @@ class ProfilingStore:
 
     @staticmethod
     def _row_to_pending(row: asyncpg.Record) -> PendingDataPoint:
+        payload = row["datapoint"]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
         return PendingDataPoint(
             pending_id=row["pending_id"],
             profile_id=row["profile_id"],
-            datapoint=row["datapoint"],
+            datapoint=payload,
             confidence=row["confidence"],
             status=row["status"],
             created_at=row["created_at"],

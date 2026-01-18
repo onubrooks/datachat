@@ -479,7 +479,9 @@ def setup():
 
         database_url = click.prompt("Database URL", default=default_url, show_default=True)
         auto_profile = click.confirm(
-            "Auto-profile database (coming soon)", default=False, show_default=True
+            "Auto-profile database (generate DataPoints draft)",
+            default=False,
+            show_default=True,
         )
 
         vector_store = VectorStore()
@@ -501,6 +503,103 @@ def setup():
             console.print("[green]✓ System initialized. You're ready to query.[/green]")
 
     asyncio.run(run_setup())
+
+
+@cli.command()
+def demo():
+    """Seed demo tables and load demo DataPoints."""
+
+    async def run_demo():
+        settings = get_settings()
+        database_url = str(settings.database.url)
+
+        from urllib.parse import urlparse
+
+        parsed = urlparse(database_url)
+        connector = PostgresConnector(
+            host=parsed.hostname or "localhost",
+            port=parsed.port or 5432,
+            database=parsed.path.lstrip("/") if parsed.path else "datachat",
+            user=parsed.username or "postgres",
+            password=parsed.password or "",
+        )
+
+        console.print("[cyan]Seeding demo tables...[/cyan]")
+        await connector.connect()
+        try:
+            await connector.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE
+                );
+                """
+            )
+            await connector.execute(
+                """
+                CREATE TABLE IF NOT EXISTS orders (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    amount NUMERIC(12,2) NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    order_date DATE NOT NULL DEFAULT CURRENT_DATE
+                );
+                """
+            )
+
+            user_count = await connector.execute("SELECT COUNT(*) AS count FROM users")
+            if user_count.rows and user_count.rows[0]["count"] == 0:
+                await connector.execute(
+                    """
+                    INSERT INTO users (email, is_active)
+                    VALUES
+                        ('alice@example.com', TRUE),
+                        ('bob@example.com', TRUE),
+                        ('charlie@example.com', FALSE)
+                    """
+                )
+
+            order_count = await connector.execute("SELECT COUNT(*) AS count FROM orders")
+            if order_count.rows and order_count.rows[0]["count"] == 0:
+                await connector.execute(
+                    """
+                    INSERT INTO orders (user_id, amount, status, order_date)
+                    VALUES
+                        (1, 120.50, 'completed', CURRENT_DATE - INTERVAL '12 days'),
+                        (1, 75.00, 'completed', CURRENT_DATE - INTERVAL '6 days'),
+                        (2, 200.00, 'completed', CURRENT_DATE - INTERVAL '2 days'),
+                        (3, 15.00, 'refunded', CURRENT_DATE - INTERVAL '20 days')
+                    """
+                )
+        finally:
+            await connector.close()
+
+        datapoints_dir = Path("datapoints") / "demo"
+        if not datapoints_dir.exists():
+            console.print("[red]Demo DataPoints not found at datapoints/demo[/red]")
+            raise click.ClickException("Missing demo DataPoints.")
+
+        console.print("[cyan]Loading demo DataPoints...[/cyan]")
+        loader = DataPointLoader()
+        datapoints = loader.load_directory(datapoints_dir)
+        if not datapoints:
+            raise click.ClickException("No demo DataPoints loaded.")
+
+        vector_store = VectorStore()
+        await vector_store.initialize()
+        await vector_store.clear()
+        await vector_store.add_datapoints(datapoints)
+
+        graph = KnowledgeGraph()
+        for datapoint in datapoints:
+            graph.add_datapoint(datapoint)
+
+        console.print("[green]✓ Demo data loaded. Try: datachat ask \"How many users are active?\"[/green]")
+
+    asyncio.run(run_demo())
 
 
 # ============================================================================

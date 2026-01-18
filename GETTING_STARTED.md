@@ -52,7 +52,23 @@ LLM_OPENAI_API_KEY=sk-...
 
 **Important:** Replace `your_database` with your actual database name that contains the data you want to query.
 
-### Step 3: Create DataPoints (REQUIRED)
+### Optional: Load Demo Data
+
+If you want to try DataChat quickly, load the demo dataset:
+
+```bash
+# Quick setup (recommended)
+datachat demo
+
+# Or manual steps
+# Seed demo tables
+psql "$DATABASE_URL" -f scripts/demo_seed.sql
+
+# Load demo DataPoints
+datachat dp sync --datapoints-dir datapoints/demo
+```
+
+### Step 3: Initialize DataPoints (REQUIRED)
 
 ⚠️ **Without DataPoints, DataChat cannot understand your database schema.**
 
@@ -63,9 +79,22 @@ DataPoints are JSON files that describe:
 
 #### Option A: Auto-Generate from Database Schema
 
-**(Coming Soon - Not Yet Implemented)**
+Use the setup wizard to auto-profile your database and generate draft DataPoints.
+This requires the backend running (see Step 5).
 
-This would automatically introspect your database and create DataPoints.
+**Web UI:**
+1. Open <http://localhost:3000>
+2. Follow the setup prompt and enable **Auto-profile**
+3. Review pending DataPoints in **Database Management**
+4. Approve the DataPoints you want to activate
+
+**CLI:**
+```bash
+datachat setup
+```
+
+When prompted, enable auto-profiling. Approved DataPoints are loaded into the
+vector store and knowledge graph immediately.
 
 #### Option B: Manually Create DataPoints
 
@@ -216,7 +245,7 @@ Create a DataPoint file for each important table:
 ### Step 4: Load DataPoints into DataChat
 
 ```bash
-# Using CLI
+# Using CLI (manual flow)
 datachat dp sync --datapoints-dir ./datapoints
 
 # Or add individually
@@ -227,6 +256,8 @@ datachat dp add business ./datapoints/metrics/revenue.json
 # Verify they're loaded
 datachat dp list
 ```
+
+If you used auto-profiling, you can skip this step after approving DataPoints.
 
 **Expected Output:**
 ```
@@ -335,8 +366,9 @@ Before your first query:
 
 - [ ] Database connected (`DATABASE_URL` in `.env`)
 - [ ] OpenAI API key configured
-- [ ] DataPoints created for key tables
-- [ ] DataPoints loaded (`datachat dp sync`)
+- [ ] System initialized (Web UI or `datachat setup`)
+- [ ] DataPoints approved or created for key tables
+- [ ] DataPoints loaded (`datachat dp sync` for manual flow)
 - [ ] System status shows healthy (`datachat status`)
 - [ ] Test with simple query
 
@@ -488,7 +520,8 @@ After setup:
 Planned features:
 
 - [ ] **Auto-generate DataPoints** from database introspection
-- [ ] **Multi-database support** - Query across different databases
+- [ ] **Improve auto-profiling** coverage and customization
+- [ ] **Cross-database querying** - Join results across connections
 - [ ] **DataPoint templates** - Quick-start templates for common schemas
 - [ ] **Visual DataPoint editor** - Web UI for creating DataPoints
 - [ ] **Query approval workflow** - Review SQL before execution

@@ -4,6 +4,18 @@ This directory contains utility scripts for testing and development.
 
 ## Available Scripts
 
+### 0. `demo_seed.sql` - Demo Database Seed
+
+**Purpose**: Create demo tables (`users`, `orders`) with sample data for onboarding.
+
+**Usage**:
+
+```bash
+psql "$DATABASE_URL" -f scripts/demo_seed.sql
+```
+
+**Related DataPoints**: `datapoints/demo/*.json`
+
 ### 1. `test_sql_agent.py` - Comprehensive SQLAgent Testing
 
 **Purpose**: Test SQLAgent with predefined sample queries to verify SQL generation, self-correction, and metadata.

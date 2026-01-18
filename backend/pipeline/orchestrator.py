@@ -547,6 +547,11 @@ class DataChatPipeline:
         except Exception as e:
             logger.error(f"ExecutorAgent failed: {e}")
             state["error"] = f"Execution failed: {e}"
+            if not state.get("natural_language_answer"):
+                state["natural_language_answer"] = (
+                    f"I encountered an error while processing your query: {state.get('error')}. "
+                    "Please try rephrasing your question or contact support if the issue persists."
+                )
 
         return state
 
