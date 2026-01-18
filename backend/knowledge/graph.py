@@ -532,6 +532,22 @@ class KnowledgeGraph:
         self._datapoint_count = 0
         logger.info("Knowledge graph cleared")
 
+    def remove_datapoint(self, datapoint_id: str) -> None:
+        """Remove a DataPoint and its nodes from the graph."""
+        nodes_to_remove = []
+        for node, data in self.graph.nodes(data=True):
+            if node == datapoint_id:
+                nodes_to_remove.append(node)
+            elif data.get("parent_table") == datapoint_id:
+                nodes_to_remove.append(node)
+            elif isinstance(node, str) and node.startswith(f"{datapoint_id}__col__"):
+                nodes_to_remove.append(node)
+
+        if nodes_to_remove:
+            self.graph.remove_nodes_from(nodes_to_remove)
+            self._datapoint_count = max(self._datapoint_count - 1, 0)
+            logger.info(f"Removed datapoint '{datapoint_id}' from knowledge graph")
+
     # Helper methods
 
     def _find_table_by_name(self, table_name: str) -> str | None:

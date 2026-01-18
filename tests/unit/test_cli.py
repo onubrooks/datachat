@@ -15,8 +15,8 @@ from backend.cli import (
     ask,
     cli,
     connect,
-    datapoint,
     create_pipeline_from_config,
+    datapoint,
     setup,
     status,
 )

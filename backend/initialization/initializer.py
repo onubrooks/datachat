@@ -149,8 +149,8 @@ class SystemInitializer:
                             is_default=True,
                         )
 
-                    from backend.profiling.profiler import SchemaProfiler
                     from backend.profiling.models import ProfilingProgress
+                    from backend.profiling.profiler import SchemaProfiler
 
                     job = await profiling_store.create_job(existing.connection_id)
 
