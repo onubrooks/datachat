@@ -79,22 +79,19 @@ That's it! DataChat is now running with:
 ### Backend Setup
 
 ```bash
-# 1. Navigate to backend
-cd backend
-
-# 2. Create virtual environment
+# 1. Create virtual environment (run from repo root)
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# 3. Install dependencies
+# 2. Install dependencies
 pip install -e .
 
-# 4. Set up environment
-cp ../.env.example .env
+# 3. Set up environment
+cp .env.example .env
 # Edit .env with your configuration
 
-# 5. Start the server
-uvicorn api.main:app --reload --port 8000
+# 4. Start the server
+uvicorn backend.api.main:app --reload --port 8000
 ```
 
 Backend will be available at <http://localhost:8000>
@@ -195,7 +192,7 @@ See [`.env.example`](.env.example) for all available options.
 
 ```env
 # LLM Provider
-OPENAI_API_KEY=sk-...
+LLM_OPENAI_API_KEY=sk-...
 
 # Database
 DATABASE_URL=postgresql://user:pass@localhost:5432/datachat
@@ -209,8 +206,8 @@ ENVIRONMENT=development
 LOG_LEVEL=INFO
 
 # Alternative LLM providers
-ANTHROPIC_API_KEY=sk-ant-...
-GOOGLE_API_KEY=...
+LLM_ANTHROPIC_API_KEY=sk-ant-...
+LLM_GOOGLE_API_KEY=...
 
 # ChromaDB
 CHROMA_PERSIST_DIR=./chroma_data

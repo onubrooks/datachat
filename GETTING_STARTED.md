@@ -28,14 +28,13 @@ cp .env.example .env
 
 **Option B: Manual Installation**
 ```bash
-# Backend
-cd backend
+# Backend (from repo root)
 python3 -m venv venv
 source venv/bin/activate
 pip install -e .
 
 # Frontend
-cd ../frontend
+cd frontend
 npm install
 ```
 
@@ -48,7 +47,7 @@ Edit `.env` file:
 DATABASE_URL=postgresql://user:password@host:5432/your_database
 
 # Required: OpenAI API key for LLM
-OPENAI_API_KEY=sk-...
+LLM_OPENAI_API_KEY=sk-...
 ```
 
 **Important:** Replace `your_database` with your actual database name that contains the data you want to query.
@@ -250,9 +249,8 @@ datachat dp list
 docker-compose up
 
 # Or manually
-# Terminal 1: Backend
-cd backend
-uvicorn api.main:app --reload
+# Terminal 1: Backend (from repo root)
+uvicorn backend.api.main:app --reload
 
 # Terminal 2: Frontend
 cd frontend
