@@ -22,6 +22,10 @@ Ask questions in plain English and get SQL queries, data visualizations, and ins
 - **Web UI** - Modern React interface with chat, SQL display, and data tables
 - **CLI** - Command-line interface for power users
 - **Self-Correction** - Automatic retry loop for SQL validation failures
+- **Initialization Wizard** - Guided setup for first-time installs
+- **Auto-Profiling** - Generate draft DataPoints from your schema
+- **Multi-Database Registry** - Store multiple connections with per-query routing
+- **Auto-Sync** - Keep vectors and graph in sync with DataPoint changes
 
 ---
 
@@ -55,15 +59,19 @@ That's it! DataChat is now running with:
 - **PostgreSQL** on port 5432
 - **ChromaDB** for vector storage
 
-> **⚠️ Important:** Before you can query your data, you must create **DataPoints** (JSON files describing your database schema). DataPoints tell DataChat about your tables, columns, and business logic.
+> **Next:** Complete initialization before running queries.
 >
-> **Quick Setup:**
+> **Option A: Use the setup wizard**
+> - Open <http://localhost:3000> and follow the setup prompt, or run:
+>   `docker-compose exec backend datachat setup`
+> - Enable auto-profiling to generate draft DataPoints, then review them in the
+>   Database Management page.
 >
-> 1. Create DataPoint files in `datapoints/tables/` (see examples in [GETTING_STARTED.md](GETTING_STARTED.md))
-> 2. Load them: `docker-compose exec backend datachat dp sync`
-> 3. Verify: `docker-compose exec backend datachat dp list`
+> **Option B: Manual DataPoints**
+> - Create DataPoint files (examples in [GETTING_STARTED.md](GETTING_STARTED.md))
+> - Load them: `docker-compose exec backend datachat dp sync`
 >
-> **Without DataPoints, queries will fail.** See [GETTING_STARTED.md](GETTING_STARTED.md) for complete instructions.
+> **Without DataPoints, queries will fail.**
 
 ---
 
@@ -313,6 +321,14 @@ print(result["answer"])
 print(result["sql"])
 print(result["data"])
 ```
+
+---
+
+## Documentation
+
+- [Getting Started](GETTING_STARTED.md)
+- [API Reference](docs/API.md)
+- [Multi-Database Guide](docs/MULTI_DATABASE.md)
 
 ---
 

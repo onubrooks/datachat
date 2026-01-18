@@ -10,6 +10,7 @@ import {
   DatabaseConnection,
   PendingDataPoint,
   ProfilingJob,
+  SyncStatusResponse,
 } from "@/lib/api";
 
 const api = new DataChatAPI();
@@ -18,6 +19,8 @@ export function DatabaseManager() {
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [pending, setPending] = useState<PendingDataPoint[]>([]);
   const [job, setJob] = useState<ProfilingJob | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,6 +44,14 @@ export function DatabaseManager() {
       setError((err as Error).message);
     } finally {
       setIsLoading(false);
+    }
+
+    try {
+      const status = await api.getSyncStatus();
+      setSyncStatus(status);
+      setSyncError(null);
+    } catch (err) {
+      setSyncError((err as Error).message);
     }
   };
 
@@ -67,6 +78,26 @@ export function DatabaseManager() {
 
     return () => clearInterval(interval);
   }, [job]);
+
+  useEffect(() => {
+    if (!syncStatus || syncStatus.status !== "running") {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const status = await api.getSyncStatus();
+        setSyncStatus(status);
+        if (status.status !== "running") {
+          await refresh();
+        }
+      } catch (err) {
+        setSyncError((err as Error).message);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [syncStatus]);
 
   const handleCreate = async () => {
     setIsLoading(true);
@@ -144,6 +175,22 @@ export function DatabaseManager() {
     } catch (err) {
       setError((err as Error).message);
     }
+  };
+
+  const handleSync = async () => {
+    setSyncError(null);
+    try {
+      await api.triggerSync();
+      const status = await api.getSyncStatus();
+      setSyncStatus(status);
+    } catch (err) {
+      setSyncError((err as Error).message);
+    }
+  };
+
+  const formatTimestamp = (value: string | null) => {
+    if (!value) return "—";
+    return new Date(value).toLocaleString();
   };
 
   return (
@@ -252,6 +299,48 @@ export function DatabaseManager() {
             </div>
           ))}
         </div>
+      </Card>
+
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Sync Status</h2>
+          <Button
+            variant="secondary"
+            onClick={handleSync}
+            disabled={syncStatus?.status === "running"}
+          >
+            Sync Now
+          </Button>
+        </div>
+        {syncError && <div className="text-xs text-destructive">{syncError}</div>}
+        {!syncStatus && (
+          <p className="text-sm text-muted-foreground">
+            Sync status unavailable.
+          </p>
+        )}
+        {syncStatus && (
+          <div className="space-y-1 text-sm">
+            <div>Status: {syncStatus.status}</div>
+            {syncStatus.sync_type && (
+              <div className="text-xs text-muted-foreground">
+                Type: {syncStatus.sync_type}
+              </div>
+            )}
+            {syncStatus.total_datapoints > 0 && (
+              <div className="text-xs text-muted-foreground">
+                Progress: {syncStatus.processed_datapoints}/
+                {syncStatus.total_datapoints}
+              </div>
+            )}
+            <div className="text-xs text-muted-foreground">
+              Started: {formatTimestamp(syncStatus.started_at)} · Finished:{" "}
+              {formatTimestamp(syncStatus.finished_at)}
+            </div>
+            {syncStatus.error && (
+              <div className="text-xs text-destructive">{syncStatus.error}</div>
+            )}
+          </div>
+        )}
       </Card>
 
       <Card className="p-4 space-y-3">

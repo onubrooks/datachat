@@ -479,7 +479,9 @@ def setup():
 
         database_url = click.prompt("Database URL", default=default_url, show_default=True)
         auto_profile = click.confirm(
-            "Auto-profile database (coming soon)", default=False, show_default=True
+            "Auto-profile database (generate DataPoints draft)",
+            default=False,
+            show_default=True,
         )
 
         vector_store = VectorStore()
