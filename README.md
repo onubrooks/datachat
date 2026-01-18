@@ -130,6 +130,10 @@ Frontend will be available at <http://localhost:3000>
 Want to try DataChat without wiring your own schema? Use the demo dataset:
 
 ```bash
+# Quick setup (recommended)
+datachat demo
+
+# Or manual steps
 # 1. Seed demo tables
 psql "$DATABASE_URL" -f scripts/demo_seed.sql
 

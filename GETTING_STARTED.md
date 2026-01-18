@@ -57,6 +57,10 @@ LLM_OPENAI_API_KEY=sk-...
 If you want to try DataChat quickly, load the demo dataset:
 
 ```bash
+# Quick setup (recommended)
+datachat demo
+
+# Or manual steps
 # Seed demo tables
 psql "$DATABASE_URL" -f scripts/demo_seed.sql
 
