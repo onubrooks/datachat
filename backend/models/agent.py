@@ -791,6 +791,9 @@ class ExecutorAgentInput(AgentInput):
     database_type: Literal["postgresql", "clickhouse", "mysql"] = Field(
         ..., description="Target database type"
     )
+    database_url: str | None = Field(
+        None, description="Database URL override for execution"
+    )
     max_rows: int = Field(default=1000, description="Maximum rows to return")
     timeout_seconds: int = Field(default=30, description="Query timeout in seconds")
     source_datapoints: list[str] = Field(
@@ -807,6 +810,7 @@ class ExecutorAgentInput(AgentInput):
                     "is_safe": True,
                 },
                 "database_type": "postgresql",
+                "database_url": "postgresql://user:pass@host:5432/warehouse",
                 "max_rows": 1000,
                 "timeout_seconds": 30,
                 "source_datapoints": ["table_fact_sales_001"],

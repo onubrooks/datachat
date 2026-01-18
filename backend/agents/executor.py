@@ -14,6 +14,7 @@ Uses database connectors for execution and LLM for summarization.
 import asyncio
 import logging
 import time
+from urllib.parse import urlparse
 
 from backend.agents.base import BaseAgent
 from backend.config import get_settings
@@ -77,7 +78,7 @@ class ExecutorAgent(BaseAgent):
         logger.info(f"[{self.name}] Executing query on {input.database_type}")
 
         # Get database connector
-        connector = await self._get_connector(input.database_type)
+        connector = await self._get_connector(input.database_type, input.database_url)
 
         try:
             # Execute query with timeout
@@ -126,7 +127,9 @@ class ExecutorAgent(BaseAgent):
         finally:
             await connector.close()
 
-    async def _get_connector(self, database_type: str) -> BaseConnector:
+    async def _get_connector(
+        self, database_type: str, database_url: str | None
+    ) -> BaseConnector:
         """
         Get database connector for specified type.
 
@@ -137,20 +140,29 @@ class ExecutorAgent(BaseAgent):
             Database connector instance
         """
         if database_type == "postgresql":
+            db_url = database_url or str(self.config.database.url)
+            parsed = urlparse(db_url.replace("postgresql+asyncpg://", "postgresql://"))
+            if not parsed.hostname:
+                raise ValueError("Invalid PostgreSQL database URL.")
             connector = PostgresConnector(
-                host=self.config.database.host,
-                port=self.config.database.port,
-                database=self.config.database.database_name,
-                user=self.config.database.username,
-                password=self.config.database.password,
+                host=parsed.hostname,
+                port=parsed.port or 5432,
+                database=parsed.path.lstrip("/") if parsed.path else "datachat",
+                user=parsed.username or "postgres",
+                password=parsed.password or "",
             )
         elif database_type == "clickhouse":
+            if not database_url:
+                raise ValueError("ClickHouse requires a database URL.")
+            parsed = urlparse(database_url)
+            if not parsed.hostname:
+                raise ValueError("Invalid ClickHouse database URL.")
             connector = ClickHouseConnector(
-                host=self.config.database.host,
-                port=self.config.database.port or 8123,
-                database=self.config.database.database_name,
-                user=self.config.database.username,
-                password=self.config.database.password,
+                host=parsed.hostname,
+                port=parsed.port or 8123,
+                database=parsed.path.lstrip("/") if parsed.path else "default",
+                user=parsed.username or "default",
+                password=parsed.password or "",
             )
         else:
             raise ValueError(f"Unsupported database type: {database_type}")

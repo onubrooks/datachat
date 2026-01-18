@@ -97,6 +97,7 @@ from backend.models.datapoint import (
     Relationship,
     SchemaDataPoint,
 )
+from backend.models.database import DatabaseConnection
 
 __all__ = [
     # Core agent models
@@ -146,6 +147,7 @@ __all__ = [
     "ProcessDataPoint",
     "ColumnMetadata",
     "Relationship",
+    "DatabaseConnection",
     # API models
     "ChatRequest",
     "ChatResponse",
