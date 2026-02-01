@@ -2,7 +2,37 @@
 
 Comprehensive testing guide for Backend API, CLI, and Frontend.
 
+For a quick verification pass, see `smoke_testing.md`.
+
 ---
+
+## Current Capability Demo (Base + Analyst)
+
+Use these to validate the system as it exists today (Levels 1–2).
+
+```bash
+datachat demo --persona base --reset
+datachat demo --persona analyst --reset
+```
+
+Suggested questions:
+- "What was total revenue last 30 days?"
+- "Top 5 users by orders"
+- "How many active users are there?"
+
+Expected: answers include SQL + results; `validation_errors` is empty or minimal.
+
+---
+
+## CLI Installation Check
+
+If `datachat --version` returns "command not found", install the CLI:
+
+```bash
+pip install -e .
+```
+
+Setup saves database URLs to `~/.datachat/config.json` for reuse.
 
 ## Prerequisites
 
@@ -40,6 +70,15 @@ Before testing, ensure you have:
    ```env
    OPENAI_API_KEY=sk-...  # Required for LLM functionality
    DATABASE_URL=postgresql://datachat:datachat_password@localhost:5432/datachat
+   SYSTEM_DATABASE_URL=postgresql://datachat:datachat_password@localhost:5432/datachat
+   ```
+
+4. **Optional (Multi-DB Registry):**
+
+   If you want to test the database registry endpoints, set:
+
+   ```env
+   DATABASE_CREDENTIALS_KEY=... # 32 url-safe base64 bytes
    ```
 
 ---
@@ -120,7 +159,7 @@ uvicorn backend.api.main:app --reload --port 8000
 
 **Expected Output:**
 
-```
+```text
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 INFO:     Started reloader process [xxxxx] using WatchFiles
 INFO:     Started server process [xxxxx]
@@ -163,6 +202,21 @@ curl http://localhost:8000/api/v1/ready
 }
 ```
 
+#### 2.3 System Status / Initialize
+
+```bash
+# Status (shows setup steps)
+curl http://localhost:8000/api/v1/system/status
+
+# Initialize with a database URL (auto-profiling optional)
+curl -X POST http://localhost:8000/api/v1/system/initialize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "database_url": "postgresql://datachat:datachat_password@localhost:5432/datachat",
+    "auto_profile": true
+  }'
+```
+
 #### 2.3 Chat Endpoint (Simple Query)
 
 ```bash
@@ -180,6 +234,8 @@ curl -X POST http://localhost:8000/api/v1/chat \
   "data": [...],
   "visualization_hint": "table",
   "sources": [...],
+  "validation_errors": [],
+  "validation_warnings": [],
   "metrics": {
     "total_latency_ms": 1500,
     "agent_timings": {
@@ -194,6 +250,28 @@ curl -X POST http://localhost:8000/api/v1/chat \
   },
   "conversation_id": "test_conv_1"
 }
+```
+
+If validation fails, `validation_errors` will include details about why the SQL was rejected.
+
+#### 2.4 Database Registry (Optional)
+
+Requires `DATABASE_CREDENTIALS_KEY` in your environment.
+
+```bash
+# Create a connection
+curl -X POST http://localhost:8000/api/v1/databases \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Local Postgres",
+    "database_url": "postgresql://datachat:datachat_password@localhost:5432/datachat",
+    "database_type": "postgresql",
+    "tags": ["local"],
+    "is_default": true
+  }'
+
+# List connections
+curl http://localhost:8000/api/v1/databases
 ```
 
 #### 2.4 API Documentation
@@ -225,7 +303,7 @@ datachat --help
 
 **Expected Output:**
 
-```
+```text
 Usage: datachat [OPTIONS] COMMAND [ARGS]...
 
   DataChat - Natural language interface for data warehouses.
@@ -300,7 +378,24 @@ datachat ask "How many tables are in the database?"
 ⏱ 1500ms  🤖 2 LLM calls  🔄 0 retries
 ```
 
-#### 3.5 Test Interactive Chat Mode
+#### 3.5 Test Onboarding Guardrails (Missing DB/DataPoints)
+
+If you haven't configured a database or loaded DataPoints, the CLI should block queries:
+
+```bash
+datachat ask "How many users signed up last week?"
+```
+
+Expected output:
+```text
+DataChat requires setup before queries can run.
+Note: SYSTEM_DATABASE_URL enables registry/profiling and demo data.
+- Connect a database: ...
+- Load DataPoints: ...
+Hint: Run 'datachat setup' or 'datachat demo' to continue.
+```
+
+#### 3.6 Test Interactive Chat Mode
 
 ```bash
 datachat chat
@@ -308,7 +403,7 @@ datachat chat
 # Interactive session:
 ```
 
-```
+```text
 ╭──────────────────────────────────────────╮
 │ DataChat Interactive Mode                │
 │ Ask questions in natural language.       │
@@ -322,7 +417,7 @@ You: What is the current date?
 
 *System will process query and show agent status*
 
-```
+```text
 ╭─ Answer ──────────────────────────────────╮
 │ The current date is 2026-01-17.          │
 ╰───────────────────────────────────────────╯
@@ -332,7 +427,7 @@ You: exit
 Goodbye!
 ```
 
-#### 3.6 Test DataPoint Commands
+#### 3.7 Test DataPoint Commands
 
 ```bash
 # List DataPoints
@@ -392,19 +487,21 @@ datachat dp list
 1 DataPoint(s) found
 ```
 
-#### 3.7 Load Demo Data (Optional)
+#### 3.8 Load Demo Data (Optional)
 
 Use the built-in demo to seed a small dataset and load demo DataPoints.
 
 ```bash
 # Create demo tables + rows and load datapoints/demo into the vector store + graph
-datachat demo
+datachat demo --persona base --reset
 
 # Expected output:
 ✓ Demo tables created
 ✓ Demo rows inserted
 ✓ Demo DataPoints loaded
 ```
+
+Note: The demo uses `SYSTEM_DATABASE_URL` for its sample data.
 
 After this, you can ask:
 
@@ -435,7 +532,7 @@ npm run dev
 
 **Expected Output:**
 
-```
+```text
   ▲ Next.js 15.5.9
   - Local:        http://localhost:3000
   - Environments: .env.local
