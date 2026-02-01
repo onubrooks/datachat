@@ -67,7 +67,7 @@ class DataPointGenerator:
 
         business_purpose = payload.get(
             "business_purpose",
-            f"Auto-profiled table {table.schema}.{table.name} for analytics.",
+            f"Auto-profiled table {table.schema_name}.{table.name} for analytics.",
         )
         column_meanings = payload.get("columns", {}) if isinstance(payload, dict) else {}
 
@@ -93,15 +93,15 @@ class DataPointGenerator:
         if self._has_time_series(table) and not any("DATE_TRUNC" in q for q in common_queries):
             common_queries.append(
                 "SELECT DATE_TRUNC('day', <timestamp_column>), COUNT(*) FROM "
-                f"{table.schema}.{table.name} GROUP BY 1 ORDER BY 1;"
+                f"{table.schema_name}.{table.name} GROUP BY 1 ORDER BY 1;"
             )
 
         row_count = table.row_count if table.row_count is not None and table.row_count >= 0 else None
         schema_datapoint = SchemaDataPoint(
             datapoint_id=self._make_datapoint_id("table", table.name, index),
             name=self._title_case(table.name),
-            table_name=f"{table.schema}.{table.name}",
-            schema=table.schema,
+            table_name=f"{table.schema_name}.{table.name}",
+            schema=table.schema_name,
             business_purpose=self._ensure_min_length(business_purpose, 10),
             key_columns=key_columns,
             relationships=[
@@ -117,7 +117,7 @@ class DataPointGenerator:
         )
 
         return GeneratedDataPoint(
-            datapoint=schema_datapoint.model_dump(mode="json"),
+            datapoint=schema_datapoint.model_dump(mode="json", by_alias=True),
             confidence=float(payload.get("confidence", 0.7))
             if isinstance(payload, dict)
             else 0.7,
@@ -160,7 +160,7 @@ class DataPointGenerator:
                 calculation=calculation,
                 synonyms=synonyms,
                 business_rules=business_rules,
-                related_tables=[f"{table.schema}.{table.name}"],
+                related_tables=[f"{table.schema_name}.{table.name}"],
                 unit=metric.get("unit"),
                 aggregation=metric.get("aggregation"),
                 owner=_DEFAULT_OWNER,
@@ -169,7 +169,7 @@ class DataPointGenerator:
             )
             generated.append(
                 GeneratedDataPoint(
-                    datapoint=business_datapoint.model_dump(mode="json"),
+                    datapoint=business_datapoint.model_dump(mode="json", by_alias=True),
                     confidence=self._normalize_confidence(metric.get("confidence", 0.6)),
                     explanation=metric.get("explanation"),
                 )
@@ -276,7 +276,7 @@ class DataPointGenerator:
             "business_purpose (string), columns (object mapping column name to business meaning), "
             "common_queries (array), gotchas (array), freshness (string or null), "
             "confidence (0-1), explanation (string).\n\n"
-            f"Table: {table.schema}.{table.name}\n"
+            f"Table: {table.schema_name}.{table.name}\n"
             f"Row count (estimate): {table.row_count}\n"
             f"Columns: {json.dumps(columns)}"
         )
@@ -294,6 +294,6 @@ class DataPointGenerator:
             "Suggest KPIs from numeric columns. Return JSON with key 'metrics', "
             "an array of objects with fields: name, calculation, aggregation, unit, "
             "synonyms, business_rules, confidence, explanation.\n\n"
-            f"Table: {table.schema}.{table.name}\n"
+            f"Table: {table.schema_name}.{table.name}\n"
             f"Numeric columns: {json.dumps(numeric_cols)}"
         )
