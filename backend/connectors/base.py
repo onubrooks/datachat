@@ -15,7 +15,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +41,13 @@ class ColumnInfo(BaseModel):
 class TableInfo(BaseModel):
     """Information about a database table."""
 
-    schema: str = Field(..., description="Schema/database name")
+    schema_name: str = Field(..., alias="schema", description="Schema/database name")
     table_name: str = Field(..., description="Table name")
     columns: list[ColumnInfo] = Field(..., description="List of columns")
     row_count: int | None = Field(None, description="Approximate row count")
     table_type: str = Field(default="TABLE", description="TABLE, VIEW, etc.")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class QueryResult(BaseModel):
