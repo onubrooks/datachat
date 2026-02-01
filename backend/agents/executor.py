@@ -29,6 +29,7 @@ from backend.models import (
     ExecutorAgentOutput,
     QueryResult,
 )
+from backend.prompts.loader import PromptLoader
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class ExecutorAgent(BaseAgent):
             )
         else:
             self.llm = llm_provider
+        self.prompts = PromptLoader()
 
     async def execute(self, input: ExecutorAgentInput) -> ExecutorAgentOutput:
         """
@@ -140,7 +142,12 @@ class ExecutorAgent(BaseAgent):
             Database connector instance
         """
         if database_type == "postgresql":
-            db_url = database_url or str(self.config.database.url)
+            if database_url:
+                db_url = database_url
+            elif self.config.database.url:
+                db_url = str(self.config.database.url)
+            else:
+                raise ValueError("DATABASE_URL is not configured for query execution.")
             parsed = urlparse(db_url.replace("postgresql+asyncpg://", "postgresql://"))
             if not parsed.hostname:
                 raise ValueError("Invalid PostgreSQL database URL.")
@@ -248,7 +255,7 @@ class ExecutorAgent(BaseAgent):
                 messages=[
                     LLMMessage(
                         role="system",
-                        content="You are a data assistant that summarizes query results.",
+                        content=self.prompts.load("system/main.md"),
                     ),
                     LLMMessage(role="user", content=prompt),
                 ],
@@ -275,20 +282,12 @@ class ExecutorAgent(BaseAgent):
         if query_result.was_truncated:
             results_str += f"\n... (showing {len(rows_sample)} of {query_result.row_count} rows)"
 
-        return f"""You are a data assistant. Summarize these query results in natural language.
-
-**User Question:** {query}
-
-**SQL Query:** {sql}
-
-**Results:**
-{results_str}
-
-**Response Format:**
-Answer: [1-2 sentence natural language answer]
-Insights: [Bullet points of key insights, if any]
-
-Be concise and focus on answering the user's question."""
+        return self.prompts.render(
+            "agents/executor_summary.md",
+            user_query=query,
+            sql_query=sql,
+            results=results_str,
+        )
 
     def _parse_summary_response(
         self, response: str, query_result: QueryResult
