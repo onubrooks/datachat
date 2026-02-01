@@ -11,9 +11,13 @@ Request body:
 ```json
 {
   "database_url": "postgresql://user:pass@host:5432/db",
+  "system_database_url": "postgresql://user:pass@host:5432/datachat",
   "auto_profile": true
 }
 ```
+
+Notes:
+- When provided, `database_url` and `system_database_url` are persisted to `~/.datachat/config.json`.
 
 ## Chat
 

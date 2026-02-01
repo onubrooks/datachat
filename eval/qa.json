@@ -1,0 +1,22 @@
+[
+  {
+    "query": "How many users are active?",
+    "expected_sql_contains": ["COUNT", "users", "is_active"],
+    "expected_answer_type": "single_value"
+  },
+  {
+    "query": "Top 5 users by orders",
+    "expected_sql_contains": ["COUNT", "orders", "GROUP BY", "LIMIT 5"],
+    "expected_answer_type": "table"
+  },
+  {
+    "query": "Total revenue from completed orders",
+    "expected_sql_contains": ["SUM", "orders", "status", "completed"],
+    "expected_answer_type": "single_value"
+  },
+  {
+    "query": "Orders by day in the last 30 days",
+    "expected_sql_contains": ["GROUP BY", "order_date"],
+    "expected_answer_type": "time_series"
+  }
+]

@@ -1,0 +1,112 @@
+# DataChat RAG Evaluation Plan
+
+Lightweight evaluation plan for retrieval quality and end-to-end answer fidelity.
+
+---
+
+## Goals
+
+- Validate that the right DataPoints are retrieved for typical queries.
+- Track regressions when prompts, embeddings, or retrieval logic change.
+- Provide a small, repeatable harness for demos and CI gates.
+
+---
+
+## Datasets
+
+### 1) Retrieval Evaluation Set
+
+Small, human-labeled dataset of (query → expected DataPoint IDs).
+
+Example schema:
+
+```json
+{
+  "query": "What was total revenue last month?",
+  "expected_datapoint_ids": ["table_orders_001", "metric_revenue_001"],
+  "notes": "Revenue derived from completed orders"
+}
+```
+
+### 2) End-to-End QA Set
+
+Queries with expected SQL patterns + answer types (table, single value, time series).
+
+Example schema:
+
+```json
+{
+  "query": "Top 5 users by orders",
+  "expected_sql_contains": ["COUNT", "orders", "GROUP BY", "LIMIT 5"],
+  "expected_answer_type": "table"
+}
+```
+
+---
+
+## Metrics
+
+### Retrieval
+
+- **Recall@K**: fraction of expected DataPoints retrieved in top K.
+- **MRR**: position of first relevant DataPoint.
+- **Coverage**: % of queries with at least 1 expected DataPoint retrieved.
+
+### End-to-End
+
+- **SQL match rate**: heuristic match against expected SQL patterns.
+- **Answer type accuracy**: table vs single value vs time series.
+- **Validation error rate**: % of runs with critical validation errors.
+
+---
+
+## Evaluation Workflow
+
+1. Load demo data + DataPoints.
+2. Run retrieval-only evaluation (ContextAgent).
+3. Run full pipeline evaluation (Classifier → Context → SQL → Validator → Executor).
+4. Record metrics and compare against baseline.
+
+## Minimal Runner
+
+Run the starter eval runner against the local API:
+
+```bash
+# Retrieval checks (uses sources from /chat)
+python scripts/eval_runner.py --mode retrieval --dataset eval/retrieval.json
+
+# End-to-end checks
+python scripts/eval_runner.py --mode qa --dataset eval/qa.json
+```
+
+Notes:
+- Retrieval mode infers hits from `sources` returned by `/api/v1/chat`.
+- Answer type checks use a simple heuristic (single value vs table vs time series).
+
+---
+
+## Suggested CLI Hooks (Future)
+
+```text
+datachat eval retrieval --dataset ./eval/retrieval.json
+datachat eval endtoend --dataset ./eval/qa.json
+datachat eval compare --baseline ./eval/v1.json --candidate ./eval/v2.json
+```
+
+---
+
+## Demo-Ready Subset
+
+Keep a tiny set (5-10 queries) for quick regression checks before demos.
+
+---
+
+## Next Steps
+
+- Create `eval/` datasets and add a minimal runner.
+- Wire into CI (fail on regression beyond threshold).
+
+## Starter Datasets
+
+- `eval/retrieval.json` - expected DataPoint IDs per query.
+- `eval/qa.json` - SQL pattern + answer type checks.

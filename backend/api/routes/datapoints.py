@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -31,6 +32,16 @@ class SyncTriggerResponse(BaseModel):
     job_id: UUID
 
 
+class DataPointSummary(BaseModel):
+    datapoint_id: str
+    type: str
+    name: str | None
+
+
+class DataPointListResponse(BaseModel):
+    datapoints: list[DataPointSummary]
+
+
 def _get_orchestrator():
     from backend.api.main import app_state
 
@@ -56,12 +67,12 @@ async def create_datapoint(payload: dict) -> dict:
             status_code=status.HTTP_409_CONFLICT,
             detail="Datapoint already exists",
         )
-    save_datapoint_to_disk(datapoint.model_dump(mode="json"), path)
+    save_datapoint_to_disk(datapoint.model_dump(mode="json", by_alias=True), path)
 
     orchestrator = _get_orchestrator()
     orchestrator.enqueue_sync_incremental([datapoint.datapoint_id])
 
-    return datapoint.model_dump(mode="json")
+    return datapoint.model_dump(mode="json", by_alias=True)
 
 
 @router.put("/datapoints/{datapoint_id}")
@@ -78,12 +89,12 @@ async def update_datapoint(datapoint_id: str, payload: dict) -> dict:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Datapoint not found",
         )
-    save_datapoint_to_disk(datapoint.model_dump(mode="json"), path)
+    save_datapoint_to_disk(datapoint.model_dump(mode="json", by_alias=True), path)
 
     orchestrator = _get_orchestrator()
     orchestrator.enqueue_sync_incremental([datapoint.datapoint_id])
 
-    return datapoint.model_dump(mode="json")
+    return datapoint.model_dump(mode="json", by_alias=True)
 
 
 @router.delete("/datapoints/{datapoint_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -107,8 +118,34 @@ async def trigger_sync() -> SyncTriggerResponse:
     return SyncTriggerResponse(job_id=job_id)
 
 
+@router.get("/datapoints", response_model=DataPointListResponse)
+async def list_datapoints() -> DataPointListResponse:
+    if not DATA_DIR.exists():
+        return DataPointListResponse(datapoints=[])
+    datapoints: list[DataPointSummary] = []
+    for path in DATA_DIR.glob("*.json"):
+        try:
+            with path.open() as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        datapoints.append(
+            DataPointSummary(
+                datapoint_id=str(payload.get("datapoint_id", path.stem)),
+                type=str(payload.get("type", "Unknown")),
+                name=payload.get("name"),
+            )
+        )
+    datapoints.sort(key=lambda item: (item.type, item.name or item.datapoint_id))
+    return DataPointListResponse(datapoints=datapoints)
+
+
 @router.get("/sync/status", response_model=SyncStatusResponse)
 async def get_sync_status() -> SyncStatusResponse:
     orchestrator = _get_orchestrator()
     status_payload = orchestrator.get_status()
+    for key in ("started_at", "finished_at"):
+        value = status_payload.get(key)
+        if value is not None and hasattr(value, "isoformat"):
+            status_payload[key] = value.isoformat()
     return SyncStatusResponse(**status_payload)

@@ -16,9 +16,11 @@ The SQLAgent:
 import json
 import logging
 import re
+from urllib.parse import urlparse
 
 from backend.agents.base import BaseAgent
 from backend.config import get_settings
+from backend.connectors.postgres import PostgresConnector
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
 from backend.models.agent import (
@@ -31,6 +33,7 @@ from backend.models.agent import (
     SQLGenerationError,
     ValidationIssue,
 )
+from backend.prompts.loader import PromptLoader
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +86,8 @@ class SQLAgent(BaseAgent):
             f"SQLAgent initialized with {provider_name} provider",
             extra={"provider": provider_name, "model": model_name},
         )
+        self.prompts = PromptLoader()
+        self._live_schema_cache: dict[str, str] = {}
 
     async def execute(self, input: SQLAgentInput) -> SQLAgentOutput:
         """
@@ -171,6 +176,9 @@ class SQLAgent(BaseAgent):
                     "correction_attempts": len(correction_attempts),
                     "needs_clarification": needs_clarification,
                     "confidence": generated_sql.confidence,
+                    "prompt_version": self.prompts.get_metadata(
+                        "agents/sql_generator.md"
+                    ).get("version"),
                 },
             )
 
@@ -208,8 +216,19 @@ class SQLAgent(BaseAgent):
         Raises:
             LLMError: If LLM call fails
         """
+        fallback_sql = self._build_introspection_query(input.query)
+        if fallback_sql:
+            return GeneratedSQL(
+                sql=fallback_sql,
+                explanation="Lists available tables using the database catalog.",
+                used_datapoints=[],
+                confidence=0.95,
+                assumptions=[],
+                clarifying_questions=[],
+            )
+
         # Build prompt with context
-        prompt = self._build_generation_prompt(input)
+        prompt = await self._build_generation_prompt(input)
 
         # Create LLM request
         llm_request = LLMRequest(
@@ -365,6 +384,17 @@ class SQLAgent(BaseAgent):
         table_pattern = r"FROM\s+([a-zA-Z0-9_.]+)|JOIN\s+([a-zA-Z0-9_.]+)"
         table_matches = re.findall(table_pattern, sql, re.IGNORECASE)
         referenced_tables = {match[0] or match[1] for match in table_matches}
+        referenced_table_lowers = {table.lower() for table in referenced_tables}
+        catalog_tables = {
+            table
+            for table in referenced_table_lowers
+            if table.startswith("information_schema.")
+            or table.startswith("pg_catalog.")
+            or table in {"information_schema", "pg_catalog"}
+        }
+        is_catalog_only = referenced_tables and len(catalog_tables) == len(
+            referenced_table_lowers
+        )
 
         # Get available tables from DataPoints
         available_tables = set()
@@ -386,6 +416,10 @@ class SQLAgent(BaseAgent):
 
             # Skip special tables
             if table_upper in ("DUAL", "LATERAL"):
+                continue
+            if is_catalog_only:
+                continue
+            if table.lower().startswith(("information_schema.", "pg_catalog.")):
                 continue
 
             # Check if table exists in DataPoints
@@ -412,6 +446,28 @@ class SQLAgent(BaseAgent):
 
         return issues
 
+    def _build_introspection_query(self, query: str) -> str | None:
+        text = query.lower().strip()
+        if getattr(self.config.database, "db_type", "postgresql") != "postgresql":
+            return None
+        patterns = [
+            r"\bwhat tables\b",
+            r"\blist tables\b",
+            r"\bshow tables\b",
+            r"\bavailable tables\b",
+            r"\bwhich tables\b",
+            r"\bwhat tables exist\b",
+        ]
+        if not any(re.search(pattern, text) for pattern in patterns):
+            return None
+
+        return (
+            "SELECT table_schema, table_name "
+            "FROM information_schema.tables "
+            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+            "ORDER BY table_schema, table_name"
+        )
+
     def _get_system_prompt(self) -> str:
         """
         Get system prompt for SQL generation.
@@ -419,39 +475,9 @@ class SQLAgent(BaseAgent):
         Returns:
             System prompt string
         """
-        return """You are an expert SQL query generator for data warehouses.
+        return self.prompts.load("system/main.md")
 
-Your task is to generate SQL queries from natural language questions using the provided schema context and business rules.
-
-**Guidelines:**
-1. Use ONLY the tables and columns provided in the context
-2. Follow business rules exactly as specified (e.g., exclude refunds, use specific date ranges)
-3. Apply common SQL best practices (proper joins, appropriate aggregations, etc.)
-4. Be explicit about assumptions you make
-5. Ask clarifying questions if the query is ambiguous
-6. Generate valid, executable SQL
-
-**Output Format:**
-Return a JSON object with:
-- "sql": The SQL query (string)
-- "explanation": Human-readable explanation of what the query does (string)
-- "used_datapoints": List of datapoint IDs used (array of strings)
-- "confidence": Confidence score 0-1 (number)
-- "assumptions": List of assumptions made (array of strings)
-- "clarifying_questions": List of questions for user if ambiguous (array of strings)
-
-Example:
-{
-  "sql": "SELECT SUM(amount) FROM fact_sales WHERE status = 'completed' AND date >= '2024-07-01' AND date < '2024-10-01'",
-  "explanation": "This query calculates total sales for Q3 2024 by summing the amount column from fact_sales, excluding refunds and filtering for the third quarter.",
-  "used_datapoints": ["table_fact_sales_001", "metric_revenue_001"],
-  "confidence": 0.95,
-  "assumptions": ["'last quarter' refers to Q3 2024 (most recent complete quarter)"],
-  "clarifying_questions": []
-}
-"""
-
-    def _build_generation_prompt(self, input: SQLAgentInput) -> str:
+    async def _build_generation_prompt(self, input: SQLAgentInput) -> str:
         """
         Build prompt for SQL generation.
 
@@ -463,27 +489,231 @@ Example:
         """
         # Extract schema and business context
         schema_context = self._format_schema_context(input.investigation_memory)
+        live_context = await self._get_live_schema_context(input.query)
+        if live_context:
+            if schema_context == "No schema context available":
+                schema_context = live_context
+            else:
+                schema_context = (
+                    f"{schema_context}\n\n**Live schema snapshot (authoritative):**\n"
+                    f"{live_context}"
+                )
         business_context = self._format_business_context(input.investigation_memory)
+        return self.prompts.render(
+            "agents/sql_generator.md",
+            user_query=input.query,
+            schema_context=schema_context,
+            business_context=business_context,
+            backend=getattr(self.config.database, "db_type", "postgresql"),
+            user_preferences={"default_limit": 1000},
+        )
 
-        prompt = f"""Generate a SQL query for the following question:
+    async def _get_live_schema_context(self, query: str) -> str | None:
+        db_type = getattr(self.config.database, "db_type", "postgresql")
+        if db_type != "postgresql":
+            return None
 
-**User Question:**
-{input.query}
+        db_url = str(self.config.database.url) if self.config.database.url else None
+        if not db_url:
+            return None
 
-**Available Schema Context:**
-{schema_context}
+        cache_key = f"{db_url}::{query.lower().strip()}"
+        cached = self._live_schema_cache.get(cache_key)
+        if cached:
+            return cached
 
-**Business Rules and Definitions:**
-{business_context}
+        parsed = urlparse(db_url.replace("postgresql+asyncpg://", "postgresql://"))
+        if not parsed.hostname:
+            return None
 
-**Instructions:**
-1. Use ONLY the tables and columns listed above
-2. Follow the business rules exactly as specified
-3. If the question is ambiguous, ask clarifying questions
-4. Return your response as a JSON object following the format specified in the system prompt
-"""
+        connector = PostgresConnector(
+            host=parsed.hostname,
+            port=parsed.port or 5432,
+            database=parsed.path.lstrip("/") if parsed.path else "postgres",
+            user=parsed.username or "postgres",
+            password=parsed.password or "",
+        )
 
-        return prompt
+        try:
+            await connector.connect()
+            context = await self._fetch_live_schema_context(connector, query)
+            if context:
+                self._live_schema_cache[cache_key] = context
+            return context
+        except Exception as exc:
+            logger.warning(f"Live schema lookup failed: {exc}")
+            return None
+        finally:
+            await connector.close()
+
+    async def _fetch_live_schema_context(
+        self, connector: PostgresConnector, query: str
+    ) -> str | None:
+        tables_query = (
+            "SELECT table_schema, table_name "
+            "FROM information_schema.tables "
+            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+            "ORDER BY table_schema, table_name"
+        )
+        result = await connector.execute(tables_query)
+        if not result.rows:
+            return None
+
+        entries = []
+        qualified_tables = []
+        for row in result.rows[:200]:
+            schema = row.get("table_schema")
+            table = row.get("table_name")
+            if schema and table:
+                qualified = f"{schema}.{table}"
+                entries.append(qualified)
+                qualified_tables.append(qualified)
+            elif table:
+                entries.append(str(table))
+
+        if not entries:
+            return None
+
+        tables = ", ".join(entries)
+
+        columns_context = await self._build_columns_context(
+            connector, query, qualified_tables
+        )
+
+        return (
+            f"**Tables in database (compact list):** {tables}"
+            f"{columns_context}"
+        )
+
+    async def _build_columns_context(
+        self,
+        connector: PostgresConnector,
+        query: str,
+        qualified_tables: list[str],
+    ) -> str:
+        if not qualified_tables:
+            return ""
+
+        columns_query = (
+            "SELECT table_schema, table_name, column_name, data_type "
+            "FROM information_schema.columns "
+            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+            "ORDER BY table_schema, table_name, ordinal_position"
+        )
+        columns_result = await connector.execute(columns_query)
+        if not columns_result.rows:
+            return ""
+
+        columns_by_table: dict[str, list[str]] = {}
+        for row in columns_result.rows:
+            schema = row.get("table_schema")
+            table = row.get("table_name")
+            column = row.get("column_name")
+            dtype = row.get("data_type")
+            if not (schema and table and column):
+                continue
+            key = f"{schema}.{table}"
+            if key not in qualified_tables:
+                continue
+            columns_by_table.setdefault(key, []).append(
+                f"{column} ({dtype})" if dtype else str(column)
+            )
+
+        if not columns_by_table:
+            return ""
+
+        query_lower = query.lower()
+        is_list_tables = bool(
+            re.search(r"\b(list|show|what|which)\s+tables\b", query_lower)
+            or "tables exist" in query_lower
+            or "available tables" in query_lower
+        )
+
+        if is_list_tables:
+            focus_tables = sorted(columns_by_table.keys())
+        else:
+            focus_tables = self._rank_tables_by_query(query, columns_by_table)[:10]
+
+        if not focus_tables:
+            return ""
+
+        lines = []
+        for table in focus_tables:
+            columns = columns_by_table.get(table, [])
+            if columns:
+                lines.append(f"- {table}: {', '.join(columns[:30])}")
+
+        if not lines:
+            return ""
+
+        header = (
+            "**Columns (all tables):**"
+            if is_list_tables
+            else "**Columns (top matched tables):**"
+        )
+        return f"\n{header}\n" + "\n".join(lines)
+
+    def _rank_tables_by_query(
+        self, query: str, columns_by_table: dict[str, list[str]]
+    ) -> list[str]:
+        tokens = self._tokenize_query(query)
+        if not tokens:
+            return sorted(columns_by_table.keys())
+
+        scores: dict[str, int] = {}
+        for table, columns in columns_by_table.items():
+            score = 0
+            table_tokens = table.lower().replace(".", "_").split("_")
+            for token in tokens:
+                if token in table_tokens:
+                    score += 3
+                if any(token in col.lower() for col in columns):
+                    score += 2
+            if len(tokens) >= 2:
+                bigrams = {" ".join(tokens[i : i + 2]) for i in range(len(tokens) - 1)}
+                for bigram in bigrams:
+                    if bigram.replace(" ", "_") in table.lower():
+                        score += 4
+            scores[table] = score
+
+        return sorted(
+            scores.keys(),
+            key=lambda item: (scores[item], item),
+            reverse=True,
+        )
+
+    def _tokenize_query(self, query: str) -> list[str]:
+        text = re.sub(r"[^a-z0-9_\\s]", " ", query.lower())
+        raw_tokens = [token for token in text.split() if len(token) > 1]
+        stopwords = {
+            "the",
+            "a",
+            "an",
+            "is",
+            "are",
+            "was",
+            "were",
+            "what",
+            "which",
+            "show",
+            "list",
+            "tables",
+            "table",
+            "in",
+            "of",
+            "for",
+            "to",
+            "and",
+            "or",
+            "by",
+            "with",
+            "on",
+            "from",
+            "does",
+            "exist",
+            "exists",
+        }
+        return [token for token in raw_tokens if token not in stopwords]
 
     def _build_correction_prompt(
         self, generated_sql: GeneratedSQL, issues: list[ValidationIssue], input: SQLAgentInput
@@ -511,30 +741,12 @@ Example:
             ]
         )
 
-        prompt = f"""The following SQL query has validation issues that need to be corrected:
-
-**Original SQL:**
-```sql
-{generated_sql.sql}
-```
-
-**Validation Issues Found:**
-{issues_text}
-
-**Available Schema Context:**
-{schema_context}
-
-**Instructions:**
-1. Fix ALL validation issues listed above
-2. Use ONLY the tables and columns listed in the schema context
-3. Maintain the original intent of the query
-4. Return your response as a JSON object following the format specified in the system prompt
-
-**Original User Question (for reference):**
-{input.query}
-"""
-
-        return prompt
+        return self.prompts.render(
+            "agents/sql_correction.md",
+            original_sql=generated_sql.sql,
+            issues=issues_text,
+            schema_context=schema_context,
+        )
 
     def _format_schema_context(self, memory) -> str:
         """
@@ -642,45 +854,69 @@ Example:
         Raises:
             ValueError: If response cannot be parsed
         """
-        try:
-            # Try to extract JSON from response (handles markdown code blocks)
-            json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+        # Try JSON first.
+        json_str = None
+        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            json_match = re.search(r"\{.*\}", content, re.DOTALL)
             if json_match:
-                json_str = json_match.group(1)
-            else:
-                # Try to find raw JSON
-                json_match = re.search(r"\{.*\}", content, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group(0)
-                else:
-                    raise ValueError("No JSON found in LLM response")
+                json_str = json_match.group(0)
 
-            # Parse JSON
-            data = json.loads(json_str)
+        if json_str:
+            try:
+                data = json.loads(json_str)
+                sql_value = data.get("sql") or data.get("query")
+                if sql_value:
+                    explanation = (
+                        data.get("explanation")
+                        or data.get("reasoning")
+                        or data.get("rationale")
+                        or ""
+                    )
+                    return GeneratedSQL(
+                        sql=sql_value,
+                        explanation=explanation,
+                        used_datapoints=data.get("used_datapoints", []),
+                        confidence=data.get("confidence", 0.8),
+                        assumptions=data.get("assumptions", []),
+                        clarifying_questions=data.get("clarifying_questions", []),
+                    )
+            except json.JSONDecodeError as e:
+                logger.debug(f"Invalid JSON in LLM response: {e}")
 
-            # Validate required fields
-            if "sql" not in data:
-                raise ValueError("Response missing 'sql' field")
-            if "explanation" not in data:
-                raise ValueError("Response missing 'explanation' field")
+        # Fallback: extract SQL from code block or text.
+        sql_match = re.search(r"```sql\s*(.*?)```", content, re.DOTALL | re.IGNORECASE)
+        if sql_match:
+            sql_text = sql_match.group(1).strip()
+            if sql_text:
+                return GeneratedSQL(
+                    sql=sql_text,
+                    explanation="Generated SQL",
+                    used_datapoints=[],
+                    confidence=0.6,
+                    assumptions=[],
+                    clarifying_questions=[],
+                )
 
+        sql_inline = re.search(
+            r"(SELECT|WITH)\s+.*?(;|$)", content, re.DOTALL | re.IGNORECASE
+        )
+        if sql_inline:
+            sql_text = sql_inline.group(0).strip().rstrip(";")
             return GeneratedSQL(
-                sql=data["sql"],
-                explanation=data["explanation"],
-                used_datapoints=data.get("used_datapoints", []),
-                confidence=data.get("confidence", 0.8),
-                assumptions=data.get("assumptions", []),
-                clarifying_questions=data.get("clarifying_questions", []),
+                sql=sql_text,
+                explanation="Generated SQL",
+                used_datapoints=[],
+                confidence=0.6,
+                assumptions=[],
+                clarifying_questions=[],
             )
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON from LLM response: {e}")
-            logger.debug(f"LLM response content: {content}")
-            raise ValueError(f"Invalid JSON in LLM response: {e}") from e
-        except Exception as e:
-            logger.error(f"Failed to parse LLM response: {e}")
-            logger.debug(f"LLM response content: {content}")
-            raise ValueError(f"Failed to parse LLM response: {e}") from e
+        logger.error("Failed to parse LLM response: Response missing 'sql' field")
+        logger.debug(f"LLM response content: {content}")
+        raise ValueError("Failed to parse LLM response: Response missing 'sql' field")
 
     def _validate_input(self, input: SQLAgentInput) -> None:
         """

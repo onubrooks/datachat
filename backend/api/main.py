@@ -59,6 +59,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     - Database connector (PostgreSQL)
     - Pipeline orchestrator
     """
+    from backend.settings_store import apply_config_defaults
+
+    apply_config_defaults()
     config = get_settings()
     logger.info("Starting DataChat API server...")
 
@@ -85,26 +88,34 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("Initializing database connector...")
         from urllib.parse import urlparse
 
-        db_url_str = str(config.database.url)
-        parsed = urlparse(db_url_str)
-        connector = PostgresConnector(
-            host=parsed.hostname or "localhost",
-            port=parsed.port or 5432,
-            database=parsed.path.lstrip("/") if parsed.path else "datachat",
-            user=parsed.username or "postgres",
-            password=parsed.password or "",
-        )
-        await connector.connect()
-        app_state["connector"] = connector
+        if config.database.url:
+            db_url_str = str(config.database.url)
+            parsed = urlparse(db_url_str)
+            connector = PostgresConnector(
+                host=parsed.hostname or "localhost",
+                port=parsed.port or 5432,
+                database=parsed.path.lstrip("/") if parsed.path else "datachat",
+                user=parsed.username or "postgres",
+                password=parsed.password or "",
+            )
+            await connector.connect()
+            app_state["connector"] = connector
+        else:
+            logger.warning("DATABASE_URL not set; target database connector not initialized.")
+            app_state["connector"] = None
 
         # Initialize database connection registry
         logger.info("Initializing database registry...")
         try:
             from backend.database.manager import DatabaseConnectionManager
 
-            database_manager = DatabaseConnectionManager()
-            await database_manager.initialize()
-            app_state["database_manager"] = database_manager
+            if config.system_database.url:
+                database_manager = DatabaseConnectionManager()
+                await database_manager.initialize()
+                app_state["database_manager"] = database_manager
+            else:
+                logger.warning("SYSTEM_DATABASE_URL not set; database registry disabled.")
+                app_state["database_manager"] = None
         except Exception as e:
             logger.warning(f"Database registry unavailable: {e}")
             app_state["database_manager"] = None
@@ -114,21 +125,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             from backend.profiling.store import ProfilingStore
 
-            profiling_store = ProfilingStore()
-            await profiling_store.initialize()
-            app_state["profiling_store"] = profiling_store
+            if config.system_database.url:
+                profiling_store = ProfilingStore()
+                await profiling_store.initialize()
+                app_state["profiling_store"] = profiling_store
+            else:
+                logger.warning("SYSTEM_DATABASE_URL not set; profiling store disabled.")
+                app_state["profiling_store"] = None
         except Exception as e:
             logger.warning(f"Profiling store unavailable: {e}")
             app_state["profiling_store"] = None
 
         # Initialize pipeline
         logger.info("Initializing pipeline orchestrator...")
-        pipeline = DataChatPipeline(
-            retriever=retriever,
-            connector=connector,
-            max_retries=3,
-        )
-        app_state["pipeline"] = pipeline
+        if app_state["connector"] is not None:
+            pipeline = DataChatPipeline(
+                retriever=retriever,
+                connector=app_state["connector"],
+                max_retries=3,
+            )
+            app_state["pipeline"] = pipeline
+        else:
+            logger.warning("Pipeline not initialized; target database is missing.")
+            app_state["pipeline"] = None
 
         # Initialize sync orchestrator and watcher
         logger.info("Initializing sync orchestrator...")

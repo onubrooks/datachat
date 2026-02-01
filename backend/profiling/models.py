@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ColumnProfile(BaseModel):
@@ -37,12 +37,14 @@ class RelationshipProfile(BaseModel):
 class TableProfile(BaseModel):
     """Profile for a database table."""
 
-    schema: str
+    schema_name: str = Field(..., alias="schema")
     name: str
     row_count: int | None
     columns: list[ColumnProfile]
     relationships: list[RelationshipProfile] = Field(default_factory=list)
     sample_size: int
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class DatabaseProfile(BaseModel):
@@ -61,6 +63,14 @@ class ProfilingProgress(BaseModel):
     tables_completed: int
 
 
+class GenerationProgress(BaseModel):
+    """Progress tracking for DataPoint generation."""
+
+    total_tables: int
+    tables_completed: int
+    batch_size: int
+
+
 class ProfilingJob(BaseModel):
     """Profiling job status."""
 
@@ -70,6 +80,18 @@ class ProfilingJob(BaseModel):
     progress: ProfilingProgress | None = None
     error: str | None = None
     profile_id: UUID | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class GenerationJob(BaseModel):
+    """DataPoint generation job status."""
+
+    job_id: UUID = Field(default_factory=uuid4)
+    profile_id: UUID
+    status: Literal["pending", "running", "completed", "failed"] = "pending"
+    progress: GenerationProgress | None = None
+    error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

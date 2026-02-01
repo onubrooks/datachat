@@ -34,6 +34,7 @@ services:
     environment:
       # Database
       DATABASE_URL: postgresql://datachat:datachat_password@postgres:5432/datachat
+      SYSTEM_DATABASE_URL: postgresql://datachat:datachat_password@postgres:5432/datachat
 
       # LLM Providers (configure with your API keys)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

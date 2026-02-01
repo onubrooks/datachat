@@ -6,8 +6,18 @@ This module provides fixtures and configuration used across all tests.
 
 import asyncio
 import logging
+import os
 
 import pytest
+
+os.environ.setdefault(
+    "LLM_OPENAI_API_KEY",
+    "sk-test-key-1234567890-abcdefghijklmnop",
+)
+os.environ.setdefault(
+    "DATABASE_URL",
+    "postgresql://user:pass@localhost:5432/testdb",
+)
 
 # ============================================================================
 # Pytest Configuration
@@ -178,7 +188,7 @@ def mock_openai_api_key(monkeypatch):
     get_settings.cache_clear()
 
     test_key = "sk-test-key-1234567890-abcdefghijklmnop"  # 20+ chars
-    monkeypatch.setenv("OPENAI_API_KEY", test_key)
+    monkeypatch.setenv("LLM_OPENAI_API_KEY", test_key)
     yield test_key
 
     # Clear cache after test

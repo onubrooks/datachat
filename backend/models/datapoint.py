@@ -165,7 +165,12 @@ class SchemaDataPoint(BaseDataPoint):
         description="Full table name (can include schema, e.g., 'analytics.fact_sales')",
         min_length=1,
     )
-    schema: str = Field(..., description="Database schema name", min_length=1)
+    schema_name: str = Field(
+        ...,
+        alias="schema",
+        description="Database schema name",
+        min_length=1,
+    )
     business_purpose: str = Field(
         ..., description="Plain-English explanation of table's purpose", min_length=10
     )
@@ -187,6 +192,7 @@ class SchemaDataPoint(BaseDataPoint):
     row_count: int | None = Field(None, ge=0, description="Approximate number of rows")
 
     model_config = ConfigDict(
+        populate_by_name=True,
         json_schema_extra={
             "example": {
                 "datapoint_id": "table_fact_sales_001",

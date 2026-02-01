@@ -99,6 +99,14 @@ class TestDatabaseSettings:
         assert settings.max_overflow == 10
         assert settings.echo is False
 
+    def test_database_url_optional(self, monkeypatch):
+        """Database URL can be omitted in config-only environments."""
+        monkeypatch.setenv("DATABASE_URL", "")
+
+        settings = DatabaseSettings()
+
+        assert settings.url is None
+
     def test_asyncpg_url_scheme(self, monkeypatch):
         """PostgreSQL+asyncpg scheme is valid."""
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://user:pass@localhost:5432/testdb")

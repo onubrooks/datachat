@@ -52,6 +52,14 @@ docker-compose up
 # Backend API: http://localhost:8000/docs
 ```
 
+If `datachat --version` returns "command not found", install the CLI:
+
+```bash
+pip install -e .
+```
+
+The CLI/UI setup flow saves database URLs to `~/.datachat/config.json` for reuse.
+
 That's it! DataChat is now running with:
 
 - **Frontend** on port 3000
@@ -62,16 +70,29 @@ That's it! DataChat is now running with:
 > **Next:** Complete initialization before running queries.
 >
 > **Option A: Use the setup wizard**
+>
 > - Open <http://localhost:3000> and follow the setup prompt, or run:
 >   `docker-compose exec backend datachat setup`
 > - Enable auto-profiling to generate draft DataPoints, then review them in the
->   Database Management page.
+>   Database Management page. Approving a DataPoint replaces any existing
+>   approved DataPoint for the same table.
+> - SQL generation also uses a live schema snapshot (tables + columns) from
+>   the target database to avoid missing-table errors.
 >
 > **Option B: Manual DataPoints**
+>
 > - Create DataPoint files (examples in [GETTING_STARTED.md](GETTING_STARTED.md))
 > - Load them: `docker-compose exec backend datachat dp sync`
 >
 > **Without DataPoints, queries will fail.**
+
+**AWS RDS note:** Use SSL if required by your instance:
+```
+postgresql://user:password@host:5432/dbname?sslmode=require
+```
+
+**Credentials:** The URL must include username/password. Setup does not prompt
+for password separately.
 
 ---
 
@@ -97,9 +118,24 @@ pip install -e .
 # 3. Set up environment
 cp .env.example .env
 # Edit .env with your configuration
+# Generate encryption key for saved DB credentials:
+python -c "import secrets; print(secrets.token_hex(32))"
+# Set DATABASE_CREDENTIALS_KEY in .env
 
 # 4. Start the server
 uvicorn backend.api.main:app --reload --port 8000
+```
+
+Verify the CLI is available:
+
+```bash
+datachat --version
+```
+
+Or run both servers together (requires frontend deps installed):
+
+```bash
+datachat dev
 ```
 
 Backend will be available at <http://localhost:8000>
@@ -135,7 +171,7 @@ datachat demo
 
 # Or manual steps
 # 1. Seed demo tables
-psql "$DATABASE_URL" -f scripts/demo_seed.sql
+psql "$SYSTEM_DATABASE_URL" -f scripts/demo_seed.sql
 
 # 2. Load demo DataPoints
 datachat dp sync --datapoints-dir datapoints/demo
@@ -223,8 +259,13 @@ See [`.env.example`](.env.example) for all available options.
 # LLM Provider
 LLM_OPENAI_API_KEY=sk-...
 
-# Database
-DATABASE_URL=postgresql://user:pass@localhost:5432/datachat
+# Target Database
+DATABASE_URL=postgresql://user:pass@localhost:5432/target_db
+DATABASE_TYPE=postgresql
+
+# System Database (registry/profiling/demo)
+SYSTEM_DATABASE_URL=postgresql://user:pass@localhost:5432/datachat
+
 DATABASE_CREDENTIALS_KEY=replace_with_fernet_key
 ```
 
@@ -237,9 +278,26 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 ### Database Registry
 
 DataChat stores database connections in the system PostgreSQL database with encrypted URLs. Set
-`DATABASE_CREDENTIALS_KEY` in your environment and use the API endpoints under `/api/v1/databases`
+`SYSTEM_DATABASE_URL` and `DATABASE_CREDENTIALS_KEY` in your environment and use the API endpoints under `/api/v1/databases`
 to add connections and set a default. Chat requests can target a specific connection by passing
 `target_database` (connection ID) in the chat request.
+
+**Auto-profiling prerequisites:** `SYSTEM_DATABASE_URL` + `DATABASE_CREDENTIALS_KEY`.
+
+Auto-profiling flow:
+- Profiling creates a schema profile; DataPoint generation is async with progress updates.
+- Choose depth: `schema_only` (no LLM), `metrics_basic` (deterministic), `metrics_full` (LLM batched, 10 tables per call).
+- You can select a subset of tables before generating metrics to reduce cost/time.
+
+### System vs Target Database
+
+DataChat separates:
+
+- **Target database**: the database you query (`DATABASE_URL`)
+- **System database**: registry/profiling/demo storage (`SYSTEM_DATABASE_URL`)
+
+If you want a quick first run, use `datachat demo` to seed sample tables and
+DataPoints into the system database.
 
 **Optional:**
 

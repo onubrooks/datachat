@@ -4,6 +4,7 @@ WebSocket Routes
 Real-time streaming WebSocket endpoint for chat with agent status updates.
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -103,7 +104,10 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 {
                     "event": "error",
                     "error": "system_not_initialized",
-                    "message": "DataChat requires setup. Please initialize first.",
+                    "message": (
+                        "DataChat requires setup. Run 'datachat setup' or "
+                        "'datachat demo' to get started."
+                    ),
                     "setup_steps": [
                         {
                             "step": step.step,
@@ -211,6 +215,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 "data": data_result,
                 "visualization_hint": visualization_hint,
                 "sources": sources,
+                "validation_errors": result.get("validation_errors", []),
+                "validation_warnings": result.get("validation_warnings", []),
                 "metrics": metrics,
                 "conversation_id": conversation_id,
             }
@@ -253,3 +259,99 @@ async def websocket_chat(websocket: WebSocket) -> None:
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
         except Exception:
             pass
+
+
+@router.websocket("/ws/profiling")
+async def websocket_profiling(websocket: WebSocket) -> None:
+    """
+    WebSocket endpoint for profiling/generation job updates.
+
+    Client message:
+        {"job_id": "..."} or {"profile_id": "..."}
+
+    Server message:
+        {"event": "generation_update", "job": {...}}
+    """
+    from backend.api.main import app_state
+
+    await websocket.accept()
+    logger.info("Profiling WebSocket connection established")
+
+    try:
+        data = await websocket.receive_json()
+        job_id = data.get("job_id")
+        profile_id = data.get("profile_id")
+
+        store = app_state.get("profiling_store")
+        if store is None:
+            await websocket.send_json(
+                {
+                    "event": "error",
+                    "error": "service_unavailable",
+                    "message": "Profiling store unavailable.",
+                }
+            )
+            await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+            return
+
+        if not job_id and not profile_id:
+            await websocket.send_json(
+                {
+                    "event": "error",
+                    "error": "validation_error",
+                    "message": "Missing job_id or profile_id.",
+                }
+            )
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        if not job_id and profile_id:
+            latest = await store.get_latest_generation_job(profile_id)
+            if latest is None:
+                await websocket.send_json(
+                    {
+                        "event": "error",
+                        "error": "not_found",
+                        "message": "No generation job found for profile.",
+                    }
+                )
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+            job_id = latest.job_id
+
+        while True:
+            job = await store.get_generation_job(job_id)
+            await websocket.send_json(
+                {
+                    "event": "generation_update",
+                    "job": {
+                        "job_id": str(job.job_id),
+                        "profile_id": str(job.profile_id),
+                        "status": job.status,
+                        "progress": job.progress.model_dump()
+                        if job.progress
+                        else None,
+                        "error": job.error,
+                    },
+                }
+            )
+            if job.status in {"completed", "failed"}:
+                break
+            await asyncio.sleep(1.0)
+    except WebSocketDisconnect:
+        logger.info("Profiling WebSocket client disconnected")
+    except Exception as exc:
+        logger.error(f"Profiling WebSocket error: {exc}", exc_info=True)
+        try:
+            await websocket.send_json(
+                {
+                    "event": "error",
+                    "error": "internal_error",
+                    "message": str(exc),
+                }
+            )
+        except Exception:
+            pass
+    finally:
+        await websocket.close()
+        logger.info("Profiling WebSocket connection closed")

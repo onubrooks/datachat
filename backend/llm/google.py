@@ -6,6 +6,7 @@ Supports Gemini 1.5 Pro, Gemini 1.5 Flash, etc.
 """
 
 import logging
+import warnings
 from collections.abc import AsyncIterator
 
 from backend.llm.base import BaseLLMProvider
@@ -48,7 +49,9 @@ class GoogleProvider(BaseLLMProvider):
         self.api_key = api_key
 
         try:
-            import google.generativeai as genai
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", FutureWarning)
+                import google.generativeai as genai
 
             genai.configure(api_key=api_key)
             self.genai = genai

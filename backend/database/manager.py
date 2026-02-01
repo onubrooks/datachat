@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -49,15 +48,19 @@ class DatabaseConnectionManager:
         pool: asyncpg.Pool | None = None,
     ) -> None:
         settings = get_settings()
-        self._system_database_url = system_database_url or str(settings.database.url)
+        self._system_database_url = system_database_url or (
+            str(settings.system_database.url) if settings.system_database.url else None
+        )
         self._pool = pool
-        self._encryption_key = encryption_key or os.getenv("DATABASE_CREDENTIALS_KEY")
+        self._encryption_key = encryption_key or settings.database_credentials_key
         self._cipher: Fernet | None = None
 
     async def initialize(self) -> None:
         """Initialize connection pool and ensure schema exists."""
         self._ensure_cipher()
         if self._pool is None:
+            if not self._system_database_url:
+                raise ValueError("SYSTEM_DATABASE_URL must be set for the database registry.")
             dsn = self._normalize_postgres_url(self._system_database_url)
             self._pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=5)
         await self._pool.execute(_CREATE_TABLE_SQL)

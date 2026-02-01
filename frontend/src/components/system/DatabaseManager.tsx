@@ -1,47 +1,113 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   DataChatAPI,
+  DataPointSummary,
   DatabaseConnection,
+  GenerationJob,
   PendingDataPoint,
   ProfilingJob,
   SyncStatusResponse,
 } from "@/lib/api";
 
 const api = new DataChatAPI();
+const WS_BASE_URL =
+  process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
 
 export function DatabaseManager() {
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [pending, setPending] = useState<PendingDataPoint[]>([]);
+  const [approved, setApproved] = useState<DataPointSummary[]>([]);
   const [job, setJob] = useState<ProfilingJob | null>(null);
+  const [generationJob, setGenerationJob] = useState<GenerationJob | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [expandedPendingId, setExpandedPendingId] = useState<string | null>(null);
   const [pendingEdits, setPendingEdits] = useState<Record<string, string>>({});
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isBulkApproving, setIsBulkApproving] = useState(false);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [preserveApprovedOnEmpty, setPreserveApprovedOnEmpty] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimerRef = useRef<number | null>(null);
 
   const [name, setName] = useState("");
   const [databaseUrl, setDatabaseUrl] = useState("");
   const [databaseType, setDatabaseType] = useState("postgresql");
   const [description, setDescription] = useState("");
   const [isDefault, setIsDefault] = useState(false);
+  const [profileTables, setProfileTables] = useState<string[]>([]);
+  const [selectedTables, setSelectedTables] = useState<string[]>([]);
+  const [depth, setDepth] = useState("metrics_basic");
 
-  const refresh = async () => {
+  const dedupeApproved = (items: DataPointSummary[]) => {
+    const seen = new Map<string, DataPointSummary>();
+    for (const item of items) {
+      const key = String(item.datapoint_id);
+      if (!seen.has(key)) {
+        seen.set(key, item);
+      }
+    }
+    return Array.from(seen.values());
+  };
+
+  const showNotice = (message: string) => {
+    setNotice(message);
+    if (noticeTimerRef.current) {
+      window.clearTimeout(noticeTimerRef.current);
+    }
+    noticeTimerRef.current = window.setTimeout(() => {
+      setNotice(null);
+      noticeTimerRef.current = null;
+    }, 5000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) {
+        window.clearTimeout(noticeTimerRef.current);
+      }
+    };
+  }, []);
+
+  const refresh = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [dbs, pendingPoints] = await Promise.all([
+      const [dbs, pendingPoints, approvedPoints] = await Promise.all([
         api.listDatabases(),
         api.listPendingDatapoints(),
+        api.listDatapoints(),
       ]);
       setConnections(dbs);
       setPending(pendingPoints);
+      setApproved((current) =>
+        approvedPoints.length > 0 || !preserveApprovedOnEmpty
+          ? dedupeApproved(approvedPoints)
+          : current
+      );
+      if (approvedPoints.length > 0) {
+        setPreserveApprovedOnEmpty(true);
+      }
+      if (dbs.length > 0) {
+        const defaultConnection = dbs.find((item) => item.is_default) || dbs[0];
+        const latestJob = await api.getLatestProfilingJob(
+          defaultConnection.connection_id
+        );
+        setJob(latestJob);
+      } else {
+        setJob(null);
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -55,11 +121,19 @@ export function DatabaseManager() {
     } catch (err) {
       setSyncError((err as Error).message);
     }
-  };
+  }, [preserveApprovedOnEmpty]);
+
+  const selectedCount = selectedTables.length;
+  const hasSelection = selectedCount > 0;
+  const tableSelectionLabel = useMemo(() => {
+    if (!profileTables.length) return "No tables found";
+    if (!hasSelection) return "Select tables to generate metrics";
+    return `${selectedCount} table(s) selected`;
+  }, [profileTables.length, hasSelection, selectedCount]);
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     if (!job || job.status === "completed" || job.status === "failed") {
@@ -76,10 +150,90 @@ export function DatabaseManager() {
       } catch (err) {
         setError((err as Error).message);
       }
-    }, 2000);
+    }, 3000);
 
     return () => clearInterval(interval);
-  }, [job]);
+  }, [job, refresh]);
+
+  useEffect(() => {
+    if (!job?.profile_id) return;
+    api
+      .listProfileTables(job.profile_id)
+      .then((tables) => {
+        setProfileTables(tables);
+        if (tables.length && selectedTables.length === 0) {
+          setSelectedTables(tables.slice(0, Math.min(10, tables.length)));
+        }
+      })
+      .catch((err) => setError((err as Error).message));
+  }, [job?.profile_id, selectedTables.length]);
+
+  useEffect(() => {
+    if (!job?.profile_id) return;
+    api
+      .getLatestGenerationJob(job.profile_id)
+      .then((latest) => setGenerationJob(latest))
+      .catch((err) => setError((err as Error).message));
+  }, [job?.profile_id]);
+
+  const [isGenerationWsActive, setIsGenerationWsActive] = useState(false);
+
+  useEffect(() => {
+    if (!generationJob?.job_id) return;
+    const ws = new WebSocket(`${WS_BASE_URL}/ws/profiling`);
+    ws.onopen = () => {
+      setIsGenerationWsActive(true);
+      ws.send(JSON.stringify({ job_id: generationJob.job_id }));
+    };
+    ws.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.event === "generation_update") {
+          setGenerationJob(payload.job);
+        }
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    };
+    ws.onclose = () => setIsGenerationWsActive(false);
+    ws.onerror = () => setIsGenerationWsActive(false);
+    return () => ws.close();
+  }, [generationJob?.job_id]);
+
+  useEffect(() => {
+    if (
+      !generationJob ||
+      generationJob.status === "completed" ||
+      generationJob.status === "failed" ||
+      isGenerationWsActive
+    ) {
+      return;
+    }
+    const interval = setInterval(async () => {
+      try {
+        const updated = await api.getGenerationJob(generationJob.job_id);
+        setGenerationJob(updated);
+        if (updated.status === "completed" || updated.status === "failed") {
+          await refresh();
+        }
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [
+    generationJob,
+    generationJob?.job_id,
+    generationJob?.status,
+    isGenerationWsActive,
+    refresh,
+  ]);
+
+  useEffect(() => {
+    if (generationJob?.status === "completed") {
+      refresh();
+    }
+  }, [generationJob?.status, refresh]);
 
   useEffect(() => {
     if (!syncStatus || syncStatus.status !== "running") {
@@ -96,10 +250,10 @@ export function DatabaseManager() {
       } catch (err) {
         setSyncError((err as Error).message);
       }
-    }, 2000);
+    }, 3000);
 
     return () => clearInterval(interval);
-  }, [syncStatus]);
+  }, [syncStatus, refresh]);
 
   const handleCreate = async () => {
     setIsLoading(true);
@@ -141,11 +295,30 @@ export function DatabaseManager() {
   const handleGenerate = async () => {
     if (!job?.profile_id) return;
     setError(null);
+    if (generationJob?.status === "completed") {
+      const confirmReplace = confirm(
+        "Regenerate DataPoints and replace pending drafts for this profile?"
+      );
+      if (!confirmReplace) {
+        return;
+      }
+    }
+    setIsGenerating(true);
     try {
-      const generated = await api.generateDatapoints(job.profile_id);
-      setPending(generated);
+      const generation = await api.startDatapointGeneration({
+        profile_id: job.profile_id,
+        tables: selectedTables,
+        depth,
+        batch_size: 10,
+        max_tables: selectedTables.length || null,
+        max_metrics_per_table: 3,
+        replace_existing: true,
+      });
+      setGenerationJob(generation);
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -162,15 +335,54 @@ export function DatabaseManager() {
 
   const handleApprove = async (pendingId: string) => {
     setError(null);
+    setApprovingId(pendingId);
+    const snapshot = pending.find((item) => item.pending_id === pendingId);
     const editedDatapoint = parseEditedDatapoint(pendingId);
     if (pendingEdits[pendingId] && !editedDatapoint) {
+      setApprovingId(null);
       return;
     }
     try {
-      await api.approvePendingDatapoint(pendingId, editedDatapoint || undefined);
+      const approved = await api.approvePendingDatapoint(
+        pendingId,
+        editedDatapoint || undefined
+      );
+      setPending((current) =>
+        current.filter((item) => item.pending_id !== pendingId)
+      );
+      setApproved((current) => [
+        {
+          datapoint_id: String(approved.datapoint.datapoint_id || pendingId),
+          type: String(approved.datapoint.type || "Unknown"),
+          name: approved.datapoint.name ? String(approved.datapoint.name) : null,
+        },
+        ...current,
+      ].filter(
+        (item, index, array) =>
+          array.findIndex((entry) => entry.datapoint_id === item.datapoint_id) ===
+          index
+      ));
+      showNotice(
+        "Approved. Existing DataPoints for the same table were replaced."
+      );
       await refresh();
     } catch (err) {
+      if (snapshot) {
+        setPending((current) => {
+          const merged = [snapshot, ...current];
+          const seen = new Set<string>();
+          return merged.filter((item) => {
+            if (seen.has(item.pending_id)) {
+              return false;
+            }
+            seen.add(item.pending_id);
+            return true;
+          });
+        });
+      }
       setError((err as Error).message);
+    } finally {
+      setApprovingId(null);
     }
   };
 
@@ -186,22 +398,81 @@ export function DatabaseManager() {
 
   const handleBulkApprove = async () => {
     setError(null);
+    setIsBulkApproving(true);
+    const snapshot = pending;
     try {
-      await api.bulkApproveDatapoints();
+      const approved = await api.bulkApproveDatapoints();
+      if (approved.length) {
+        setPending([]);
+        setApproved((current) => [
+          ...approved.map((item) => ({
+            datapoint_id: String(item.datapoint.datapoint_id || item.pending_id),
+            type: String(item.datapoint.type || "Unknown"),
+            name: item.datapoint.name ? String(item.datapoint.name) : null,
+          })),
+          ...current,
+        ].filter(
+          (item, index, array) =>
+            array.findIndex((entry) => entry.datapoint_id === item.datapoint_id) ===
+            index
+        ));
+        showNotice(
+          `Approved ${approved.length} DataPoints. Existing DataPoints for the same tables were replaced.`
+        );
+      }
       await refresh();
     } catch (err) {
+      setPending(() => {
+        const merged = [...snapshot];
+        const seen = new Set<string>();
+        return merged.filter((item) => {
+          if (seen.has(item.pending_id)) {
+            return false;
+          }
+          seen.add(item.pending_id);
+          return true;
+        });
+      });
       setError((err as Error).message);
+    } finally {
+      setIsBulkApproving(false);
     }
   };
 
   const handleSync = async () => {
     setSyncError(null);
+    setIsSyncing(true);
     try {
       await api.triggerSync();
       const status = await api.getSyncStatus();
       setSyncStatus(status);
     } catch (err) {
       setSyncError((err as Error).message);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleSystemReset = async () => {
+    if (
+      !confirm(
+        "Reset will clear system registry/profiling, local vectors, and saved setup config. Continue?"
+      )
+    ) {
+      return;
+    }
+    setIsResetting(true);
+    setError(null);
+    try {
+      await api.systemReset();
+      setPreserveApprovedOnEmpty(false);
+      setApproved([]);
+      setPending([]);
+      await refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setIsResetting(false);
     }
   };
 
@@ -230,11 +501,24 @@ export function DatabaseManager() {
             Add connections, run profiling, and review generated DataPoints.
           </p>
         </div>
-        <Button onClick={refresh} disabled={isLoading}>
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="secondary">
+            <Link href="/">Back to Chat</Link>
+          </Button>
+          <Button variant="outline" onClick={handleSystemReset} disabled={isResetting}>
+            {isResetting ? "Resetting..." : "Reset System"}
+          </Button>
+          <Button onClick={refresh} disabled={isLoading}>
+            Refresh
+          </Button>
+        </div>
+      </div>
+      <div className="text-xs text-muted-foreground">
+        Reset clears system registry/profiling, local vectors, and saved setup config.
+        It does not delete target database tables.
       </div>
 
+      {notice && <div className="text-sm text-emerald-600">{notice}</div>}
       {error && <div className="text-sm text-destructive">{error}</div>}
 
       <Card className="p-4 space-y-4">
@@ -335,11 +619,23 @@ export function DatabaseManager() {
           <Button
             variant="secondary"
             onClick={handleSync}
-            disabled={syncStatus?.status === "running"}
+            disabled={syncStatus?.status === "running" || isSyncing}
           >
-            Sync Now
+            {isSyncing
+              ? "Syncing..."
+              : syncStatus?.status === "completed"
+                ? "Sync Again"
+                : "Sync Now"}
           </Button>
         </div>
+        {job && (
+          <div className="rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            Auto-profiling {job.status}.{" "}
+            {job.status === "completed"
+              ? "Generate DataPoints to review and approve."
+              : "This page will refresh as the job progresses."}
+          </div>
+        )}
         {syncError && <div className="text-xs text-destructive">{syncError}</div>}
         {!syncStatus && (
           <p className="text-sm text-muted-foreground">
@@ -391,9 +687,158 @@ export function DatabaseManager() {
             {job.error && (
               <div className="text-xs text-destructive">{job.error}</div>
             )}
-            {job.status === "completed" && job.profile_id && (
-              <Button onClick={handleGenerate}>Generate DataPoints</Button>
+            {generationJob && (
+              <div className="rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2">
+                  {generationJob.status === "running" && (
+                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+                  )}
+                  <span>DataPoint generation {generationJob.status}.</span>
+                </div>
+                {generationJob.progress && (
+                  <span>
+                    {" "}
+                    {generationJob.progress.tables_completed}/
+                    {generationJob.progress.total_tables} tables
+                    {" "}
+                    · batch size {generationJob.progress.batch_size}
+                  </span>
+                )}
+                {generationJob.error && (
+                  <div className="text-xs text-destructive">{generationJob.error}</div>
+                )}
+              </div>
             )}
+            {job.status === "completed" && job.profile_id && (
+              <div className="space-y-2">
+                {profileTables.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs font-medium text-muted-foreground">
+                      Table Selection
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setSelectedTables(profileTables)}
+                      >
+                        Select All
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setSelectedTables([])}
+                      >
+                        Clear
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() =>
+                          setSelectedTables(
+                            profileTables.slice(0, Math.min(10, profileTables.length))
+                          )
+                        }
+                      >
+                        Top 10
+                      </Button>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {tableSelectionLabel}
+                    </div>
+                    <div className="max-h-40 overflow-auto rounded-md border border-border p-2 text-xs">
+                      {profileTables.map((table) => (
+                        <label
+                          key={table}
+                          className="flex items-center gap-2 py-1"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedTables.includes(table)}
+                            onChange={(event) => {
+                              if (event.target.checked) {
+                                setSelectedTables((current) => [...current, table]);
+                              } else {
+                                setSelectedTables((current) =>
+                                  current.filter((item) => item !== table)
+                                );
+                              }
+                            }}
+                          />
+                          <span>{table}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="text-xs font-medium text-muted-foreground">
+                      Depth
+                    </div>
+                    <select
+                      className="w-full rounded-md border border-border bg-background p-2 text-xs"
+                      value={depth}
+                      onChange={(event) => setDepth(event.target.value)}
+                    >
+                      <option value="schema_only">Schema only (no LLM)</option>
+                      <option value="metrics_basic">Basic metrics (no LLM)</option>
+                      <option value="metrics_full">Full metrics (LLM, batched)</option>
+                    </select>
+                  </div>
+                )}
+                <Button
+                  onClick={handleGenerate}
+                  disabled={
+                    isGenerating ||
+                    !hasSelection ||
+                    generationJob?.status === "running"
+                  }
+                >
+                  {isGenerating ? (
+                    <span className="flex items-center gap-2">
+                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+                      Generating...
+                    </span>
+                  ) : (
+                    "Generate DataPoints"
+                  )}
+                </Button>
+                {isGenerating && (
+                  <div className="text-xs text-muted-foreground">
+                    Hang tight while we draft DataPoints and evaluate metrics.
+                  </div>
+                )}
+                <div className="text-xs text-muted-foreground">
+                  Note: Auto-generated values are normalized to match DataPoint
+                  schema. Invalid aggregations are skipped.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Approved DataPoints</h2>
+          <div className="text-xs text-muted-foreground">
+            {approved.length} total
+          </div>
+        </div>
+        {approved.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            No approved DataPoints yet.
+          </p>
+        )}
+        {approved.length > 0 && (
+          <div className="max-h-64 space-y-2 overflow-auto text-sm">
+            {approved.map((item) => (
+              <div key={item.datapoint_id} className="border-b border-border pb-2">
+                <div className="font-medium">
+                  {item.name || item.datapoint_id}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {item.type} · {item.datapoint_id}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </Card>
@@ -401,8 +846,11 @@ export function DatabaseManager() {
       <Card className="p-4 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold">Pending DataPoints</h2>
-          <Button onClick={handleBulkApprove} disabled={pending.length === 0}>
-            Bulk Approve
+          <Button
+            onClick={handleBulkApprove}
+            disabled={pending.length === 0 || isBulkApproving}
+          >
+            {isBulkApproving ? "Approving..." : "Bulk Approve"}
           </Button>
         </div>
         {pending.length === 0 && (
@@ -444,8 +892,9 @@ export function DatabaseManager() {
                     <Button
                       variant="secondary"
                       onClick={() => handleApprove(item.pending_id)}
+                      disabled={approvingId === item.pending_id}
                     >
-                      Approve
+                      {approvingId === item.pending_id ? "Approving..." : "Approve"}
                     </Button>
                     <Button
                       variant="destructive"

@@ -350,6 +350,7 @@ class TestCLIErrorHandling:
         not_initialized = SystemStatus(
             is_initialized=False,
             has_databases=True,
+            has_system_database=True,
             has_datapoints=False,
             setup_required=[],
         )
@@ -380,6 +381,7 @@ class TestCLISetup:
                         SystemStatus(
                             is_initialized=True,
                             has_databases=True,
+                            has_system_database=True,
                             has_datapoints=True,
                             setup_required=[],
                         ),
