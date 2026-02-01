@@ -31,12 +31,27 @@ export interface ChatMetrics {
   retry_count: number;
 }
 
+export interface SQLValidationError {
+  error_type: "syntax" | "security" | "schema" | "other";
+  message: string;
+  location?: string | null;
+  severity: "critical" | "high" | "medium" | "low";
+}
+
+export interface ValidationWarning {
+  warning_type: "performance" | "style" | "compatibility" | "other";
+  message: string;
+  suggestion?: string | null;
+}
+
 export interface ChatResponse {
   answer: string;
   sql: string | null;
   data: Record<string, unknown[]> | null;
   visualization_hint: string | null;
   sources: DataSource[];
+  validation_errors?: SQLValidationError[];
+  validation_warnings?: ValidationWarning[];
   metrics: ChatMetrics;
   conversation_id: string;
 }
@@ -58,12 +73,14 @@ export interface SetupStep {
 export interface SystemStatusResponse {
   is_initialized: boolean;
   has_databases: boolean;
+  has_system_database: boolean;
   has_datapoints: boolean;
   setup_required: SetupStep[];
 }
 
 export interface SystemInitializeRequest {
   database_url?: string;
+  system_database_url?: string;
   auto_profile: boolean;
 }
 
@@ -71,6 +88,7 @@ export interface SystemInitializeResponse {
   message: string;
   is_initialized: boolean;
   has_databases: boolean;
+  has_system_database: boolean;
   has_datapoints: boolean;
   setup_required: SetupStep[];
 }
