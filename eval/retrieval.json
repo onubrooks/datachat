@@ -1,0 +1,22 @@
+[
+  {
+    "query": "What tables are available in the database?",
+    "expected_datapoint_ids": ["table_users_001", "table_orders_001"],
+    "notes": "Schema discovery should surface both demo tables"
+  },
+  {
+    "query": "How many users are active?",
+    "expected_datapoint_ids": ["table_users_001"],
+    "notes": "Active users lives on users.is_active"
+  },
+  {
+    "query": "Total revenue from completed orders",
+    "expected_datapoint_ids": ["table_orders_001"],
+    "notes": "Revenue is derived from orders.amount filtered by status=completed"
+  },
+  {
+    "query": "Top customers by order amount",
+    "expected_datapoint_ids": ["table_orders_001", "table_users_001"],
+    "notes": "Requires join orders.user_id to users.id"
+  }
+]
