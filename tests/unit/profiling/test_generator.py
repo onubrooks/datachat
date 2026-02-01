@@ -71,12 +71,12 @@ async def test_generates_schema_datapoints_from_profile():
     llm = FakeLLM(
         [
             '{"business_purpose": "Track customer orders", "columns": {"order_id": "Order id", "total_amount": "Total", "created_at": "Date"}, "common_queries": ["SUM(total_amount)"], "gotchas": [], "freshness": "T-1", "confidence": 0.8}',
-            '{"metrics": []}',
+            '{"orders": {"metrics": []}}',
         ]
     )
 
     generator = DataPointGenerator(llm_provider=llm)
-    generated = await generator.generate_from_profile(profile)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
 
     assert generated.schema_datapoints
     datapoint = generated.schema_datapoints[0].datapoint
@@ -90,12 +90,12 @@ async def test_suggests_metrics_from_numeric_columns():
     llm = FakeLLM(
         [
             '{"business_purpose": "Orders", "columns": {"order_id": "Order id", "total_amount": "Total", "created_at": "Date"}}',
-            '{"metrics": [{"name": "Total Order Value", "calculation": "SUM(total_amount)", "aggregation": "SUM", "unit": "USD", "confidence": 0.75}]}',
+            '{"orders": {"metrics": [{"name": "Total Order Value", "calculation": "SUM(total_amount)", "aggregation": "SUM", "unit": "USD", "confidence": 0.75}]}}',
         ]
     )
 
     generator = DataPointGenerator(llm_provider=llm)
-    generated = await generator.generate_from_profile(profile)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
 
     assert generated.business_datapoints
     metric = generated.business_datapoints[0].datapoint
@@ -109,12 +109,12 @@ async def test_identifies_time_series_patterns():
     llm = FakeLLM(
         [
             '{"business_purpose": "Orders", "columns": {"order_id": "Order id", "total_amount": "Total", "created_at": "Date"}}',
-            '{"metrics": []}',
+            '{"orders": {"metrics": []}}',
         ]
     )
 
     generator = DataPointGenerator(llm_provider=llm)
-    generated = await generator.generate_from_profile(profile)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
 
     datapoint = generated.schema_datapoints[0].datapoint
     common_queries = datapoint.get("common_queries", [])
@@ -127,11 +127,11 @@ async def test_returns_confidence_scores():
     llm = FakeLLM(
         [
             '{"business_purpose": "Orders", "columns": {"order_id": "Order id", "total_amount": "Total", "created_at": "Date"}, "confidence": 0.9}',
-            '{"metrics": []}',
+            '{"orders": {"metrics": []}}',
         ]
     )
 
     generator = DataPointGenerator(llm_provider=llm)
-    generated = await generator.generate_from_profile(profile)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
 
     assert generated.schema_datapoints[0].confidence == 0.9

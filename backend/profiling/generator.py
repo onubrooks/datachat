@@ -146,7 +146,7 @@ class DataPointGenerator:
             row_count=row_count,
             owner=_DEFAULT_OWNER,
             tags=["auto-profiled"],
-            metadata={"source": "auto-profiler"},
+            metadata={"source": "auto-profiler-llm"},
         )
 
         return GeneratedDataPoint(
@@ -188,7 +188,7 @@ class DataPointGenerator:
             row_count=table.row_count if table.row_count is not None else None,
             owner=_DEFAULT_OWNER,
             tags=["auto-profiled"],
-            metadata={"source": "auto-profiler"},
+            metadata={"source": "auto-profiler-basic"},
         )
         return GeneratedDataPoint(
             datapoint=schema_datapoint.model_dump(mode="json", by_alias=True),
@@ -237,7 +237,7 @@ class DataPointGenerator:
                 aggregation=self._normalize_aggregation(metric.get("aggregation")),
                 owner=_DEFAULT_OWNER,
                 tags=["auto-profiled"],
-                metadata={"source": "auto-profiler"},
+                metadata={"source": "auto-profiler-basic"},
             )
             generated.append(
                 GeneratedDataPoint(
@@ -318,7 +318,7 @@ class DataPointGenerator:
                 aggregation=aggregation,
                 owner=_DEFAULT_OWNER,
                 tags=["auto-profiled", "basic"],
-                metadata={"source": "auto-profiler"},
+                metadata={"source": "auto-profiler-basic"},
             )
             generated.append(
                 GeneratedDataPoint(
@@ -377,7 +377,7 @@ class DataPointGenerator:
                         aggregation=self._normalize_aggregation(metric.get("aggregation")),
                         owner=_DEFAULT_OWNER,
                         tags=["auto-profiled"],
-                        metadata={"source": "auto-profiler"},
+                        metadata={"source": "auto-profiler-llm"},
                     )
                     generated.append(
                         GeneratedDataPoint(

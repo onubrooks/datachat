@@ -419,6 +419,17 @@ class ProfilingStore:
         )
         return [self._row_to_pending(row) for row in rows]
 
+    async def delete_pending_for_profile(self, profile_id: UUID) -> None:
+        """Remove pending datapoints for a profile (used before regeneration)."""
+        self._ensure_pool()
+        await self._pool.execute(
+            """
+            DELETE FROM pending_datapoints
+            WHERE profile_id = $1 AND status = 'pending'
+            """,
+            profile_id,
+        )
+
     @staticmethod
     def _row_to_pending(row: asyncpg.Record) -> PendingDataPoint:
         payload = row["datapoint"]

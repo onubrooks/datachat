@@ -171,10 +171,11 @@ class VectorStore:
 
         try:
             total_added = 0
+            unique_datapoints = list({dp.datapoint_id: dp for dp in datapoints}.values())
 
             # Process in batches
-            for i in range(0, len(datapoints), batch_size):
-                batch = datapoints[i : i + batch_size]
+            for i in range(0, len(unique_datapoints), batch_size):
+                batch = unique_datapoints[i : i + batch_size]
 
                 # Prepare batch data
                 ids = [dp.datapoint_id for dp in batch]
@@ -183,16 +184,16 @@ class VectorStore:
 
                 # Add to Chroma (async wrapper)
                 await asyncio.to_thread(
-                    self.collection.add,
+                    self.collection.upsert,
                     ids=ids,
                     documents=documents,
                     metadatas=metadatas,
                 )
 
                 total_added += len(batch)
-                logger.debug(f"Added batch of {len(batch)} datapoints ({total_added} total)")
+                logger.debug(f"Upserted batch of {len(batch)} datapoints ({total_added} total)")
 
-            logger.info(f"Successfully added {total_added} datapoints to vector store")
+            logger.info(f"Successfully upserted {total_added} datapoints to vector store")
             return total_added
 
         except Exception as e:

@@ -144,4 +144,8 @@ async def list_datapoints() -> DataPointListResponse:
 async def get_sync_status() -> SyncStatusResponse:
     orchestrator = _get_orchestrator()
     status_payload = orchestrator.get_status()
+    for key in ("started_at", "finished_at"):
+        value = status_payload.get(key)
+        if value is not None and hasattr(value, "isoformat"):
+            status_payload[key] = value.isoformat()
     return SyncStatusResponse(**status_payload)

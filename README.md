@@ -74,7 +74,10 @@ That's it! DataChat is now running with:
 > - Open <http://localhost:3000> and follow the setup prompt, or run:
 >   `docker-compose exec backend datachat setup`
 > - Enable auto-profiling to generate draft DataPoints, then review them in the
->   Database Management page.
+>   Database Management page. Approving a DataPoint replaces any existing
+>   approved DataPoint for the same table.
+> - SQL generation also uses a live schema snapshot (tables + columns) from
+>   the target database to avoid missing-table errors.
 >
 > **Option B: Manual DataPoints**
 >
@@ -280,6 +283,11 @@ to add connections and set a default. Chat requests can target a specific connec
 `target_database` (connection ID) in the chat request.
 
 **Auto-profiling prerequisites:** `SYSTEM_DATABASE_URL` + `DATABASE_CREDENTIALS_KEY`.
+
+Auto-profiling flow:
+- Profiling creates a schema profile; DataPoint generation is async with progress updates.
+- Choose depth: `schema_only` (no LLM), `metrics_basic` (deterministic), `metrics_full` (LLM batched, 10 tables per call).
+- You can select a subset of tables before generating metrics to reduce cost/time.
 
 ### System vs Target Database
 

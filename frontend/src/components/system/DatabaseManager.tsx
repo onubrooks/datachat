@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
@@ -36,7 +36,10 @@ export function DatabaseManager() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+  const [preserveApprovedOnEmpty, setPreserveApprovedOnEmpty] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimerRef = useRef<number | null>(null);
 
   const [name, setName] = useState("");
   const [databaseUrl, setDatabaseUrl] = useState("");
@@ -47,7 +50,37 @@ export function DatabaseManager() {
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [depth, setDepth] = useState("metrics_basic");
 
-  const refresh = async () => {
+  const dedupeApproved = (items: DataPointSummary[]) => {
+    const seen = new Map<string, DataPointSummary>();
+    for (const item of items) {
+      const key = String(item.datapoint_id);
+      if (!seen.has(key)) {
+        seen.set(key, item);
+      }
+    }
+    return Array.from(seen.values());
+  };
+
+  const showNotice = (message: string) => {
+    setNotice(message);
+    if (noticeTimerRef.current) {
+      window.clearTimeout(noticeTimerRef.current);
+    }
+    noticeTimerRef.current = window.setTimeout(() => {
+      setNotice(null);
+      noticeTimerRef.current = null;
+    }, 5000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) {
+        window.clearTimeout(noticeTimerRef.current);
+      }
+    };
+  }, []);
+
+  const refresh = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
@@ -58,7 +91,14 @@ export function DatabaseManager() {
       ]);
       setConnections(dbs);
       setPending(pendingPoints);
-      setApproved(approvedPoints);
+      setApproved((current) =>
+        approvedPoints.length > 0 || !preserveApprovedOnEmpty
+          ? dedupeApproved(approvedPoints)
+          : current
+      );
+      if (approvedPoints.length > 0) {
+        setPreserveApprovedOnEmpty(true);
+      }
       if (dbs.length > 0) {
         const defaultConnection = dbs.find((item) => item.is_default) || dbs[0];
         const latestJob = await api.getLatestProfilingJob(
@@ -81,7 +121,7 @@ export function DatabaseManager() {
     } catch (err) {
       setSyncError((err as Error).message);
     }
-  };
+  }, [preserveApprovedOnEmpty]);
 
   const selectedCount = selectedTables.length;
   const hasSelection = selectedCount > 0;
@@ -93,7 +133,7 @@ export function DatabaseManager() {
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     if (!job || job.status === "completed" || job.status === "failed") {
@@ -110,10 +150,10 @@ export function DatabaseManager() {
       } catch (err) {
         setError((err as Error).message);
       }
-    }, 2000);
+    }, 3000);
 
     return () => clearInterval(interval);
-  }, [job]);
+  }, [job, refresh]);
 
   useEffect(() => {
     if (!job?.profile_id) return;
@@ -126,7 +166,7 @@ export function DatabaseManager() {
         }
       })
       .catch((err) => setError((err as Error).message));
-  }, [job?.profile_id]);
+  }, [job?.profile_id, selectedTables.length]);
 
   useEffect(() => {
     if (!job?.profile_id) return;
@@ -136,10 +176,13 @@ export function DatabaseManager() {
       .catch((err) => setError((err as Error).message));
   }, [job?.profile_id]);
 
+  const [isGenerationWsActive, setIsGenerationWsActive] = useState(false);
+
   useEffect(() => {
     if (!generationJob?.job_id) return;
     const ws = new WebSocket(`${WS_BASE_URL}/ws/profiling`);
     ws.onopen = () => {
+      setIsGenerationWsActive(true);
       ws.send(JSON.stringify({ job_id: generationJob.job_id }));
     };
     ws.onmessage = (event) => {
@@ -152,11 +195,18 @@ export function DatabaseManager() {
         setError((err as Error).message);
       }
     };
+    ws.onclose = () => setIsGenerationWsActive(false);
+    ws.onerror = () => setIsGenerationWsActive(false);
     return () => ws.close();
   }, [generationJob?.job_id]);
 
   useEffect(() => {
-    if (!generationJob || generationJob.status === "completed" || generationJob.status === "failed") {
+    if (
+      !generationJob ||
+      generationJob.status === "completed" ||
+      generationJob.status === "failed" ||
+      isGenerationWsActive
+    ) {
       return;
     }
     const interval = setInterval(async () => {
@@ -169,15 +219,21 @@ export function DatabaseManager() {
       } catch (err) {
         setError((err as Error).message);
       }
-    }, 2000);
+    }, 5000);
     return () => clearInterval(interval);
-  }, [generationJob?.job_id, generationJob?.status]);
+  }, [
+    generationJob,
+    generationJob?.job_id,
+    generationJob?.status,
+    isGenerationWsActive,
+    refresh,
+  ]);
 
   useEffect(() => {
     if (generationJob?.status === "completed") {
       refresh();
     }
-  }, [generationJob?.status]);
+  }, [generationJob?.status, refresh]);
 
   useEffect(() => {
     if (!syncStatus || syncStatus.status !== "running") {
@@ -194,10 +250,10 @@ export function DatabaseManager() {
       } catch (err) {
         setSyncError((err as Error).message);
       }
-    }, 2000);
+    }, 3000);
 
     return () => clearInterval(interval);
-  }, [syncStatus]);
+  }, [syncStatus, refresh]);
 
   const handleCreate = async () => {
     setIsLoading(true);
@@ -239,6 +295,14 @@ export function DatabaseManager() {
   const handleGenerate = async () => {
     if (!job?.profile_id) return;
     setError(null);
+    if (generationJob?.status === "completed") {
+      const confirmReplace = confirm(
+        "Regenerate DataPoints and replace pending drafts for this profile?"
+      );
+      if (!confirmReplace) {
+        return;
+      }
+    }
     setIsGenerating(true);
     try {
       const generation = await api.startDatapointGeneration({
@@ -248,6 +312,7 @@ export function DatabaseManager() {
         batch_size: 10,
         max_tables: selectedTables.length || null,
         max_metrics_per_table: 3,
+        replace_existing: true,
       });
       setGenerationJob(generation);
     } catch (err) {
@@ -292,11 +357,28 @@ export function DatabaseManager() {
           name: approved.datapoint.name ? String(approved.datapoint.name) : null,
         },
         ...current,
-      ]);
+      ].filter(
+        (item, index, array) =>
+          array.findIndex((entry) => entry.datapoint_id === item.datapoint_id) ===
+          index
+      ));
+      showNotice(
+        "Approved. Existing DataPoints for the same table were replaced."
+      );
       await refresh();
     } catch (err) {
       if (snapshot) {
-        setPending((current) => [snapshot, ...current]);
+        setPending((current) => {
+          const merged = [snapshot, ...current];
+          const seen = new Set<string>();
+          return merged.filter((item) => {
+            if (seen.has(item.pending_id)) {
+              return false;
+            }
+            seen.add(item.pending_id);
+            return true;
+          });
+        });
       }
       setError((err as Error).message);
     } finally {
@@ -329,11 +411,28 @@ export function DatabaseManager() {
             name: item.datapoint.name ? String(item.datapoint.name) : null,
           })),
           ...current,
-        ]);
+        ].filter(
+          (item, index, array) =>
+            array.findIndex((entry) => entry.datapoint_id === item.datapoint_id) ===
+            index
+        ));
+        showNotice(
+          `Approved ${approved.length} DataPoints. Existing DataPoints for the same tables were replaced.`
+        );
       }
       await refresh();
     } catch (err) {
-      setPending(snapshot);
+      setPending(() => {
+        const merged = [...snapshot];
+        const seen = new Set<string>();
+        return merged.filter((item) => {
+          if (seen.has(item.pending_id)) {
+            return false;
+          }
+          seen.add(item.pending_id);
+          return true;
+        });
+      });
       setError((err as Error).message);
     } finally {
       setIsBulkApproving(false);
@@ -366,6 +465,9 @@ export function DatabaseManager() {
     setError(null);
     try {
       await api.systemReset();
+      setPreserveApprovedOnEmpty(false);
+      setApproved([]);
+      setPending([]);
       await refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -416,6 +518,7 @@ export function DatabaseManager() {
         It does not delete target database tables.
       </div>
 
+      {notice && <div className="text-sm text-emerald-600">{notice}</div>}
       {error && <div className="text-sm text-destructive">{error}</div>}
 
       <Card className="p-4 space-y-4">
@@ -685,8 +788,7 @@ export function DatabaseManager() {
                   disabled={
                     isGenerating ||
                     !hasSelection ||
-                    generationJob?.status === "running" ||
-                    generationJob?.status === "completed"
+                    generationJob?.status === "running"
                   }
                 >
                   {isGenerating ? (

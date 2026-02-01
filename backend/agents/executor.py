@@ -15,6 +15,9 @@ import asyncio
 import logging
 import time
 from urllib.parse import urlparse
+import json
+from pathlib import Path
+import re
 
 from backend.agents.base import BaseAgent
 from backend.config import get_settings
@@ -81,20 +84,47 @@ class ExecutorAgent(BaseAgent):
 
         # Get database connector
         connector = await self._get_connector(input.database_type, input.database_url)
+        llm_calls = 0
+        sql_to_execute = input.validated_sql.sql
 
         try:
             # Execute query with timeout
-            query_result = await self._execute_query(
-                connector,
-                input.validated_sql.sql,
-                input.max_rows,
-                input.timeout_seconds,
-            )
+            try:
+                query_result = await self._execute_query(
+                    connector,
+                    sql_to_execute,
+                    input.max_rows,
+                    input.timeout_seconds,
+                )
+            except QueryError as exc:
+                schema_context = self._load_schema_context(input.source_datapoints)
+                if self._should_probe_schema(exc, input.database_type):
+                    db_context = await self._fetch_schema_context(connector, input.database_type)
+                    if db_context:
+                        if schema_context == "No schema datapoints available.":
+                            schema_context = db_context
+                        else:
+                            schema_context = f"{schema_context}\n\n{db_context}"
+                corrected_sql = await self._attempt_sql_correction(
+                    input, sql_to_execute, exc, schema_context
+                )
+                if corrected_sql:
+                    llm_calls += 1
+                    sql_to_execute = corrected_sql
+                    query_result = await self._execute_query(
+                        connector,
+                        sql_to_execute,
+                        input.max_rows,
+                        input.timeout_seconds,
+                    )
+                else:
+                    raise
 
             # Generate natural language summary
             nl_answer, insights = await self._generate_summary(
-                input.query, input.validated_sql.sql, query_result
+                input.query, sql_to_execute, query_result
             )
+            llm_calls += 1
 
             # Suggest visualization
             viz_hint = self._suggest_visualization(query_result)
@@ -115,7 +145,7 @@ class ExecutorAgent(BaseAgent):
 
             # Create metadata with LLM call count
             metadata = self._create_metadata()
-            metadata.llm_calls = 1
+            metadata.llm_calls = llm_calls
 
             return ExecutorAgentOutput(
                 success=True,
@@ -231,6 +261,195 @@ class ExecutorAgent(BaseAgent):
             raise TimeoutError(f"Query exceeded timeout of {timeout_seconds}s") from e
         except Exception as e:
             raise QueryError(f"Query execution failed: {e}") from e
+
+    async def _attempt_sql_correction(
+        self,
+        input: ExecutorAgentInput,
+        sql: str,
+        error: Exception,
+        schema_context: str,
+    ) -> str | None:
+        issues = "\n".join(
+            [
+                f"- EXECUTION_ERROR: {error}",
+                f"- DATABASE_ENGINE: {input.database_type}",
+            ]
+        )
+        prompt = self.prompts.render(
+            "agents/sql_correction.md",
+            original_sql=sql,
+            issues=issues,
+            schema_context=schema_context,
+        )
+
+        request = LLMRequest(
+            messages=[
+                LLMMessage(role="system", content=self.prompts.load("system/main.md")),
+                LLMMessage(role="user", content=prompt),
+            ],
+            temperature=0.0,
+            max_tokens=2000,
+        )
+
+        try:
+            response = await self.llm.generate(request)
+            corrected = self._parse_correction_response(response.content)
+            if not corrected or corrected.strip().lower() == sql.strip().lower():
+                return None
+            return corrected
+        except Exception as exc:
+            logger.error(f"SQL execution correction failed: {exc}")
+            return None
+
+    def _should_probe_schema(self, error: Exception, database_type: str) -> bool:
+        if database_type != "postgresql":
+            return False
+        message = str(error).lower()
+        return bool(
+            re.search(r"relation .* does not exist", message)
+            or "does not exist" in message
+            or "undefined table" in message
+        )
+
+    async def _fetch_schema_context(
+        self, connector: BaseConnector, database_type: str
+    ) -> str | None:
+        if database_type != "postgresql":
+            return None
+
+        tables_query = (
+            "SELECT table_schema, table_name "
+            "FROM information_schema.tables "
+            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+            "ORDER BY table_schema, table_name"
+        )
+        try:
+            result = await connector.execute(tables_query)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch schema context: {exc}")
+            return None
+
+        if not result.rows:
+            return None
+
+        entries = []
+        qualified_tables = []
+        for row in result.rows[:200]:
+            schema = row.get("table_schema")
+            table = row.get("table_name")
+            if schema and table:
+                qualified = f"{schema}.{table}"
+                entries.append(qualified)
+                qualified_tables.append(qualified)
+            elif table:
+                entries.append(str(table))
+
+        if not entries:
+            return None
+
+        tables = ", ".join(entries)
+
+        columns_context = ""
+        if qualified_tables:
+            columns_query = (
+                "SELECT table_schema, table_name, column_name, data_type "
+                "FROM information_schema.columns "
+                "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+                "ORDER BY table_schema, table_name, ordinal_position"
+            )
+            try:
+                columns_result = await connector.execute(columns_query)
+                if columns_result.rows:
+                    columns_by_table: dict[str, list[str]] = {}
+                    for row in columns_result.rows:
+                        schema = row.get("table_schema")
+                        table = row.get("table_name")
+                        column = row.get("column_name")
+                        dtype = row.get("data_type")
+                        if not (schema and table and column):
+                            continue
+                        key = f"{schema}.{table}"
+                        if key not in qualified_tables:
+                            continue
+                        columns_by_table.setdefault(key, []).append(
+                            f"{column} ({dtype})" if dtype else str(column)
+                        )
+                    if columns_by_table:
+                        lines = []
+                        for table in sorted(columns_by_table):
+                            columns = columns_by_table[table]
+                            if columns:
+                                lines.append(f"- {table}: {', '.join(columns[:30])}")
+                        if lines:
+                            columns_context = "\n**Columns:**\n" + "\n".join(lines)
+            except Exception as exc:
+                logger.warning(f"Failed to fetch column context: {exc}")
+
+        return f"**Tables in database:** {tables}{columns_context}"
+
+    def _parse_correction_response(self, content: str) -> str | None:
+        try:
+            payload = json.loads(content)
+            sql = payload.get("sql")
+            if isinstance(sql, str) and sql.strip():
+                return sql.strip()
+        except json.JSONDecodeError:
+            pass
+
+        fenced = self._extract_code_block(content)
+        if fenced:
+            return fenced
+        return None
+
+    def _extract_code_block(self, content: str) -> str | None:
+        if "```" not in content:
+            return None
+        chunks = content.split("```")
+        for i in range(1, len(chunks), 2):
+            block = chunks[i].strip()
+            if block.startswith("sql"):
+                block = block[3:].strip()
+            if block:
+                return block
+        return None
+
+    def _load_schema_context(self, datapoint_ids: list[str]) -> str:
+        if not datapoint_ids:
+            return "No schema datapoints available."
+        context_parts: list[str] = []
+        data_dir = Path("datapoints") / "managed"
+        for datapoint_id in datapoint_ids:
+            path = data_dir / f"{datapoint_id}.json"
+            if not path.exists():
+                continue
+            try:
+                with path.open() as handle:
+                    payload = json.load(handle)
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            if payload.get("type") != "Schema":
+                continue
+
+            table_name = payload.get("table_name", "unknown")
+            schema_name = payload.get("schema") or payload.get("schema_name")
+            full_name = (
+                f"{schema_name}.{table_name}"
+                if schema_name and "." not in table_name
+                else table_name
+            )
+            context_parts.append(f"\n**Table: {full_name}**")
+            if payload.get("business_purpose"):
+                context_parts.append(f"Purpose: {payload['business_purpose']}")
+            columns = payload.get("key_columns") or []
+            if columns:
+                context_parts.append("Columns:")
+                for column in columns:
+                    column_name = column.get("name", "unknown")
+                    column_type = column.get("type", "unknown")
+                    context_parts.append(f"- {column_name} ({column_type})")
+
+        return "\n".join(context_parts) if context_parts else "No schema datapoints available."
 
     async def _generate_summary(
         self, original_query: str, sql: str, query_result: QueryResult

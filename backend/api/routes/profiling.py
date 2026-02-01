@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -39,6 +40,7 @@ class GenerateDataPointsRequest(BaseModel):
     batch_size: int = Field(default=10, ge=1, le=50)
     max_tables: int | None = Field(default=None, ge=1, le=500)
     max_metrics_per_table: int = Field(default=3, ge=1, le=10)
+    replace_existing: bool = Field(default=True)
 
 
 class GenerationJobResponse(BaseModel):
@@ -77,6 +79,47 @@ DATA_DIR = Path("datapoints") / "managed"
 
 def _datapoint_path(datapoint_id: str) -> Path:
     return DATA_DIR / f"{datapoint_id}.json"
+
+
+def _normalize_table_name(name: str) -> str:
+    return name.strip().lower()
+
+
+def _extract_table_keys(datapoint) -> list[str]:
+    if datapoint.type == "Schema":
+        return [_normalize_table_name(datapoint.table_name)]
+    if datapoint.type == "Business" and datapoint.related_tables:
+        return [_normalize_table_name(table) for table in datapoint.related_tables]
+    return []
+
+
+def _remove_existing_datapoints_for_table(
+    table_key: str, exclude_ids: set[str]
+) -> list[str]:
+    if not DATA_DIR.exists():
+        return []
+    removed_ids: list[str] = []
+    for path in DATA_DIR.glob("*.json"):
+        try:
+            with path.open() as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        datapoint_id = str(payload.get("datapoint_id", path.stem))
+        if datapoint_id in exclude_ids:
+            continue
+        datapoint_type = payload.get("type")
+        if datapoint_type == "Schema":
+            table_name = payload.get("table_name")
+            if table_name and _normalize_table_name(table_name) == table_key:
+                path.unlink(missing_ok=True)
+                removed_ids.append(datapoint_id)
+        elif datapoint_type == "Business":
+            related_tables = payload.get("related_tables") or []
+            if any(_normalize_table_name(table) == table_key for table in related_tables):
+                path.unlink(missing_ok=True)
+                removed_ids.append(datapoint_id)
+    return removed_ids
 
 
 def _get_store() -> ProfilingStore:
@@ -300,6 +343,9 @@ async def generate_datapoints(payload: GenerateDataPointsRequest) -> GenerationJ
                 progress_callback=progress_callback,
             )
 
+            if payload.replace_existing:
+                await store.delete_pending_for_profile(profile.profile_id)
+
             pending_items = [
                 PendingDataPoint(
                     profile_id=profile.profile_id,
@@ -412,6 +458,19 @@ async def approve_datapoint(
     from backend.sync.orchestrator import save_datapoint_to_disk
 
     datapoint = TypeAdapter(DataPoint).validate_python(pending.datapoint)
+    table_keys = _extract_table_keys(datapoint)
+    if table_keys:
+        removed_ids: set[str] = set()
+        for table_key in sorted(set(table_keys)):
+            removed_ids.update(
+                _remove_existing_datapoints_for_table(
+                    table_key, exclude_ids={datapoint.datapoint_id}
+                )
+            )
+        if removed_ids:
+            await vector_store.delete(sorted(removed_ids))
+            for removed_id in sorted(removed_ids):
+                graph.remove_datapoint(removed_id)
     save_datapoint_to_disk(
         datapoint.model_dump(mode="json", by_alias=True),
         _datapoint_path(datapoint.datapoint_id),
@@ -446,6 +505,19 @@ async def bulk_approve_datapoints() -> PendingDataPointListResponse:
 
     datapoints = [TypeAdapter(DataPoint).validate_python(item.datapoint) for item in approved]
     if datapoints:
+        exclude_ids = {datapoint.datapoint_id for datapoint in datapoints}
+        removed_ids: set[str] = set()
+        table_keys: set[str] = set()
+        for datapoint in datapoints:
+            table_keys.update(_extract_table_keys(datapoint))
+        for table_key in sorted(table_keys):
+            removed_ids.update(
+                _remove_existing_datapoints_for_table(table_key, exclude_ids=exclude_ids)
+            )
+        if removed_ids:
+            await vector_store.delete(sorted(removed_ids))
+            for removed_id in sorted(removed_ids):
+                graph.remove_datapoint(removed_id)
         for datapoint in datapoints:
             save_datapoint_to_disk(
                 datapoint.model_dump(mode="json", by_alias=True),

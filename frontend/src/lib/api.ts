@@ -403,6 +403,7 @@ export class DataChatAPI {
     batch_size?: number;
     max_tables?: number | null;
     max_metrics_per_table?: number;
+    replace_existing?: boolean;
   }): Promise<GenerationJob> {
     const response = await fetch(`${this.baseUrl}/api/v1/datapoints/generate`, {
       method: "POST",

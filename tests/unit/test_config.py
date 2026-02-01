@@ -101,7 +101,7 @@ class TestDatabaseSettings:
 
     def test_database_url_optional(self, monkeypatch):
         """Database URL can be omitted in config-only environments."""
-        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setenv("DATABASE_URL", "")
 
         settings = DatabaseSettings()
 

@@ -110,7 +110,11 @@ This requires the backend running (see Step 5).
 1. Open <http://localhost:3000>
 2. Follow the setup prompt and enable **Auto-profile**
 3. Review pending DataPoints in **Database Management**
-4. Approve the DataPoints you want to activate
+4. Approve the DataPoints you want to activate (approvals replace existing
+   approved DataPoints for the same table)
+
+SQL generation also uses a live schema snapshot (tables + columns) from the
+target database to avoid missing-table errors.
 
 **CLI:**
 ```bash
@@ -317,6 +321,11 @@ npm run dev
 # Or run both with the CLI (requires frontend deps installed)
 datachat dev
 ```
+
+Profiling + DataPoints tips:
+- Use Database Manager to select tables before generating DataPoints.
+- Depth options: `schema_only`, `metrics_basic`, `metrics_full` (LLM batched).
+- Generation runs async with progress updates.
 
 ### Step 6: Verify Setup
 
