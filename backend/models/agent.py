@@ -6,7 +6,7 @@ All agents in the pipeline use these base models to ensure type safety
 and consistent data structures throughout the system.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,7 +17,7 @@ class Message(BaseModel):
 
     role: Literal["user", "assistant", "system"]
     content: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     model_config = ConfigDict(frozen=True)
 
@@ -26,7 +26,7 @@ class AgentMetadata(BaseModel):
     """Metadata about agent execution."""
 
     agent_name: str
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
     duration_ms: float | None = None
     llm_calls: int = 0
@@ -37,7 +37,7 @@ class AgentMetadata(BaseModel):
 
     def mark_complete(self) -> None:
         """Mark execution as complete and calculate duration."""
-        self.completed_at = datetime.utcnow()
+        self.completed_at = datetime.now(UTC)
         if self.started_at:
             delta = self.completed_at - self.started_at
             self.duration_ms = delta.total_seconds() * 1000
