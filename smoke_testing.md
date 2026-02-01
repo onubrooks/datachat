@@ -7,8 +7,26 @@ Quick checklist for validating a working local setup before demos or deeper test
 ## Prerequisites
 
 - `.env` configured with `OPENAI_API_KEY`, `DATABASE_URL`, and `SYSTEM_DATABASE_URL`.
-- Backend running on `http://localhost:8000`.
-- Optional: Frontend running on `http://localhost:3000`.
+- CLI installed:
+
+  ```bash
+  pip install -e .
+  ```
+
+- Backend running on `http://localhost:8000`:
+
+  ```bash
+  uvicorn backend.api.main:app --reload --port 8000
+  ```
+
+- Optional frontend running on `http://localhost:3000`:
+
+  ```bash
+  cd frontend
+  npm install
+  npm run dev
+  ```
+
 - Setup saves database URLs to `~/.datachat/config.json`.
 
 ---

@@ -24,16 +24,6 @@ Expected: answers include SQL + results; `validation_errors` is empty or minimal
 
 ---
 
-## CLI Installation Check
-
-If `datachat --version` returns "command not found", install the CLI:
-
-```bash
-pip install -e .
-```
-
-Setup saves database URLs to `~/.datachat/config.json` for reuse.
-
 ## Prerequisites
 
 Before testing, ensure you have:
@@ -45,7 +35,33 @@ Before testing, ensure you have:
    # Edit .env and add your OpenAI API key
    ```
 
-2. **PostgreSQL Database:**
+2. **CLI Installed:**
+
+   ```bash
+   pip install -e .
+   ```
+
+3. **Start Backend + Frontend (if not running):**
+
+   ```bash
+   # Backend (from repo root)
+   uvicorn backend.api.main:app --reload --port 8000
+   ```
+
+   ```bash
+   # Frontend (separate terminal)
+   cd frontend
+   npm install
+   npm run dev
+   ```
+
+   Frontend should be on `http://localhost:3000`.
+
+4. **Setup Persistence:**
+
+   Setup saves database URLs to `~/.datachat/config.json` for reuse.
+
+5. **PostgreSQL Database:**
 
    ```bash
    # Create database user (matches .env)
