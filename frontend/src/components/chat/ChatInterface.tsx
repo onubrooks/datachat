@@ -171,12 +171,17 @@ export function ChatInterface() {
     }
   };
 
-  const handleInitialize = async (databaseUrl: string, autoProfile: boolean) => {
+  const handleInitialize = async (
+    databaseUrl: string,
+    autoProfile: boolean,
+    systemDatabaseUrl?: string
+  ) => {
     setSetupError(null);
     setIsInitializing(true);
     try {
       const response = await apiClient.systemInitialize({
         database_url: databaseUrl,
+        system_database_url: systemDatabaseUrl,
         auto_profile: autoProfile,
       });
       setIsInitialized(response.is_initialized);
@@ -248,6 +253,9 @@ export function ChatInterface() {
               <p className="text-lg mb-2">Welcome to DataChat!</p>
               <p className="text-sm">
                 Ask a question about your data to get started.
+              </p>
+              <p className="text-xs text-muted-foreground mt-2">
+                New here? Run <strong>datachat demo</strong> to load sample data.
               </p>
             </div>
           </div>
