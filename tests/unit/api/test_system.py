@@ -23,6 +23,7 @@ class TestSystemEndpoints:
         return SystemStatus(
             is_initialized=False,
             has_databases=False,
+            has_system_database=False,
             has_datapoints=False,
             setup_required=[
                 SetupStep(
@@ -30,6 +31,12 @@ class TestSystemEndpoints:
                     title="Connect a database",
                     description="Configure the database connection used for queries.",
                     action="configure_database",
+                ),
+                SetupStep(
+                    step="system_database",
+                    title="System database (optional)",
+                    description="Configure SYSTEM_DATABASE_URL to enable registry/profiling.",
+                    action="configure_system_database",
                 ),
                 SetupStep(
                     step="datapoints",
@@ -51,8 +58,9 @@ class TestSystemEndpoints:
             data = response.json()
             assert data["is_initialized"] is False
             assert data["has_databases"] is False
+            assert data["has_system_database"] is False
             assert data["has_datapoints"] is False
-            assert len(data["setup_required"]) == 2
+            assert len(data["setup_required"]) == 3
 
     @pytest.mark.asyncio
     async def test_status_returns_setup_steps(self, client, not_initialized_status):
@@ -64,6 +72,7 @@ class TestSystemEndpoints:
             data = response.json()
             steps = {step["step"] for step in data["setup_required"]}
             assert "database_connection" in steps
+            assert "system_database" in steps
             assert "datapoints" in steps
 
     @pytest.mark.asyncio
