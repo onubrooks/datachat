@@ -353,7 +353,7 @@ class TestSchemaIntrospection:
             assert isinstance(tables[0], TableInfo)
 
             table = tables[0]
-            assert table.schema == "public"
+            assert table.schema_name == "public"
             assert table.table_name == "users"
             assert table.table_type == "BASE TABLE"
             assert len(table.columns) == 2
