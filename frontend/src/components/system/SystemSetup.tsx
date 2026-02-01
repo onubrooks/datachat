@@ -15,7 +15,11 @@ import type { SetupStep } from "@/lib/api";
 
 interface SystemSetupProps {
   steps: SetupStep[];
-  onInitialize: (databaseUrl: string, autoProfile: boolean) => Promise<void>;
+  onInitialize: (
+    databaseUrl: string,
+    autoProfile: boolean,
+    systemDatabaseUrl?: string
+  ) => Promise<void>;
   isSubmitting: boolean;
   error: string | null;
 }
@@ -27,14 +31,23 @@ export function SystemSetup({
   error,
 }: SystemSetupProps) {
   const [databaseUrl, setDatabaseUrl] = useState("");
+  const [systemDatabaseUrl, setSystemDatabaseUrl] = useState("");
   const [autoProfile, setAutoProfile] = useState(false);
+  const needsSystemDatabase = steps.some((step) => step.step === "system_database");
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!databaseUrl.trim()) {
       return;
     }
-    await onInitialize(databaseUrl.trim(), autoProfile);
+    if (needsSystemDatabase && !systemDatabaseUrl.trim()) {
+      return;
+    }
+    await onInitialize(
+      databaseUrl.trim(),
+      autoProfile,
+      systemDatabaseUrl.trim() || undefined
+    );
   };
 
   return (
@@ -46,7 +59,11 @@ export function SystemSetup({
             <h2 className="text-sm font-semibold">Finish DataChat setup</h2>
             <p className="text-xs text-muted-foreground">
               DataChat needs a database connection and DataPoints before it can answer
-              queries.
+              queries. The system database is optional unless you want registry/profiling
+              or demo data.
+            </p>
+            <p className="text-xs text-muted-foreground mt-2">
+              Need a quick start? Run the demo dataset with <strong>datachat demo</strong>.
             </p>
           </div>
         </div>
@@ -73,7 +90,7 @@ export function SystemSetup({
         <form onSubmit={handleSubmit} className="space-y-2">
           <label className="text-xs font-medium text-muted-foreground flex items-center gap-2">
             <Database className="w-4 h-4" />
-            Database URL
+            Target Database URL
           </label>
           <Input
             value={databaseUrl}
@@ -81,6 +98,23 @@ export function SystemSetup({
             placeholder="postgresql://user:pass@host:5432/database"
             disabled={isSubmitting}
           />
+          {needsSystemDatabase && (
+            <>
+              <label className="text-xs font-medium text-muted-foreground flex items-center gap-2">
+                <Database className="w-4 h-4" />
+                System Database URL (for demo/registry)
+              </label>
+              <Input
+                value={systemDatabaseUrl}
+                onChange={(event) => setSystemDatabaseUrl(event.target.value)}
+                placeholder="postgresql://user:pass@host:5432/datachat"
+                disabled={isSubmitting}
+              />
+            </>
+          )}
+          <div className="text-xs text-muted-foreground">
+            These settings are saved for future sessions.
+          </div>
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <input
               type="checkbox"
@@ -93,7 +127,14 @@ export function SystemSetup({
           {error && (
             <div className="text-xs text-destructive">{error}</div>
           )}
-          <Button type="submit" disabled={isSubmitting || !databaseUrl.trim()}>
+          <Button
+            type="submit"
+            disabled={
+              isSubmitting ||
+              !databaseUrl.trim() ||
+              (needsSystemDatabase && !systemDatabaseUrl.trim())
+            }
+          >
             {isSubmitting ? "Initializing..." : "Initialize"}
           </Button>
         </form>
