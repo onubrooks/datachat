@@ -57,11 +57,15 @@ class ProfilingStore:
 
     def __init__(self, database_url: str | None = None) -> None:
         settings = get_settings()
-        self._database_url = database_url or str(settings.database.url)
+        self._database_url = database_url or (
+            str(settings.system_database.url) if settings.system_database.url else None
+        )
         self._pool: asyncpg.Pool | None = None
 
     async def initialize(self) -> None:
         if self._pool is None:
+            if not self._database_url:
+                raise ValueError("SYSTEM_DATABASE_URL must be set for the profiling store.")
             dsn = self._normalize_postgres_url(self._database_url)
             self._pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=5)
         await self._pool.execute(_CREATE_JOBS_TABLE)
@@ -160,7 +164,7 @@ class ProfilingStore:
             """,
             profile.profile_id,
             profile.connection_id,
-            json.dumps(profile.model_dump(mode="json")),
+            json.dumps(profile.model_dump(mode="json", by_alias=True)),
             profile.created_at,
         )
         return profile
