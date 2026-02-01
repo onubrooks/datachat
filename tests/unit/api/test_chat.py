@@ -62,6 +62,7 @@ class TestChatEndpoint:
         return SystemStatus(
             is_initialized=True,
             has_databases=True,
+            has_system_database=True,
             has_datapoints=True,
             setup_required=[],
         )
