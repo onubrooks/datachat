@@ -8,6 +8,7 @@ credentials.
 
 - Set `DATABASE_CREDENTIALS_KEY` in your environment (32 url-safe base64 bytes).
 - Ensure the system database is running (PostgreSQL for registry storage).
+- Set `SYSTEM_DATABASE_URL` in your environment.
 
 Example:
 
