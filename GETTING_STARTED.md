@@ -8,10 +8,10 @@ Complete guide for setting up and using DataChat with your database.
 
 DataChat consists of two databases:
 
-1. **DataChat System Database** - Stores DataChat's own metadata (currently minimal usage)
-2. **Your Target Database** - The database you want to query with natural language
+1. **System Database** - Registry/profiling metadata and demo data
+2. **Target Database** - The database you want to query with natural language
 
-**Current Limitation:** Both use the same `DATABASE_URL`. This means DataChat queries the same database it uses for its operations.
+If you don't have a database ready, you can run the demo dataset to get started quickly.
 
 ---
 
@@ -38,13 +38,24 @@ cd frontend
 npm install
 ```
 
+Verify the CLI is available:
+
+```bash
+datachat --version
+```
+
+Setup saves database URLs to `~/.datachat/config.json` for reuse.
+
 ### Step 2: Configure Your Database
 
 Edit `.env` file:
 
 ```env
-# Your database connection (this is what DataChat will query)
+# Target database (queries)
 DATABASE_URL=postgresql://user:password@host:5432/your_database
+
+# System database (registry/profiling/demo)
+SYSTEM_DATABASE_URL=postgresql://user:password@host:5432/datachat
 
 # Required: OpenAI API key for LLM
 LLM_OPENAI_API_KEY=sk-...
@@ -52,17 +63,19 @@ LLM_OPENAI_API_KEY=sk-...
 
 **Important:** Replace `your_database` with your actual database name that contains the data you want to query.
 
+If you prefer a guided setup, use `datachat setup` or run `datachat demo` to load sample data.
+
 ### Optional: Load Demo Data
 
 If you want to try DataChat quickly, load the demo dataset:
 
 ```bash
 # Quick setup (recommended)
-datachat demo
+datachat demo --persona base --reset
 
 # Or manual steps
 # Seed demo tables
-psql "$DATABASE_URL" -f scripts/demo_seed.sql
+psql "$SYSTEM_DATABASE_URL" -f scripts/demo_seed.sql
 
 # Load demo DataPoints
 datachat dp sync --datapoints-dir datapoints/demo
@@ -346,7 +359,8 @@ If you skip Step 3 and don't create DataPoints:
 User: "How many users do we have?"
 
 Response: "I don't have information about your database schema.
-Please add DataPoints describing your tables so I can help query your data."
+Please add DataPoints describing your tables so I can help query your data.
+You can also run datachat demo to try a sample dataset."
 ```
 
 **Example With DataPoints:**
@@ -364,7 +378,8 @@ Response: "You currently have 1,247 active users in the database."
 
 Before your first query:
 
-- [ ] Database connected (`DATABASE_URL` in `.env`)
+- [ ] Target database connected (`DATABASE_URL` in `.env`)
+- [ ] System database set if you want demo/registry (`SYSTEM_DATABASE_URL`)
 - [ ] OpenAI API key configured
 - [ ] System initialized (Web UI or `datachat setup`)
 - [ ] DataPoints approved or created for key tables
@@ -439,18 +454,17 @@ For basic functionality, create DataPoints for:
 
 **Steps:**
 1. Set `DATABASE_URL` to your production database (read-only user recommended)
-2. Create DataPoints for 5-10 most important tables
-3. Add Business DataPoints for key metrics
-4. Test with your team's common questions
-5. Iterate and add more DataPoints based on usage
+2. Set `SYSTEM_DATABASE_URL` for registry/profiling/demo data
+3. Create DataPoints for 5-10 most important tables
+4. Add Business DataPoints for key metrics
+5. Test with your team's common questions
+6. Iterate and add more DataPoints based on usage
 
 ### Scenario 3: Multiple Databases
 
-**Current Limitation:** DataChat currently supports querying only the database specified in `DATABASE_URL`.
-
-**Workaround:** Run separate DataChat instances for each database, or manually switch `DATABASE_URL` and restart.
-
-**Planned:** Multi-database support in future versions.
+Use the database registry to add multiple connections and route queries using
+`target_database` in the chat request. The system database stores encrypted
+connections when `SYSTEM_DATABASE_URL` and `DATABASE_CREDENTIALS_KEY` are set.
 
 ---
 
