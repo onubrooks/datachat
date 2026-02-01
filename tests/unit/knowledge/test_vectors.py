@@ -35,9 +35,27 @@ class MockEmbeddingFunction:
             return [[float(i) for i in range(384)] for _ in input]
         return [float(i) for i in range(384)]
 
-    def name(self) -> str:
+    @staticmethod
+    def name() -> str:
         """Return the name of the embedding function."""
         return "mock-embedding-function"
+
+    def is_legacy(self) -> bool:
+        """Indicate this embedding function uses the new interface."""
+        return False
+
+    def supported_spaces(self) -> list[str]:
+        """Return supported distance metrics."""
+        return ["cosine", "l2", "ip"]
+
+    def get_config(self) -> dict:
+        """Return embedding function configuration."""
+        return {}
+
+    @classmethod
+    def build_from_config(cls, config: dict):
+        """Reconstruct embedding function from config."""
+        return cls()
 
 
 @pytest.fixture
