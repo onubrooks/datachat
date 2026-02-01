@@ -18,10 +18,9 @@ import logging
 import re
 from urllib.parse import urlparse
 
-from backend.connectors.postgres import PostgresConnector
-
 from backend.agents.base import BaseAgent
 from backend.config import get_settings
+from backend.connectors.postgres import PostgresConnector
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
 from backend.models.agent import (
@@ -381,13 +380,21 @@ class SQLAgent(BaseAgent):
         for cte_name in additional_ctes:
             cte_names.add(cte_name.upper())
 
-        if "information_schema." in sql.lower():
-            return issues
-
         # Extract table names from SQL (FROM and JOIN clauses)
         table_pattern = r"FROM\s+([a-zA-Z0-9_.]+)|JOIN\s+([a-zA-Z0-9_.]+)"
         table_matches = re.findall(table_pattern, sql, re.IGNORECASE)
         referenced_tables = {match[0] or match[1] for match in table_matches}
+        referenced_table_lowers = {table.lower() for table in referenced_tables}
+        catalog_tables = {
+            table
+            for table in referenced_table_lowers
+            if table.startswith("information_schema.")
+            or table.startswith("pg_catalog.")
+            or table in {"information_schema", "pg_catalog"}
+        }
+        is_catalog_only = referenced_tables and len(catalog_tables) == len(
+            referenced_table_lowers
+        )
 
         # Get available tables from DataPoints
         available_tables = set()
@@ -409,6 +416,10 @@ class SQLAgent(BaseAgent):
 
             # Skip special tables
             if table_upper in ("DUAL", "LATERAL"):
+                continue
+            if is_catalog_only:
+                continue
+            if table.lower().startswith(("information_schema.", "pg_catalog.")):
                 continue
 
             # Check if table exists in DataPoints

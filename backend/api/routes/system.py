@@ -9,21 +9,21 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, status
 
-from backend.initialization.initializer import SystemInitializer
 from backend.config import get_settings
 from backend.connectors.postgres import PostgresConnector
+from backend.initialization.initializer import SystemInitializer
 from backend.knowledge.vectors import VectorStore
+from backend.models.api import (
+    SystemInitializeRequest,
+    SystemInitializeResponse,
+    SystemStatusResponse,
+)
 from backend.settings_store import (
     SYSTEM_DB_KEY,
     TARGET_DB_KEY,
     apply_config_defaults,
     clear_config,
     set_value,
-)
-from backend.models.api import (
-    SystemInitializeRequest,
-    SystemInitializeResponse,
-    SystemStatusResponse,
 )
 
 router = APIRouter()

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import json
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status

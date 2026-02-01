@@ -113,7 +113,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        with open(args.dataset, "r", encoding="utf-8") as handle:
+        with open(args.dataset, encoding="utf-8") as handle:
             dataset = json.load(handle)
     except OSError as exc:
         print(f"Failed to load dataset: {exc}")

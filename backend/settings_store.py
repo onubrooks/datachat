@@ -25,7 +25,7 @@ def _ensure_dir() -> None:
 
 def load_config() -> dict[str, Any]:
     if CONFIG_PATH.exists():
-        with open(CONFIG_PATH, "r", encoding="utf-8") as handle:
+        with open(CONFIG_PATH, encoding="utf-8") as handle:
             return json.load(handle)
     return {}
 

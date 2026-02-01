@@ -4,8 +4,8 @@ WebSocket Routes
 Real-time streaming WebSocket endpoint for chat with agent status updates.
 """
 
-import json
 import asyncio
+import json
 import logging
 import uuid
 from typing import Any
