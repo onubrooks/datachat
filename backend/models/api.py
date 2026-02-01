@@ -6,6 +6,8 @@ Pydantic models for FastAPI endpoints.
 
 from pydantic import BaseModel, Field
 
+from backend.models.agent import SQLValidationError, ValidationWarning
+
 
 class Message(BaseModel):
     """Chat message in conversation history."""
@@ -66,6 +68,12 @@ class ChatResponse(BaseModel):
     visualization_hint: str | None = Field(None, description="Suggested visualization type")
     sources: list[DataSource] = Field(
         default_factory=list, description="Data sources used to answer"
+    )
+    validation_errors: list[SQLValidationError] = Field(
+        default_factory=list, description="SQL validation errors (if any)"
+    )
+    validation_warnings: list[ValidationWarning] = Field(
+        default_factory=list, description="SQL validation warnings (if any)"
     )
     metrics: ChatMetrics | None = Field(None, description="Performance metrics")
     conversation_id: str | None = Field(None, description="Conversation ID for follow-up")
@@ -151,6 +159,9 @@ class SystemStatusResponse(BaseModel):
 
     is_initialized: bool = Field(..., description="Whether the system is ready for queries")
     has_databases: bool = Field(..., description="Whether a database connection is available")
+    has_system_database: bool = Field(
+        ..., description="Whether a system database is available for registry/profiling"
+    )
     has_datapoints: bool = Field(..., description="Whether DataPoints are loaded")
     setup_required: list[SetupStep] = Field(
         default_factory=list, description="Required setup steps"
@@ -162,6 +173,9 @@ class SystemInitializeRequest(BaseModel):
 
     database_url: str | None = Field(
         None, description="Database URL to use for initialization"
+    )
+    system_database_url: str | None = Field(
+        None, description="System database URL for registry/profiling/demo"
     )
     auto_profile: bool = Field(
         default=False,
@@ -175,6 +189,9 @@ class SystemInitializeResponse(BaseModel):
     message: str = Field(..., description="Initialization status message")
     is_initialized: bool = Field(..., description="Whether the system is ready for queries")
     has_databases: bool = Field(..., description="Whether a database connection is available")
+    has_system_database: bool = Field(
+        ..., description="Whether a system database is available for registry/profiling"
+    )
     has_datapoints: bool = Field(..., description="Whether DataPoints are loaded")
     setup_required: list[SetupStep] = Field(
         default_factory=list, description="Required setup steps"
