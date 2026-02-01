@@ -143,11 +143,11 @@ class LLMSettings(BaseSettings):
 
 
 class DatabaseSettings(BaseSettings):
-    """Database configuration."""
+    """Target database configuration."""
 
-    url: PostgresDsn = Field(
-        ...,
-        description="PostgreSQL connection URL",
+    url: PostgresDsn | None = Field(
+        None,
+        description="Target PostgreSQL connection URL (the database you query)",
     )
     pool_size: int = Field(
         default=5,
@@ -176,11 +176,52 @@ class DatabaseSettings(BaseSettings):
         extra="ignore",
     )
 
+    @field_validator("url", mode="before")
+    @classmethod
+    def normalize_url(cls, v: str | PostgresDsn | None) -> str | PostgresDsn | None:
+        """Treat empty strings as missing."""
+        if v == "":
+            return None
+        return v
+
     @field_validator("url")
     @classmethod
-    def validate_url(cls, v: PostgresDsn) -> PostgresDsn:
+    def validate_url(cls, v: PostgresDsn | None) -> PostgresDsn | None:
         """Validate database URL scheme."""
+        if v is None:
+            return v
         # PostgresDsn already validates the scheme, but we can add custom logic if needed
+        return v
+
+
+class SystemDatabaseSettings(BaseSettings):
+    """System database configuration (registry/profiling/demo)."""
+
+    url: PostgresDsn | None = Field(
+        None,
+        description="System PostgreSQL connection URL (registry/profiling/demo)",
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="SYSTEM_DATABASE_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def normalize_url(cls, v: str | PostgresDsn | None) -> str | PostgresDsn | None:
+        """Treat empty strings as missing."""
+        if v == "":
+            return None
+        return v
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: PostgresDsn | None) -> PostgresDsn | None:
+        """Validate system database URL scheme."""
+        if v is None:
+            return v
         return v
 
 
@@ -299,7 +340,8 @@ class Settings(BaseSettings):
         API_PORT: API server port
         SYNC_WATCHER_ENABLED: Enable filesystem DataPoint watcher
         LLM_*: LLM provider configuration (see LLMSettings)
-        DATABASE_*: Database configuration (see DatabaseSettings)
+        DATABASE_*: Target database configuration (see DatabaseSettings)
+        SYSTEM_DATABASE_*: System database configuration (see SystemDatabaseSettings)
         CHROMA_*: Vector store configuration (see ChromaSettings)
         LOG_*: Logging configuration (see LoggingSettings)
 
@@ -344,6 +386,7 @@ class Settings(BaseSettings):
     # Nested settings
     llm: LLMSettings = Field(default_factory=LLMSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    system_database: SystemDatabaseSettings = Field(default_factory=SystemDatabaseSettings)
     chroma: ChromaSettings = Field(default_factory=ChromaSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
 
