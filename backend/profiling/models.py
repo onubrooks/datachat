@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ColumnProfile(BaseModel):
@@ -37,12 +37,14 @@ class RelationshipProfile(BaseModel):
 class TableProfile(BaseModel):
     """Profile for a database table."""
 
-    schema: str
+    schema_name: str = Field(..., alias="schema")
     name: str
     row_count: int | None
     columns: list[ColumnProfile]
     relationships: list[RelationshipProfile] = Field(default_factory=list)
     sample_size: int
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class DatabaseProfile(BaseModel):
