@@ -33,6 +33,7 @@ class SystemStatus:
 
     is_initialized: bool
     has_databases: bool
+    has_system_database: bool
     has_datapoints: bool
     setup_required: list[SetupStep]
 
@@ -63,8 +64,14 @@ class SystemInitializer:
             return False
         return count > 0
 
+    async def _check_system_database(self) -> bool:
+        database_manager = self._app_state.get("database_manager")
+        profiling_store = self._app_state.get("profiling_store")
+        return database_manager is not None or profiling_store is not None
+
     async def status(self) -> SystemStatus:
         has_databases = await self._check_database()
+        has_system_database = await self._check_system_database()
         has_datapoints = await self._check_datapoints()
         setup_required: list[SetupStep] = []
 
@@ -72,9 +79,22 @@ class SystemInitializer:
             setup_required.append(
                 SetupStep(
                     step="database_connection",
-                    title="Connect a database",
-                    description="Configure the database connection used for queries.",
+                    title="Connect a target database",
+                    description="Provide the database you want DataChat to query.",
                     action="configure_database",
+                )
+            )
+
+        if not has_system_database:
+            setup_required.append(
+                SetupStep(
+                    step="system_database",
+                    title="System database (optional)",
+                    description=(
+                        "Configure SYSTEM_DATABASE_URL to enable registry/profiling "
+                        "and run the demo dataset."
+                    ),
+                    action="configure_system_database",
                 )
             )
 
@@ -83,7 +103,10 @@ class SystemInitializer:
                 SetupStep(
                     step="datapoints",
                     title="Load DataPoints",
-                    description="Add DataPoints describing your schema and business logic.",
+                    description=(
+                        "Add DataPoints describing your schema and business logic "
+                        "(or run datachat demo for sample data)."
+                    ),
                     action="load_datapoints",
                 )
             )
@@ -91,14 +114,27 @@ class SystemInitializer:
         return SystemStatus(
             is_initialized=has_databases and has_datapoints,
             has_databases=has_databases,
+            has_system_database=has_system_database,
             has_datapoints=has_datapoints,
             setup_required=setup_required,
         )
 
     async def initialize(
-        self, database_url: str | None, auto_profile: bool
+        self, database_url: str | None, auto_profile: bool, system_database_url: str | None
     ) -> tuple[SystemStatus, str]:
         message = "Initialization completed."
+
+        if system_database_url:
+            from backend.database.manager import DatabaseConnectionManager
+            from backend.profiling.store import ProfilingStore
+
+            database_manager = DatabaseConnectionManager(system_database_url=system_database_url)
+            await database_manager.initialize()
+            self._app_state["database_manager"] = database_manager
+
+            profiling_store = ProfilingStore(database_url=system_database_url)
+            await profiling_store.initialize()
+            self._app_state["profiling_store"] = profiling_store
 
         if database_url:
             from urllib.parse import urlparse
@@ -201,7 +237,7 @@ class SystemInitializer:
             else:
                 message = (
                     "Initialization completed, but auto-profiling is unavailable. "
-                    "Configure DATABASE_CREDENTIALS_KEY to enable profiling."
+                    "Set SYSTEM_DATABASE_URL and DATABASE_CREDENTIALS_KEY to enable profiling."
                 )
 
         return await self.status(), message
