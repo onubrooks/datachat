@@ -440,7 +440,7 @@ class VectorStore:
         # Add type-specific metadata
         if hasattr(datapoint, "table_name"):
             metadata["table_name"] = datapoint.table_name
-            metadata["schema"] = datapoint.schema
+            metadata["schema"] = datapoint.schema_name
 
         if hasattr(datapoint, "related_tables") and datapoint.related_tables:
             metadata["related_tables"] = ",".join(datapoint.related_tables)
