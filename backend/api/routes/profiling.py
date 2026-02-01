@@ -242,7 +242,8 @@ async def approve_datapoint(
 
     datapoint = TypeAdapter(DataPoint).validate_python(pending.datapoint)
     save_datapoint_to_disk(
-        datapoint.model_dump(mode="json"), _datapoint_path(datapoint.datapoint_id)
+        datapoint.model_dump(mode="json", by_alias=True),
+        _datapoint_path(datapoint.datapoint_id),
     )
     await vector_store.add_datapoints([datapoint])
     graph.add_datapoint(datapoint)
@@ -276,7 +277,7 @@ async def bulk_approve_datapoints() -> PendingDataPointListResponse:
     if datapoints:
         for datapoint in datapoints:
             save_datapoint_to_disk(
-                datapoint.model_dump(mode="json"),
+                datapoint.model_dump(mode="json", by_alias=True),
                 _datapoint_path(datapoint.datapoint_id),
             )
         await vector_store.add_datapoints(datapoints)
