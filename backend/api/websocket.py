@@ -103,7 +103,10 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 {
                     "event": "error",
                     "error": "system_not_initialized",
-                    "message": "DataChat requires setup. Please initialize first.",
+                    "message": (
+                        "DataChat requires setup. Run 'datachat setup' or "
+                        "'datachat demo' to get started."
+                    ),
                     "setup_steps": [
                         {
                             "step": step.step,
@@ -211,6 +214,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 "data": data_result,
                 "visualization_hint": visualization_hint,
                 "sources": sources,
+                "validation_errors": result.get("validation_errors", []),
+                "validation_warnings": result.get("validation_warnings", []),
                 "metrics": metrics,
                 "conversation_id": conversation_id,
             }
