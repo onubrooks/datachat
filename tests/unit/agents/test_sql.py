@@ -467,18 +467,24 @@ class TestValidation:
 class TestPromptBuilding:
     """Test prompt construction logic."""
 
-    def test_builds_generation_prompt_with_schema(self, sql_agent, sample_sql_agent_input):
+    @pytest.mark.asyncio
+    async def test_builds_generation_prompt_with_schema(
+        self, sql_agent, sample_sql_agent_input
+    ):
         """Test generation prompt includes schema context."""
-        prompt = sql_agent._build_generation_prompt(sample_sql_agent_input)
+        prompt = await sql_agent._build_generation_prompt(sample_sql_agent_input)
 
         assert "fact_sales" in prompt
         assert "amount" in prompt
         assert "date" in prompt
         assert sample_sql_agent_input.query in prompt
 
-    def test_builds_generation_prompt_with_business_rules(self, sql_agent, sample_sql_agent_input):
+    @pytest.mark.asyncio
+    async def test_builds_generation_prompt_with_business_rules(
+        self, sql_agent, sample_sql_agent_input
+    ):
         """Test generation prompt includes business rules."""
-        prompt = sql_agent._build_generation_prompt(sample_sql_agent_input)
+        prompt = await sql_agent._build_generation_prompt(sample_sql_agent_input)
 
         assert "Revenue" in prompt
         assert "completed" in prompt or "refund" in prompt.lower()

@@ -14,6 +14,10 @@ os.environ.setdefault(
     "LLM_OPENAI_API_KEY",
     "sk-test-key-1234567890-abcdefghijklmnop",
 )
+os.environ.setdefault(
+    "DATABASE_URL",
+    "postgresql://user:pass@localhost:5432/testdb",
+)
 
 # ============================================================================
 # Pytest Configuration
