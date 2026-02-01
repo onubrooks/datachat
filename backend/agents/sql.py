@@ -31,6 +31,7 @@ from backend.models.agent import (
     SQLGenerationError,
     ValidationIssue,
 )
+from backend.prompts.loader import PromptLoader
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,7 @@ class SQLAgent(BaseAgent):
             f"SQLAgent initialized with {provider_name} provider",
             extra={"provider": provider_name, "model": model_name},
         )
+        self.prompts = PromptLoader()
 
     async def execute(self, input: SQLAgentInput) -> SQLAgentOutput:
         """
@@ -171,6 +173,9 @@ class SQLAgent(BaseAgent):
                     "correction_attempts": len(correction_attempts),
                     "needs_clarification": needs_clarification,
                     "confidence": generated_sql.confidence,
+                    "prompt_version": self.prompts.get_metadata(
+                        "agents/sql_generator.md"
+                    ).get("version"),
                 },
             )
 
@@ -419,37 +424,7 @@ class SQLAgent(BaseAgent):
         Returns:
             System prompt string
         """
-        return """You are an expert SQL query generator for data warehouses.
-
-Your task is to generate SQL queries from natural language questions using the provided schema context and business rules.
-
-**Guidelines:**
-1. Use ONLY the tables and columns provided in the context
-2. Follow business rules exactly as specified (e.g., exclude refunds, use specific date ranges)
-3. Apply common SQL best practices (proper joins, appropriate aggregations, etc.)
-4. Be explicit about assumptions you make
-5. Ask clarifying questions if the query is ambiguous
-6. Generate valid, executable SQL
-
-**Output Format:**
-Return a JSON object with:
-- "sql": The SQL query (string)
-- "explanation": Human-readable explanation of what the query does (string)
-- "used_datapoints": List of datapoint IDs used (array of strings)
-- "confidence": Confidence score 0-1 (number)
-- "assumptions": List of assumptions made (array of strings)
-- "clarifying_questions": List of questions for user if ambiguous (array of strings)
-
-Example:
-{
-  "sql": "SELECT SUM(amount) FROM fact_sales WHERE status = 'completed' AND date >= '2024-07-01' AND date < '2024-10-01'",
-  "explanation": "This query calculates total sales for Q3 2024 by summing the amount column from fact_sales, excluding refunds and filtering for the third quarter.",
-  "used_datapoints": ["table_fact_sales_001", "metric_revenue_001"],
-  "confidence": 0.95,
-  "assumptions": ["'last quarter' refers to Q3 2024 (most recent complete quarter)"],
-  "clarifying_questions": []
-}
-"""
+        return self.prompts.load("system/main.md")
 
     def _build_generation_prompt(self, input: SQLAgentInput) -> str:
         """
@@ -464,26 +439,14 @@ Example:
         # Extract schema and business context
         schema_context = self._format_schema_context(input.investigation_memory)
         business_context = self._format_business_context(input.investigation_memory)
-
-        prompt = f"""Generate a SQL query for the following question:
-
-**User Question:**
-{input.query}
-
-**Available Schema Context:**
-{schema_context}
-
-**Business Rules and Definitions:**
-{business_context}
-
-**Instructions:**
-1. Use ONLY the tables and columns listed above
-2. Follow the business rules exactly as specified
-3. If the question is ambiguous, ask clarifying questions
-4. Return your response as a JSON object following the format specified in the system prompt
-"""
-
-        return prompt
+        return self.prompts.render(
+            "agents/sql_generator.md",
+            user_query=input.query,
+            schema_context=schema_context,
+            business_context=business_context,
+            backend=self.config.database.db_type,
+            user_preferences={"default_limit": 1000},
+        )
 
     def _build_correction_prompt(
         self, generated_sql: GeneratedSQL, issues: list[ValidationIssue], input: SQLAgentInput
@@ -511,30 +474,12 @@ Example:
             ]
         )
 
-        prompt = f"""The following SQL query has validation issues that need to be corrected:
-
-**Original SQL:**
-```sql
-{generated_sql.sql}
-```
-
-**Validation Issues Found:**
-{issues_text}
-
-**Available Schema Context:**
-{schema_context}
-
-**Instructions:**
-1. Fix ALL validation issues listed above
-2. Use ONLY the tables and columns listed in the schema context
-3. Maintain the original intent of the query
-4. Return your response as a JSON object following the format specified in the system prompt
-
-**Original User Question (for reference):**
-{input.query}
-"""
-
-        return prompt
+        return self.prompts.render(
+            "agents/sql_correction.md",
+            original_sql=generated_sql.sql,
+            issues=issues_text,
+            schema_context=schema_context,
+        )
 
     def _format_schema_context(self, memory) -> str:
         """
