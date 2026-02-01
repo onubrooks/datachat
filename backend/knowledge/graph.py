@@ -134,7 +134,7 @@ class KnowledgeGraph:
             node_type=NodeType.TABLE,
             name=datapoint.name,
             table_name=datapoint.table_name,
-            schema=datapoint.schema,
+            schema=datapoint.schema_name,
             business_purpose=datapoint.business_purpose,
             owner=datapoint.owner,
             tags=datapoint.tags or [],
@@ -479,7 +479,7 @@ class KnowledgeGraph:
             file_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Convert graph to JSON-serializable format
-            graph_data = json_graph.node_link_data(self.graph)
+            graph_data = json_graph.node_link_data(self.graph, edges="links")
 
             # Add metadata
             data = {
@@ -513,7 +513,9 @@ class KnowledgeGraph:
                 data = json.load(f)
 
             # Reconstruct graph
-            self.graph = json_graph.node_link_graph(data["graph"], directed=True)
+            self.graph = json_graph.node_link_graph(
+                data["graph"], directed=True, edges="links"
+            )
             self._datapoint_count = data.get("datapoint_count", 0)
 
             logger.info(
