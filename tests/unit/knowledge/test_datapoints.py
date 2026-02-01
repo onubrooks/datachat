@@ -68,7 +68,7 @@ class TestLoadFile:
         assert datapoint.type == "Schema"
         assert datapoint.name == "Fact Sales Table"
         assert datapoint.table_name == "analytics.fact_sales"
-        assert datapoint.schema == "analytics"
+        assert datapoint.schema_name == "analytics"
         assert len(datapoint.key_columns) == 4
         assert len(datapoint.relationships) == 2
         assert datapoint.row_count == 15000000
