@@ -178,7 +178,7 @@ def mock_openai_api_key(monkeypatch):
     get_settings.cache_clear()
 
     test_key = "sk-test-key-1234567890-abcdefghijklmnop"  # 20+ chars
-    monkeypatch.setenv("OPENAI_API_KEY", test_key)
+    monkeypatch.setenv("LLM_OPENAI_API_KEY", test_key)
     yield test_key
 
     # Clear cache after test
