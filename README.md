@@ -52,6 +52,14 @@ docker-compose up
 # Backend API: http://localhost:8000/docs
 ```
 
+If `datachat --version` returns "command not found", install the CLI:
+
+```bash
+pip install -e .
+```
+
+The CLI/UI setup flow saves database URLs to `~/.datachat/config.json` for reuse.
+
 That's it! DataChat is now running with:
 
 - **Frontend** on port 3000
@@ -62,12 +70,14 @@ That's it! DataChat is now running with:
 > **Next:** Complete initialization before running queries.
 >
 > **Option A: Use the setup wizard**
+>
 > - Open <http://localhost:3000> and follow the setup prompt, or run:
 >   `docker-compose exec backend datachat setup`
 > - Enable auto-profiling to generate draft DataPoints, then review them in the
 >   Database Management page.
 >
 > **Option B: Manual DataPoints**
+>
 > - Create DataPoint files (examples in [GETTING_STARTED.md](GETTING_STARTED.md))
 > - Load them: `docker-compose exec backend datachat dp sync`
 >
@@ -100,6 +110,12 @@ cp .env.example .env
 
 # 4. Start the server
 uvicorn backend.api.main:app --reload --port 8000
+```
+
+Verify the CLI is available:
+
+```bash
+datachat --version
 ```
 
 Backend will be available at <http://localhost:8000>
@@ -135,7 +151,7 @@ datachat demo
 
 # Or manual steps
 # 1. Seed demo tables
-psql "$DATABASE_URL" -f scripts/demo_seed.sql
+psql "$SYSTEM_DATABASE_URL" -f scripts/demo_seed.sql
 
 # 2. Load demo DataPoints
 datachat dp sync --datapoints-dir datapoints/demo
@@ -223,8 +239,12 @@ See [`.env.example`](.env.example) for all available options.
 # LLM Provider
 LLM_OPENAI_API_KEY=sk-...
 
-# Database
-DATABASE_URL=postgresql://user:pass@localhost:5432/datachat
+# Target Database
+DATABASE_URL=postgresql://user:pass@localhost:5432/target_db
+
+# System Database (registry/profiling/demo)
+SYSTEM_DATABASE_URL=postgresql://user:pass@localhost:5432/datachat
+
 DATABASE_CREDENTIALS_KEY=replace_with_fernet_key
 ```
 
@@ -237,9 +257,19 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 ### Database Registry
 
 DataChat stores database connections in the system PostgreSQL database with encrypted URLs. Set
-`DATABASE_CREDENTIALS_KEY` in your environment and use the API endpoints under `/api/v1/databases`
+`SYSTEM_DATABASE_URL` and `DATABASE_CREDENTIALS_KEY` in your environment and use the API endpoints under `/api/v1/databases`
 to add connections and set a default. Chat requests can target a specific connection by passing
 `target_database` (connection ID) in the chat request.
+
+### System vs Target Database
+
+DataChat separates:
+
+- **Target database**: the database you query (`DATABASE_URL`)
+- **System database**: registry/profiling/demo storage (`SYSTEM_DATABASE_URL`)
+
+If you want a quick first run, use `datachat demo` to seed sample tables and
+DataPoints into the system database.
 
 **Optional:**
 
