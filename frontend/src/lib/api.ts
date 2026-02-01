@@ -289,6 +289,21 @@ export class DataChatAPI {
     return response.json();
   }
 
+  async systemReset(): Promise<SystemStatusResponse & { message: string }> {
+    const response = await fetch(`${this.baseUrl}/api/v1/system/reset`, {
+      method: "POST",
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      const message =
+        error.message || error.detail || response.statusText || `HTTP ${response.status}`;
+      throw new Error(message);
+    }
+
+    return response.json();
+  }
+
   async listDatabases(): Promise<DatabaseConnection[]> {
     const response = await fetch(`${this.baseUrl}/api/v1/databases`);
     if (!response.ok) {
@@ -359,6 +374,17 @@ export class DataChatAPI {
 
   async getProfilingJob(jobId: string): Promise<ProfilingJob> {
     const response = await fetch(`${this.baseUrl}/api/v1/profiling/jobs/${jobId}`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async getLatestProfilingJob(connectionId: string): Promise<ProfilingJob | null> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/profiling/jobs/connection/${connectionId}/latest`
+    );
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: response.statusText }));
       throw new Error(error.message || `HTTP ${response.status}`);

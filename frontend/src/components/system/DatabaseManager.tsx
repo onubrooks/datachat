@@ -35,6 +35,7 @@ export function DatabaseManager() {
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [name, setName] = useState("");
@@ -58,6 +59,15 @@ export function DatabaseManager() {
       setConnections(dbs);
       setPending(pendingPoints);
       setApproved(approvedPoints);
+      if (dbs.length > 0) {
+        const defaultConnection = dbs.find((item) => item.is_default) || dbs[0];
+        const latestJob = await api.getLatestProfilingJob(
+          defaultConnection.connection_id
+        );
+        setJob(latestJob);
+      } else {
+        setJob(null);
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -144,6 +154,24 @@ export function DatabaseManager() {
     };
     return () => ws.close();
   }, [generationJob?.job_id]);
+
+  useEffect(() => {
+    if (!generationJob || generationJob.status === "completed" || generationJob.status === "failed") {
+      return;
+    }
+    const interval = setInterval(async () => {
+      try {
+        const updated = await api.getGenerationJob(generationJob.job_id);
+        setGenerationJob(updated);
+        if (updated.status === "completed" || updated.status === "failed") {
+          await refresh();
+        }
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [generationJob?.job_id, generationJob?.status]);
 
   useEffect(() => {
     if (generationJob?.status === "completed") {
@@ -243,15 +271,33 @@ export function DatabaseManager() {
   const handleApprove = async (pendingId: string) => {
     setError(null);
     setApprovingId(pendingId);
+    const snapshot = pending.find((item) => item.pending_id === pendingId);
     const editedDatapoint = parseEditedDatapoint(pendingId);
     if (pendingEdits[pendingId] && !editedDatapoint) {
       setApprovingId(null);
       return;
     }
     try {
-      await api.approvePendingDatapoint(pendingId, editedDatapoint || undefined);
+      const approved = await api.approvePendingDatapoint(
+        pendingId,
+        editedDatapoint || undefined
+      );
+      setPending((current) =>
+        current.filter((item) => item.pending_id !== pendingId)
+      );
+      setApproved((current) => [
+        {
+          datapoint_id: String(approved.datapoint.datapoint_id || pendingId),
+          type: String(approved.datapoint.type || "Unknown"),
+          name: approved.datapoint.name ? String(approved.datapoint.name) : null,
+        },
+        ...current,
+      ]);
       await refresh();
     } catch (err) {
+      if (snapshot) {
+        setPending((current) => [snapshot, ...current]);
+      }
       setError((err as Error).message);
     } finally {
       setApprovingId(null);
@@ -271,10 +317,23 @@ export function DatabaseManager() {
   const handleBulkApprove = async () => {
     setError(null);
     setIsBulkApproving(true);
+    const snapshot = pending;
     try {
-      await api.bulkApproveDatapoints();
+      const approved = await api.bulkApproveDatapoints();
+      if (approved.length) {
+        setPending([]);
+        setApproved((current) => [
+          ...approved.map((item) => ({
+            datapoint_id: String(item.datapoint.datapoint_id || item.pending_id),
+            type: String(item.datapoint.type || "Unknown"),
+            name: item.datapoint.name ? String(item.datapoint.name) : null,
+          })),
+          ...current,
+        ]);
+      }
       await refresh();
     } catch (err) {
+      setPending(snapshot);
       setError((err as Error).message);
     } finally {
       setIsBulkApproving(false);
@@ -292,6 +351,26 @@ export function DatabaseManager() {
       setSyncError((err as Error).message);
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  const handleSystemReset = async () => {
+    if (
+      !confirm(
+        "Reset will clear system registry/profiling, local vectors, and saved setup config. Continue?"
+      )
+    ) {
+      return;
+    }
+    setIsResetting(true);
+    setError(null);
+    try {
+      await api.systemReset();
+      await refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setIsResetting(false);
     }
   };
 
@@ -324,10 +403,17 @@ export function DatabaseManager() {
           <Button asChild variant="secondary">
             <Link href="/">Back to Chat</Link>
           </Button>
+          <Button variant="outline" onClick={handleSystemReset} disabled={isResetting}>
+            {isResetting ? "Resetting..." : "Reset System"}
+          </Button>
           <Button onClick={refresh} disabled={isLoading}>
             Refresh
           </Button>
         </div>
+      </div>
+      <div className="text-xs text-muted-foreground">
+        Reset clears system registry/profiling, local vectors, and saved setup config.
+        It does not delete target database tables.
       </div>
 
       {error && <div className="text-sm text-destructive">{error}</div>}
@@ -514,6 +600,9 @@ export function DatabaseManager() {
                     {" "}
                     · batch size {generationJob.progress.batch_size}
                   </span>
+                )}
+                {generationJob.error && (
+                  <div className="text-xs text-destructive">{generationJob.error}</div>
                 )}
               </div>
             )}

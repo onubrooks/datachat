@@ -164,6 +164,23 @@ class SystemInitializer:
                     max_retries=3,
                 )
 
+            database_manager = self._app_state.get("database_manager")
+            if database_manager:
+                existing = None
+                for connection in await database_manager.list_connections():
+                    if connection.database_url.get_secret_value() == database_url:
+                        existing = connection
+                        break
+                if existing is None:
+                    await database_manager.add_connection(
+                        name="Primary Database",
+                        database_url=database_url,
+                        database_type="postgresql",
+                        tags=["setup"],
+                        description="Added during setup",
+                        is_default=True,
+                    )
+
         if auto_profile and database_url:
             profiling_store = self._app_state.get("profiling_store")
             database_manager = self._app_state.get("database_manager")

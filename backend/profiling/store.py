@@ -168,9 +168,10 @@ class ProfilingStore:
         )
         if not row:
             raise KeyError(f"Generation job {job_id} not found")
-        progress = (
-            GenerationProgress(**row["progress"]) if row["progress"] else None
-        )
+        progress_payload = row["progress"]
+        if isinstance(progress_payload, str):
+            progress_payload = json.loads(progress_payload)
+        progress = GenerationProgress(**progress_payload) if progress_payload else None
         return GenerationJob(
             job_id=row["job_id"],
             profile_id=row["profile_id"],
@@ -194,9 +195,10 @@ class ProfilingStore:
         )
         if not row:
             return None
-        progress = (
-            GenerationProgress(**row["progress"]) if row["progress"] else None
-        )
+        progress_payload = row["progress"]
+        if isinstance(progress_payload, str):
+            progress_payload = json.loads(progress_payload)
+        progress = GenerationProgress(**progress_payload) if progress_payload else None
         return GenerationJob(
             job_id=row["job_id"],
             profile_id=row["profile_id"],
@@ -245,6 +247,39 @@ class ProfilingStore:
         )
         if row is None:
             raise KeyError(f"Profiling job not found: {job_id}")
+        progress = None
+        if row["progress"]:
+            progress_data = row["progress"]
+            if isinstance(progress_data, str):
+                progress_data = json.loads(progress_data)
+            progress = ProfilingProgress(**progress_data)
+        return ProfilingJob(
+            job_id=row["job_id"],
+            connection_id=row["connection_id"],
+            status=row["status"],
+            progress=progress,
+            error=row["error"],
+            profile_id=row["profile_id"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    async def get_latest_job_for_connection(
+        self, connection_id: UUID
+    ) -> ProfilingJob | None:
+        self._ensure_pool()
+        row = await self._pool.fetchrow(
+            """
+            SELECT job_id, connection_id, status, progress, error, profile_id, created_at, updated_at
+            FROM profiling_jobs
+            WHERE connection_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            connection_id,
+        )
+        if row is None:
+            return None
         progress = None
         if row["progress"]:
             progress_data = row["progress"]

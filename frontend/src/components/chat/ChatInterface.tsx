@@ -50,6 +50,7 @@ export function ChatInterface() {
   const [setupNotice, setSetupNotice] = useState<string | null>(null);
   const [setupCompleted, setSetupCompleted] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
+  const [isBackendReachable, setIsBackendReachable] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -63,12 +64,14 @@ export function ChatInterface() {
       .systemStatus()
       .then((status) => {
         if (!isMounted) return;
+        setIsBackendReachable(true);
         setIsInitialized(status.is_initialized);
         setSetupSteps(status.setup_required || []);
       })
       .catch((err) => {
         if (!isMounted) return;
         console.error("System status error:", err);
+        setIsBackendReachable(false);
       });
     return () => {
       isMounted = false;
@@ -227,11 +230,15 @@ export function ChatInterface() {
           <div className="flex items-center gap-2 text-xs">
             <div
               className={`w-2 h-2 rounded-full ${
-                isConnected ? "bg-green-500" : "bg-red-500"
+                isConnected || isBackendReachable ? "bg-green-500" : "bg-red-500"
               }`}
             />
             <span className="text-muted-foreground">
-              {isConnected ? "Connected" : "Disconnected"}
+              {isConnected
+                ? "Streaming"
+                : isBackendReachable
+                  ? "Ready"
+                  : "Disconnected"}
             </span>
           </div>
 

@@ -42,6 +42,7 @@ Quick checklist for validating a working local setup before demos or deeper test
 
 - Setup saves database URLs to `~/.datachat/config.json`.
 - DataPoint generation is async with UI progress updates (WebSocket).
+- Database Manager includes a Reset System button for clearing local state.
 - Reset everything (optional):
 
   ```bash

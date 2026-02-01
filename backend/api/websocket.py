@@ -340,6 +340,18 @@ async def websocket_profiling(websocket: WebSocket) -> None:
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         logger.info("Profiling WebSocket client disconnected")
+    except Exception as exc:
+        logger.error(f"Profiling WebSocket error: {exc}", exc_info=True)
+        try:
+            await websocket.send_json(
+                {
+                    "event": "error",
+                    "error": "internal_error",
+                    "message": str(exc),
+                }
+            )
+        except Exception:
+            pass
     finally:
         await websocket.close()
         logger.info("Profiling WebSocket connection closed")

@@ -226,6 +226,25 @@ async def get_profiling_job(job_id: UUID) -> ProfilingJobResponse:
     )
 
 
+@router.get(
+    "/profiling/jobs/connection/{connection_id}/latest",
+    response_model=ProfilingJobResponse | None,
+)
+async def get_latest_profiling_job(connection_id: UUID) -> ProfilingJobResponse | None:
+    store = _get_store()
+    job = await store.get_latest_job_for_connection(connection_id)
+    if job is None:
+        return None
+    return ProfilingJobResponse(
+        job_id=job.job_id,
+        connection_id=job.connection_id,
+        status=job.status,
+        progress=job.progress,
+        error=job.error,
+        profile_id=job.profile_id,
+    )
+
+
 @router.post("/datapoints/generate", response_model=GenerationJobResponse)
 async def generate_datapoints(payload: GenerateDataPointsRequest) -> GenerationJobResponse:
     store = _get_store()

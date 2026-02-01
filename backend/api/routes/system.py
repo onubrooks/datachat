@@ -4,10 +4,22 @@ System Routes
 Initialization status and guided setup endpoints.
 """
 
+import shutil
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Request, status
 
 from backend.initialization.initializer import SystemInitializer
-from backend.settings_store import apply_config_defaults, set_value, SYSTEM_DB_KEY, TARGET_DB_KEY
+from backend.config import get_settings
+from backend.connectors.postgres import PostgresConnector
+from backend.knowledge.vectors import VectorStore
+from backend.settings_store import (
+    SYSTEM_DB_KEY,
+    TARGET_DB_KEY,
+    apply_config_defaults,
+    clear_config,
+    set_value,
+)
 from backend.models.api import (
     SystemInitializeRequest,
     SystemInitializeResponse,
@@ -15,6 +27,10 @@ from backend.models.api import (
 )
 
 router = APIRouter()
+
+
+class SystemResetResponse(SystemStatusResponse):
+    message: str
 
 
 @router.get("/system/status", response_model=SystemStatusResponse)
@@ -69,6 +85,68 @@ async def system_initialize(
 
     return SystemInitializeResponse(
         message=message,
+        is_initialized=status_state.is_initialized,
+        has_databases=status_state.has_databases,
+        has_system_database=status_state.has_system_database,
+        has_datapoints=status_state.has_datapoints,
+        setup_required=[
+            {
+                "step": step.step,
+                "title": step.title,
+                "description": step.description,
+                "action": step.action,
+            }
+            for step in status_state.setup_required
+        ],
+    )
+
+
+@router.post("/system/reset", response_model=SystemResetResponse)
+async def system_reset(request: Request) -> SystemResetResponse:
+    """Reset system registry/profiling state and local caches."""
+    from backend.api.main import app_state
+
+    apply_config_defaults()
+    settings = get_settings()
+
+    if settings.system_database.url:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(str(settings.system_database.url))
+        connector = PostgresConnector(
+            host=parsed.hostname or "localhost",
+            port=parsed.port or 5432,
+            database=parsed.path.lstrip("/") if parsed.path else "datachat",
+            user=parsed.username or "postgres",
+            password=parsed.password or "",
+        )
+        await connector.connect()
+        try:
+            await connector.execute(
+                "TRUNCATE database_connections, profiling_jobs, profiling_profiles, "
+                "pending_datapoints, datapoint_generation_jobs"
+            )
+        finally:
+            await connector.close()
+
+    vector_store = app_state.get("vector_store")
+    if vector_store is None:
+        vector_store = VectorStore()
+        await vector_store.initialize()
+    await vector_store.clear()
+    shutil.rmtree(settings.chroma.persist_dir, ignore_errors=True)
+
+    managed_dir = Path("datapoints") / "managed"
+    if managed_dir.exists():
+        shutil.rmtree(managed_dir, ignore_errors=True)
+
+    clear_config()
+
+    apply_config_defaults()
+    initializer = SystemInitializer(app_state)
+    status_state = await initializer.status()
+    return SystemResetResponse(
+        message="System reset complete.",
         is_initialized=status_state.is_initialized,
         has_databases=status_state.has_databases,
         has_system_database=status_state.has_system_database,

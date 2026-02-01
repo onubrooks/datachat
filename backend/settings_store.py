@@ -72,3 +72,12 @@ def apply_config_defaults() -> None:
         os.environ["DATABASE_URL"] = str(config[TARGET_DB_KEY])
     if not os.getenv("SYSTEM_DATABASE_URL") and config.get(SYSTEM_DB_KEY):
         os.environ["SYSTEM_DATABASE_URL"] = str(config[SYSTEM_DB_KEY])
+
+
+def clear_config() -> None:
+    """Remove persisted config file."""
+    try:
+        if CONFIG_PATH.exists():
+            CONFIG_PATH.unlink()
+    except OSError:
+        return

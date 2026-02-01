@@ -356,6 +356,10 @@ datachat profile start --connection-id <uuid> --sample-size 100
 datachat dp generate --profile-id <uuid> --depth metrics_full --batch-size 10
 ```
 
+UI reset:
+- Database Manager has a **Reset System** button that clears registry/profiling,
+  local vectors, and saved setup config (does not touch target DB tables).
+
 **Expected Output:**
 
 ```text
