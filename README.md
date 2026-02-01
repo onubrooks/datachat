@@ -258,6 +258,7 @@ LLM_OPENAI_API_KEY=sk-...
 
 # Target Database
 DATABASE_URL=postgresql://user:pass@localhost:5432/target_db
+DATABASE_TYPE=postgresql
 
 # System Database (registry/profiling/demo)
 SYSTEM_DATABASE_URL=postgresql://user:pass@localhost:5432/datachat

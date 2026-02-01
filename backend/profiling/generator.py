@@ -34,14 +34,47 @@ class DataPointGenerator:
             self._llm = llm_provider
 
     async def generate_from_profile(
-        self, profile: DatabaseProfile
+        self,
+        profile: DatabaseProfile,
+        tables: list[str] | None = None,
+        depth: str = "metrics_basic",
+        batch_size: int = 10,
+        max_tables: int | None = None,
+        max_metrics_per_table: int = 3,
+        progress_callback=None,
     ) -> GeneratedDataPoints:
+        selected_tables = self._select_tables(profile.tables, tables, max_tables)
         schema_points: list[GeneratedDataPoint] = []
-        business_points: list[GeneratedDataPoint] = []
 
-        for idx, table in enumerate(profile.tables, start=1):
-            schema_points.append(await self._generate_schema_datapoint(table, idx))
-            business_points.extend(await self._generate_business_datapoints(table, idx))
+        use_llm_schema = depth == "metrics_full"
+        for idx, table in enumerate(selected_tables, start=1):
+            if use_llm_schema:
+                schema_points.append(await self._generate_schema_datapoint(table, idx))
+            else:
+                schema_points.append(self._generate_schema_datapoint_deterministic(table, idx))
+
+        business_points: list[GeneratedDataPoint] = []
+        if depth == "schema_only":
+            return GeneratedDataPoints(
+                profile_id=profile.profile_id,
+                schema_datapoints=schema_points,
+                business_datapoints=business_points,
+            )
+
+        if depth == "metrics_basic":
+            for idx, table in enumerate(selected_tables, start=1):
+                business_points.extend(
+                    self._generate_basic_metrics(table, idx, max_metrics_per_table)
+                )
+                if progress_callback:
+                    await progress_callback(len(selected_tables), idx)
+        else:
+            business_points = await self._generate_business_datapoints_batched(
+                selected_tables,
+                batch_size=batch_size,
+                max_metrics_per_table=max_metrics_per_table,
+                progress_callback=progress_callback,
+            )
 
         return GeneratedDataPoints(
             profile_id=profile.profile_id,
@@ -124,6 +157,45 @@ class DataPointGenerator:
             explanation=payload.get("explanation") if isinstance(payload, dict) else None,
         )
 
+    def _generate_schema_datapoint_deterministic(
+        self, table: TableProfile, index: int
+    ) -> GeneratedDataPoint:
+        key_columns = [
+            ColumnMetadata(
+                name=col.name,
+                type=col.data_type,
+                business_meaning=self._fallback_column_meaning(
+                    col.name, col.sample_values
+                ),
+                nullable=col.nullable,
+                default_value=col.default_value,
+            )
+            for col in table.columns
+        ]
+        schema_datapoint = SchemaDataPoint(
+            datapoint_id=self._make_datapoint_id("table", table.name, index),
+            name=self._title_case(table.name),
+            table_name=f"{table.schema_name}.{table.name}",
+            schema=table.schema_name,
+            business_purpose=f"Auto-profiled table {table.schema_name}.{table.name}.",
+            key_columns=key_columns,
+            relationships=[
+                self._relationship_to_model(rel) for rel in table.relationships
+            ],
+            common_queries=[],
+            gotchas=[],
+            freshness=None,
+            row_count=table.row_count if table.row_count is not None else None,
+            owner=_DEFAULT_OWNER,
+            tags=["auto-profiled"],
+            metadata={"source": "auto-profiler"},
+        )
+        return GeneratedDataPoint(
+            datapoint=schema_datapoint.model_dump(mode="json", by_alias=True),
+            confidence=0.5,
+            explanation="Deterministic schema summary",
+        )
+
     async def _generate_business_datapoints(
         self, table: TableProfile, index: int
     ) -> list[GeneratedDataPoint]:
@@ -162,7 +234,7 @@ class DataPointGenerator:
                 business_rules=business_rules,
                 related_tables=[f"{table.schema_name}.{table.name}"],
                 unit=metric.get("unit"),
-                aggregation=metric.get("aggregation"),
+                aggregation=self._normalize_aggregation(metric.get("aggregation")),
                 owner=_DEFAULT_OWNER,
                 tags=["auto-profiled"],
                 metadata={"source": "auto-profiler"},
@@ -197,6 +269,180 @@ class DataPointGenerator:
         if isinstance(value, str):
             return [value]
         return []
+
+    @staticmethod
+    def _select_tables(
+        tables: list[TableProfile],
+        requested: list[str] | None,
+        max_tables: int | None,
+    ) -> list[TableProfile]:
+        selection = tables
+        if requested:
+            requested_set = {name.lower() for name in requested}
+            selection = [table for table in tables if table.name.lower() in requested_set]
+        selection = sorted(selection, key=lambda t: t.row_count or 0, reverse=True)
+        if max_tables is not None:
+            return selection[:max_tables]
+        return selection
+
+    def _generate_basic_metrics(
+        self, table: TableProfile, index: int, max_metrics_per_table: int
+    ) -> list[GeneratedDataPoint]:
+        numeric_columns = [
+            col for col in table.columns if self._is_numeric_type(col.data_type)
+        ]
+        if not numeric_columns:
+            return []
+
+        metric_defs: list[tuple[str, str, str | None]] = [
+            ("Row Count", "COUNT(*)", "COUNT"),
+        ]
+        col = numeric_columns[0].name
+        metric_defs.append((f"Total {col}", f"SUM({col})", "SUM"))
+        metric_defs.append((f"Average {col}", f"AVG({col})", "AVG"))
+
+        generated: list[GeneratedDataPoint] = []
+        for metric_index, (name, calculation, aggregation) in enumerate(
+            metric_defs[:max_metrics_per_table], start=1
+        ):
+            business_datapoint = BusinessDataPoint(
+                datapoint_id=self._make_datapoint_id(
+                    "metric", f"{table.name}_{name}", index + metric_index
+                ),
+                name=f"{table.name} {name}",
+                calculation=calculation,
+                synonyms=[],
+                business_rules=[],
+                related_tables=[f"{table.schema_name}.{table.name}"],
+                unit=None,
+                aggregation=aggregation,
+                owner=_DEFAULT_OWNER,
+                tags=["auto-profiled", "basic"],
+                metadata={"source": "auto-profiler"},
+            )
+            generated.append(
+                GeneratedDataPoint(
+                    datapoint=business_datapoint.model_dump(
+                        mode="json", by_alias=True
+                    ),
+                    confidence=0.6,
+                    explanation="Deterministic metric template",
+                )
+            )
+        return generated
+
+    async def _generate_business_datapoints_batched(
+        self,
+        tables: list[TableProfile],
+        batch_size: int,
+        max_metrics_per_table: int,
+        progress_callback=None,
+    ) -> list[GeneratedDataPoint]:
+        generated: list[GeneratedDataPoint] = []
+        eligible_tables = [
+            table
+            for table in tables
+            if any(self._is_numeric_type(col.data_type) for col in table.columns)
+        ]
+        for batch_start in range(0, len(eligible_tables), batch_size):
+            batch = eligible_tables[batch_start : batch_start + batch_size]
+            payload = await self._generate_metrics_batch(batch, max_metrics_per_table)
+            for idx, table in enumerate(batch):
+                table_payload = payload.get(table.name) or payload.get(
+                    f"{table.schema_name}.{table.name}", {}
+                )
+                metrics = table_payload.get("metrics", [])
+                numeric_cols = [
+                    col.name
+                    for col in table.columns
+                    if self._is_numeric_type(col.data_type)
+                ]
+                if not numeric_cols:
+                    continue
+                for metric_index, metric in enumerate(metrics, start=1):
+                    name = metric.get("name") or f"{table.name} metric"
+                    calculation = metric.get("calculation") or f"SUM({numeric_cols[0]})"
+                    business_rules = self._normalize_list(metric.get("business_rules"))
+                    synonyms = self._normalize_list(metric.get("synonyms"))
+                    business_datapoint = BusinessDataPoint(
+                        datapoint_id=self._make_datapoint_id(
+                            "metric", name, batch_start + idx + metric_index
+                        ),
+                        name=name,
+                        calculation=calculation,
+                        synonyms=synonyms,
+                        business_rules=business_rules,
+                        related_tables=[f"{table.schema_name}.{table.name}"],
+                        unit=metric.get("unit"),
+                        aggregation=self._normalize_aggregation(metric.get("aggregation")),
+                        owner=_DEFAULT_OWNER,
+                        tags=["auto-profiled"],
+                        metadata={"source": "auto-profiler"},
+                    )
+                    generated.append(
+                        GeneratedDataPoint(
+                            datapoint=business_datapoint.model_dump(
+                                mode="json", by_alias=True
+                            ),
+                            confidence=self._normalize_confidence(
+                                metric.get("confidence", 0.6)
+                            ),
+                            explanation=metric.get("explanation"),
+                        )
+                    )
+            if progress_callback:
+                await progress_callback(
+                    len(eligible_tables),
+                    min(batch_start + len(batch), len(eligible_tables)),
+                )
+        return generated
+
+    async def _generate_metrics_batch(
+        self, tables: list[TableProfile], max_metrics_per_table: int
+    ) -> dict:
+        system_prompt = (
+            "You are a data analyst defining KPIs from numeric columns. "
+            "Return ONLY valid JSON."
+        )
+        batch_payload = {
+            "tables": [
+                {
+                    "table": f"{table.schema_name}.{table.name}",
+                    "numeric_columns": [
+                        col.name
+                        for col in table.columns
+                        if self._is_numeric_type(col.data_type)
+                    ],
+                }
+                for table in tables
+            ],
+            "max_metrics_per_table": max_metrics_per_table,
+        }
+        user_prompt = (
+            "For each table, return JSON keyed by table name (without schema) with "
+            "a list of metric objects under 'metrics'. "
+            "Each metric must include name, calculation, aggregation, "
+            "synonyms, business_rules, unit, confidence.\n\n"
+            f"{json.dumps(batch_payload, indent=2)}"
+        )
+        response = await self._llm.generate(
+            LLMRequest(
+                messages=[
+                    LLMMessage(role="system", content=system_prompt),
+                    LLMMessage(role="user", content=user_prompt),
+                ]
+            )
+        )
+        payload = self._parse_json_response(response.content)
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _normalize_aggregation(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().upper()
+        allowed = {"SUM", "AVG", "COUNT", "MIN", "MAX", "CUSTOM"}
+        return normalized if normalized in allowed else None
 
     @staticmethod
     def _is_numeric_type(data_type: str) -> bool:

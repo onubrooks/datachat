@@ -63,6 +63,14 @@ class ProfilingProgress(BaseModel):
     tables_completed: int
 
 
+class GenerationProgress(BaseModel):
+    """Progress tracking for DataPoint generation."""
+
+    total_tables: int
+    tables_completed: int
+    batch_size: int
+
+
 class ProfilingJob(BaseModel):
     """Profiling job status."""
 
@@ -72,6 +80,18 @@ class ProfilingJob(BaseModel):
     progress: ProfilingProgress | None = None
     error: str | None = None
     profile_id: UUID | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class GenerationJob(BaseModel):
+    """DataPoint generation job status."""
+
+    job_id: UUID = Field(default_factory=uuid4)
+    profile_id: UUID
+    status: Literal["pending", "running", "completed", "failed"] = "pending"
+    progress: GenerationProgress | None = None
+    error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

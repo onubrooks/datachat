@@ -10,6 +10,8 @@ Usage:
     datachat dp list                       # List DataPoints
     datachat dp add schema file.json       # Add DataPoint
     datachat dp sync                       # Rebuild vectors and graph
+    datachat profile start                 # Start profiling via API
+    datachat dp generate                   # Generate DataPoints via API
     datachat dev                           # Run backend + frontend dev servers
     datachat reset                         # Reset system state for testing
     datachat status                        # Show connection status
@@ -25,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import click
+import httpx
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -42,6 +45,7 @@ from backend.pipeline.orchestrator import DataChatPipeline
 from backend.settings_store import apply_config_defaults
 
 console = Console()
+API_BASE_URL = os.getenv("DATA_CHAT_API_URL", "http://localhost:8000")
 
 
 # ============================================================================
@@ -908,6 +912,51 @@ def demo(persona: str, reset: bool, no_workspace: bool):
 # ============================================================================
 
 
+@cli.group(name="profile")
+def profile():
+    """Manage profiling jobs via API."""
+    pass
+
+
+@profile.command(name="start")
+@click.option("--connection-id", required=True, help="Database connection UUID.")
+@click.option("--sample-size", default=100, show_default=True, type=int)
+@click.option("--tables", multiple=True, help="Optional table names to profile.")
+def start_profile(connection_id: str, sample_size: int, tables: tuple[str, ...]):
+    """Start profiling for a registered database connection."""
+    payload = {"sample_size": sample_size, "tables": list(tables) or None}
+    try:
+        response = httpx.post(
+            f"{API_BASE_URL}/api/v1/databases/{connection_id}/profile",
+            json=payload,
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        console.print(
+            f"[green]✓ Profiling started[/green] job_id={data['job_id']}"
+        )
+    except Exception as exc:
+        console.print(f"[red]Failed to start profiling: {exc}[/red]")
+        sys.exit(1)
+
+
+@profile.command(name="status")
+@click.argument("job_id")
+def profile_status(job_id: str):
+    """Check profiling job status."""
+    try:
+        response = httpx.get(
+            f"{API_BASE_URL}/api/v1/profiling/jobs/{job_id}", timeout=15.0
+        )
+        response.raise_for_status()
+        data = response.json()
+        console.print(json.dumps(data, indent=2))
+    except Exception as exc:
+        console.print(f"[red]Failed to fetch status: {exc}[/red]")
+        sys.exit(1)
+
+
 @cli.group(name="dp")
 def datapoint():
     """Manage DataPoints (knowledge base)."""
@@ -959,6 +1008,68 @@ def list_datapoints():
             sys.exit(1)
 
     asyncio.run(run_list())
+
+
+@datapoint.command(name="generate")
+@click.option("--profile-id", required=True, help="Profiling profile UUID.")
+@click.option(
+    "--depth",
+    type=click.Choice(["schema_only", "metrics_basic", "metrics_full"]),
+    default="metrics_basic",
+    show_default=True,
+)
+@click.option("--tables", multiple=True, help="Optional table names to include.")
+@click.option("--batch-size", default=10, show_default=True, type=int)
+@click.option("--max-tables", default=None, type=int)
+@click.option("--max-metrics-per-table", default=3, show_default=True, type=int)
+def generate_datapoints_cli(
+    profile_id: str,
+    depth: str,
+    tables: tuple[str, ...],
+    batch_size: int,
+    max_tables: int | None,
+    max_metrics_per_table: int,
+):
+    """Start DataPoint generation for a profiling profile."""
+    payload = {
+        "profile_id": profile_id,
+        "tables": list(tables) or None,
+        "depth": depth,
+        "batch_size": batch_size,
+        "max_tables": max_tables,
+        "max_metrics_per_table": max_metrics_per_table,
+    }
+    try:
+        response = httpx.post(
+            f"{API_BASE_URL}/api/v1/datapoints/generate",
+            json=payload,
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        console.print(
+            f"[green]✓ Generation started[/green] job_id={data['job_id']}"
+        )
+    except Exception as exc:
+        console.print(f"[red]Failed to start generation: {exc}[/red]")
+        sys.exit(1)
+
+
+@datapoint.command(name="generate-status")
+@click.argument("job_id")
+def generation_status(job_id: str):
+    """Check DataPoint generation job status."""
+    try:
+        response = httpx.get(
+            f"{API_BASE_URL}/api/v1/datapoints/generate/jobs/{job_id}",
+            timeout=15.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        console.print(json.dumps(data, indent=2))
+    except Exception as exc:
+        console.print(f"[red]Failed to fetch generation status: {exc}[/red]")
+        sys.exit(1)
 
 
 @datapoint.command(name="add")

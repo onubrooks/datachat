@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -29,6 +30,16 @@ class SyncStatusResponse(BaseModel):
 
 class SyncTriggerResponse(BaseModel):
     job_id: UUID
+
+
+class DataPointSummary(BaseModel):
+    datapoint_id: str
+    type: str
+    name: str | None
+
+
+class DataPointListResponse(BaseModel):
+    datapoints: list[DataPointSummary]
 
 
 def _get_orchestrator():
@@ -105,6 +116,28 @@ async def trigger_sync() -> SyncTriggerResponse:
     orchestrator = _get_orchestrator()
     job_id = orchestrator.enqueue_sync_all()
     return SyncTriggerResponse(job_id=job_id)
+
+
+@router.get("/datapoints", response_model=DataPointListResponse)
+async def list_datapoints() -> DataPointListResponse:
+    if not DATA_DIR.exists():
+        return DataPointListResponse(datapoints=[])
+    datapoints: list[DataPointSummary] = []
+    for path in DATA_DIR.glob("*.json"):
+        try:
+            with path.open() as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        datapoints.append(
+            DataPointSummary(
+                datapoint_id=str(payload.get("datapoint_id", path.stem)),
+                type=str(payload.get("type", "Unknown")),
+                name=payload.get("name"),
+            )
+        )
+    datapoints.sort(key=lambda item: (item.type, item.name or item.datapoint_id))
+    return DataPointListResponse(datapoints=datapoints)
 
 
 @router.get("/sync/status", response_model=SyncStatusResponse)

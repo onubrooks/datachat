@@ -146,6 +146,20 @@ export interface ProfilingJob {
   profile_id?: string | null;
 }
 
+export interface GenerationProgress {
+  total_tables: number;
+  tables_completed: number;
+  batch_size: number;
+}
+
+export interface GenerationJob {
+  job_id: string;
+  profile_id: string;
+  status: string;
+  progress?: GenerationProgress | null;
+  error?: string | null;
+}
+
 export interface PendingDataPoint {
   pending_id: string;
   profile_id: string;
@@ -153,6 +167,12 @@ export interface PendingDataPoint {
   confidence: number;
   status: string;
   review_note?: string | null;
+}
+
+export interface DataPointSummary {
+  datapoint_id: string;
+  type: string;
+  name?: string | null;
 }
 
 export interface SyncStatusResponse {
@@ -346,18 +366,62 @@ export class DataChatAPI {
     return response.json();
   }
 
-  async generateDatapoints(profileId: string): Promise<PendingDataPoint[]> {
+  async generateDatapoints(profileId: string): Promise<GenerationJob> {
+    return this.startDatapointGeneration({ profile_id: profileId });
+  }
+
+  async startDatapointGeneration(payload: {
+    profile_id: string;
+    tables?: string[];
+    depth?: string;
+    batch_size?: number;
+    max_tables?: number | null;
+    max_metrics_per_table?: number;
+  }): Promise<GenerationJob> {
     const response = await fetch(`${this.baseUrl}/api/v1/datapoints/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ profile_id: profileId }),
+      body: JSON.stringify(payload),
     });
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: response.statusText }));
       throw new Error(error.message || `HTTP ${response.status}`);
     }
+    return response.json();
+  }
+
+  async getGenerationJob(jobId: string): Promise<GenerationJob> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/datapoints/generate/jobs/${jobId}`
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async getLatestGenerationJob(profileId: string): Promise<GenerationJob | null> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/datapoints/generate/profiles/${profileId}`
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async listProfileTables(profileId: string): Promise<string[]> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/profiling/profiles/${profileId}/tables`
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
     const data = await response.json();
-    return data.pending || [];
+    return data.tables || [];
   }
 
   async listPendingDatapoints(): Promise<PendingDataPoint[]> {
@@ -368,6 +432,16 @@ export class DataChatAPI {
     }
     const data = await response.json();
     return data.pending || [];
+  }
+
+  async listDatapoints(): Promise<DataPointSummary[]> {
+    const response = await fetch(`${this.baseUrl}/api/v1/datapoints`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    return data.datapoints || [];
   }
 
   async approvePendingDatapoint(

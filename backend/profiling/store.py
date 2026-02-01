@@ -11,6 +11,8 @@ import asyncpg
 from backend.config import get_settings
 from backend.profiling.models import (
     DatabaseProfile,
+    GenerationJob,
+    GenerationProgress,
     PendingDataPoint,
     ProfilingJob,
     ProfilingProgress,
@@ -51,6 +53,18 @@ CREATE TABLE IF NOT EXISTS pending_datapoints (
 );
 """
 
+_CREATE_GENERATION_JOBS_TABLE = """
+CREATE TABLE IF NOT EXISTS datapoint_generation_jobs (
+    job_id UUID PRIMARY KEY,
+    profile_id UUID NOT NULL,
+    status TEXT NOT NULL,
+    progress JSONB,
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+"""
+
 
 class ProfilingStore:
     """Persist profiling jobs, profiles, and pending DataPoints."""
@@ -71,6 +85,7 @@ class ProfilingStore:
         await self._pool.execute(_CREATE_JOBS_TABLE)
         await self._pool.execute(_CREATE_PROFILES_TABLE)
         await self._pool.execute(_CREATE_PENDING_TABLE)
+        await self._pool.execute(_CREATE_GENERATION_JOBS_TABLE)
 
     async def close(self) -> None:
         if self._pool is not None:
@@ -125,6 +140,98 @@ class ProfilingStore:
             updated_at,
         )
         return await self.get_job(job_id)
+
+    async def create_generation_job(self, profile_id: UUID) -> GenerationJob:
+        self._ensure_pool()
+        job = GenerationJob(profile_id=profile_id)
+        await self._pool.execute(
+            """
+            INSERT INTO datapoint_generation_jobs (
+                job_id, profile_id, status, progress, error, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+            """,
+            job.job_id,
+            job.profile_id,
+            job.status,
+            json.dumps(job.progress.model_dump()) if job.progress else None,
+            job.error,
+            job.created_at,
+            job.updated_at,
+        )
+        return job
+
+    async def get_generation_job(self, job_id: UUID) -> GenerationJob:
+        self._ensure_pool()
+        row = await self._pool.fetchrow(
+            "SELECT * FROM datapoint_generation_jobs WHERE job_id = $1",
+            job_id,
+        )
+        if not row:
+            raise KeyError(f"Generation job {job_id} not found")
+        progress = (
+            GenerationProgress(**row["progress"]) if row["progress"] else None
+        )
+        return GenerationJob(
+            job_id=row["job_id"],
+            profile_id=row["profile_id"],
+            status=row["status"],
+            progress=progress,
+            error=row["error"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    async def get_latest_generation_job(self, profile_id: UUID) -> GenerationJob | None:
+        self._ensure_pool()
+        row = await self._pool.fetchrow(
+            """
+            SELECT * FROM datapoint_generation_jobs
+            WHERE profile_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            profile_id,
+        )
+        if not row:
+            return None
+        progress = (
+            GenerationProgress(**row["progress"]) if row["progress"] else None
+        )
+        return GenerationJob(
+            job_id=row["job_id"],
+            profile_id=row["profile_id"],
+            status=row["status"],
+            progress=progress,
+            error=row["error"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    async def update_generation_job(
+        self,
+        job_id: UUID,
+        status: str | None = None,
+        progress: GenerationProgress | None = None,
+        error: str | None = None,
+    ) -> GenerationJob:
+        self._ensure_pool()
+        updated_at = datetime.now(UTC)
+        await self._pool.execute(
+            """
+            UPDATE datapoint_generation_jobs
+            SET status = COALESCE($2, status),
+                progress = COALESCE($3::jsonb, progress),
+                error = COALESCE($4, error),
+                updated_at = $5
+            WHERE job_id = $1
+            """,
+            job_id,
+            status,
+            json.dumps(progress.model_dump()) if progress else None,
+            error,
+            updated_at,
+        )
+        return await self.get_generation_job(job_id)
 
     async def get_job(self, job_id: UUID) -> ProfilingJob:
         self._ensure_pool()

@@ -257,6 +257,11 @@ curl -X POST http://localhost:8000/api/v1/system/initialize \
 
 Auto-profiling requires `SYSTEM_DATABASE_URL` + `DATABASE_CREDENTIALS_KEY`.
 
+Auto-profiling and DataPoint generation notes:
+- Generation is async and batched (10 tables per LLM call).
+- Depth levels: `schema_only`, `metrics_basic`, `metrics_full`.
+- UI lets you select tables and track generation progress (WebSocket updates).
+
 #### 2.3 Chat Endpoint (Simple Query)
 
 ```bash
@@ -339,6 +344,16 @@ pip install -e .
 
 # Verify CLI is installed
 datachat --help
+```
+
+Optional profiling + generation via CLI:
+
+```bash
+# Start profiling (requires a registered connection_id)
+datachat profile start --connection-id <uuid> --sample-size 100
+
+# Start DataPoint generation with batching + depth
+datachat dp generate --profile-id <uuid> --depth metrics_full --batch-size 10
 ```
 
 **Expected Output:**

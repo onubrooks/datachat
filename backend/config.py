@@ -145,6 +145,11 @@ class LLMSettings(BaseSettings):
 class DatabaseSettings(BaseSettings):
     """Target database configuration."""
 
+    db_type: Literal["postgresql", "clickhouse", "mysql"] = Field(
+        default="postgresql",
+        description="Target database type for SQL generation and validation.",
+        validation_alias="DATABASE_TYPE",
+    )
     url: PostgresDsn | None = Field(
         None,
         description="Target PostgreSQL connection URL (the database you query)",

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 
 from backend.database.manager import DatabaseConnectionManager
 from backend.profiling.generator import DataPointGenerator
-from backend.profiling.models import PendingDataPoint, ProfilingProgress
+from backend.profiling.models import GenerationProgress, PendingDataPoint, ProfilingProgress
 from backend.profiling.profiler import SchemaProfiler
 from backend.profiling.store import ProfilingStore
 
@@ -34,6 +34,19 @@ class ProfilingJobResponse(BaseModel):
 
 class GenerateDataPointsRequest(BaseModel):
     profile_id: UUID
+    tables: list[str] | None = None
+    depth: str = Field(default="metrics_basic")
+    batch_size: int = Field(default=10, ge=1, le=50)
+    max_tables: int | None = Field(default=None, ge=1, le=500)
+    max_metrics_per_table: int = Field(default=3, ge=1, le=10)
+
+
+class GenerationJobResponse(BaseModel):
+    job_id: UUID
+    profile_id: UUID
+    status: str
+    progress: GenerationProgress | None = None
+    error: str | None = None
 
 
 class PendingDataPointResponse(BaseModel):
@@ -47,6 +60,11 @@ class PendingDataPointResponse(BaseModel):
 
 class PendingDataPointListResponse(BaseModel):
     pending: list[PendingDataPointResponse]
+
+
+class ProfileTablesResponse(BaseModel):
+    profile_id: UUID
+    tables: list[str]
 
 
 class ReviewNoteRequest(BaseModel):
@@ -118,6 +136,21 @@ def _to_pending_response(pending: PendingDataPoint) -> PendingDataPointResponse:
         status=pending.status,
         review_note=pending.review_note,
     )
+
+
+def _select_generation_tables(
+    profile_tables: list,
+    requested: list[str] | None,
+    max_tables: int | None,
+) -> list[str]:
+    selection = profile_tables
+    if requested:
+        requested_set = {name.lower() for name in requested}
+        selection = [table for table in profile_tables if table.name.lower() in requested_set]
+    selection = sorted(selection, key=lambda item: item.row_count or 0, reverse=True)
+    if max_tables is not None:
+        selection = selection[:max_tables]
+    return [table.name for table in selection]
 
 
 @router.post(
@@ -193,23 +226,142 @@ async def get_profiling_job(job_id: UUID) -> ProfilingJobResponse:
     )
 
 
-@router.post("/datapoints/generate", response_model=PendingDataPointListResponse)
-async def generate_datapoints(payload: GenerateDataPointsRequest) -> PendingDataPointListResponse:
+@router.post("/datapoints/generate", response_model=GenerationJobResponse)
+async def generate_datapoints(payload: GenerateDataPointsRequest) -> GenerationJobResponse:
     store = _get_store()
     profile = await store.get_profile(payload.profile_id)
 
-    generator = DataPointGenerator()
-    generated = await generator.generate_from_profile(profile)
+    job = await store.create_generation_job(profile.profile_id)
 
-    pending_items = [
-        PendingDataPoint(profile_id=profile.profile_id, datapoint=item.datapoint, confidence=item.confidence)
-        for item in generated.schema_datapoints + generated.business_datapoints
-    ]
+    async def run_generation() -> None:
+        generator = DataPointGenerator()
+        try:
+            selected_tables = _select_generation_tables(
+                profile.tables, payload.tables, payload.max_tables
+            )
+            if payload.depth == "schema_only":
+                total_tables = len(selected_tables)
+            else:
+                eligible_tables = [
+                    table
+                    for table in profile.tables
+                    if table.name in selected_tables
+                    and any(
+                        token in col.data_type.lower()
+                        for col in table.columns
+                        for token in ["int", "numeric", "decimal", "float"]
+                    )
+                ]
+                total_tables = len(eligible_tables)
+            await store.update_generation_job(
+                job.job_id,
+                status="running",
+                progress=GenerationProgress(
+                    total_tables=total_tables,
+                    tables_completed=0,
+                    batch_size=payload.batch_size,
+                ),
+            )
+            async def progress_callback(total: int, completed: int) -> None:
+                await store.update_generation_job(
+                    job.job_id,
+                    progress=GenerationProgress(
+                        total_tables=total,
+                        tables_completed=completed,
+                        batch_size=payload.batch_size,
+                    ),
+                )
+            generated = await generator.generate_from_profile(
+                profile,
+                tables=selected_tables,
+                depth=payload.depth,
+                batch_size=payload.batch_size,
+                max_tables=payload.max_tables,
+                max_metrics_per_table=payload.max_metrics_per_table,
+                progress_callback=progress_callback,
+            )
 
-    await store.add_pending_datapoints(profile.profile_id, pending_items)
+            pending_items = [
+                PendingDataPoint(
+                    profile_id=profile.profile_id,
+                    datapoint=item.datapoint,
+                    confidence=item.confidence,
+                )
+                for item in generated.schema_datapoints + generated.business_datapoints
+            ]
 
-    return PendingDataPointListResponse(
-        pending=[_to_pending_response(item) for item in pending_items]
+            await store.add_pending_datapoints(profile.profile_id, pending_items)
+            await store.update_generation_job(
+                job.job_id,
+                status="completed",
+                progress=GenerationProgress(
+                    total_tables=total_tables,
+                    tables_completed=total_tables,
+                    batch_size=payload.batch_size,
+                ),
+            )
+        except Exception as exc:
+            await store.update_generation_job(
+                job.job_id, status="failed", error=str(exc)
+            )
+
+    asyncio.create_task(run_generation())
+
+    return GenerationJobResponse(
+        job_id=job.job_id,
+        profile_id=job.profile_id,
+        status=job.status,
+        progress=job.progress,
+        error=job.error,
+    )
+
+
+@router.get("/datapoints/generate/jobs/{job_id}", response_model=GenerationJobResponse)
+async def get_generation_job(job_id: UUID) -> GenerationJobResponse:
+    store = _get_store()
+    try:
+        job = await store.get_generation_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return GenerationJobResponse(
+        job_id=job.job_id,
+        profile_id=job.profile_id,
+        status=job.status,
+        progress=job.progress,
+        error=job.error,
+    )
+
+
+@router.get(
+    "/datapoints/generate/profiles/{profile_id}",
+    response_model=GenerationJobResponse | None,
+)
+async def get_latest_generation_job(profile_id: UUID) -> GenerationJobResponse | None:
+    store = _get_store()
+    job = await store.get_latest_generation_job(profile_id)
+    if job is None:
+        return None
+    return GenerationJobResponse(
+        job_id=job.job_id,
+        profile_id=job.profile_id,
+        status=job.status,
+        progress=job.progress,
+        error=job.error,
+    )
+
+
+@router.get("/profiling/profiles/{profile_id}/tables", response_model=ProfileTablesResponse)
+async def list_profile_tables(profile_id: UUID) -> ProfileTablesResponse:
+    store = _get_store()
+    profile = await store.get_profile(profile_id)
+    return ProfileTablesResponse(
+        profile_id=profile.profile_id,
+        tables=[
+            table.name
+            for table in sorted(
+                profile.tables, key=lambda item: item.row_count or 0, reverse=True
+            )
+        ],
     )
 
 

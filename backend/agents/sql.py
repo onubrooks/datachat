@@ -444,7 +444,7 @@ class SQLAgent(BaseAgent):
             user_query=input.query,
             schema_context=schema_context,
             business_context=business_context,
-            backend=self.config.database.db_type,
+            backend=getattr(self.config.database, "db_type", "postgresql"),
             user_preferences={"default_limit": 1000},
         )
 
@@ -587,45 +587,69 @@ class SQLAgent(BaseAgent):
         Raises:
             ValueError: If response cannot be parsed
         """
-        try:
-            # Try to extract JSON from response (handles markdown code blocks)
-            json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+        # Try JSON first.
+        json_str = None
+        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            json_match = re.search(r"\{.*\}", content, re.DOTALL)
             if json_match:
-                json_str = json_match.group(1)
-            else:
-                # Try to find raw JSON
-                json_match = re.search(r"\{.*\}", content, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group(0)
-                else:
-                    raise ValueError("No JSON found in LLM response")
+                json_str = json_match.group(0)
 
-            # Parse JSON
-            data = json.loads(json_str)
+        if json_str:
+            try:
+                data = json.loads(json_str)
+                sql_value = data.get("sql") or data.get("query")
+                if sql_value:
+                    explanation = (
+                        data.get("explanation")
+                        or data.get("reasoning")
+                        or data.get("rationale")
+                        or ""
+                    )
+                    return GeneratedSQL(
+                        sql=sql_value,
+                        explanation=explanation,
+                        used_datapoints=data.get("used_datapoints", []),
+                        confidence=data.get("confidence", 0.8),
+                        assumptions=data.get("assumptions", []),
+                        clarifying_questions=data.get("clarifying_questions", []),
+                    )
+            except json.JSONDecodeError as e:
+                logger.debug(f"Invalid JSON in LLM response: {e}")
 
-            # Validate required fields
-            if "sql" not in data:
-                raise ValueError("Response missing 'sql' field")
-            if "explanation" not in data:
-                raise ValueError("Response missing 'explanation' field")
+        # Fallback: extract SQL from code block or text.
+        sql_match = re.search(r"```sql\s*(.*?)```", content, re.DOTALL | re.IGNORECASE)
+        if sql_match:
+            sql_text = sql_match.group(1).strip()
+            if sql_text:
+                return GeneratedSQL(
+                    sql=sql_text,
+                    explanation="Generated SQL",
+                    used_datapoints=[],
+                    confidence=0.6,
+                    assumptions=[],
+                    clarifying_questions=[],
+                )
 
+        sql_inline = re.search(
+            r"(SELECT|WITH)\s+.*?(;|$)", content, re.DOTALL | re.IGNORECASE
+        )
+        if sql_inline:
+            sql_text = sql_inline.group(0).strip().rstrip(";")
             return GeneratedSQL(
-                sql=data["sql"],
-                explanation=data["explanation"],
-                used_datapoints=data.get("used_datapoints", []),
-                confidence=data.get("confidence", 0.8),
-                assumptions=data.get("assumptions", []),
-                clarifying_questions=data.get("clarifying_questions", []),
+                sql=sql_text,
+                explanation="Generated SQL",
+                used_datapoints=[],
+                confidence=0.6,
+                assumptions=[],
+                clarifying_questions=[],
             )
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON from LLM response: {e}")
-            logger.debug(f"LLM response content: {content}")
-            raise ValueError(f"Invalid JSON in LLM response: {e}") from e
-        except Exception as e:
-            logger.error(f"Failed to parse LLM response: {e}")
-            logger.debug(f"LLM response content: {content}")
-            raise ValueError(f"Failed to parse LLM response: {e}") from e
+        logger.error("Failed to parse LLM response: Response missing 'sql' field")
+        logger.debug(f"LLM response content: {content}")
+        raise ValueError("Failed to parse LLM response: Response missing 'sql' field")
 
     def _validate_input(self, input: SQLAgentInput) -> None:
         """
