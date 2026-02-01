@@ -56,12 +56,12 @@ async def create_datapoint(payload: dict) -> dict:
             status_code=status.HTTP_409_CONFLICT,
             detail="Datapoint already exists",
         )
-    save_datapoint_to_disk(datapoint.model_dump(mode="json"), path)
+    save_datapoint_to_disk(datapoint.model_dump(mode="json", by_alias=True), path)
 
     orchestrator = _get_orchestrator()
     orchestrator.enqueue_sync_incremental([datapoint.datapoint_id])
 
-    return datapoint.model_dump(mode="json")
+    return datapoint.model_dump(mode="json", by_alias=True)
 
 
 @router.put("/datapoints/{datapoint_id}")
@@ -78,12 +78,12 @@ async def update_datapoint(datapoint_id: str, payload: dict) -> dict:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Datapoint not found",
         )
-    save_datapoint_to_disk(datapoint.model_dump(mode="json"), path)
+    save_datapoint_to_disk(datapoint.model_dump(mode="json", by_alias=True), path)
 
     orchestrator = _get_orchestrator()
     orchestrator.enqueue_sync_incremental([datapoint.datapoint_id])
 
-    return datapoint.model_dump(mode="json")
+    return datapoint.model_dump(mode="json", by_alias=True)
 
 
 @router.delete("/datapoints/{datapoint_id}", status_code=status.HTTP_204_NO_CONTENT)
