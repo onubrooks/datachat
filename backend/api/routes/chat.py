@@ -73,7 +73,10 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={
                     "error": "system_not_initialized",
-                    "message": "DataChat requires setup. Please initialize first.",
+                    "message": (
+                        "DataChat requires setup. Run 'datachat setup' or "
+                        "'datachat demo' to get started."
+                    ),
                     "setup_steps": [
                         {
                             "step": step.step,
@@ -145,6 +148,8 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             data=data,
             visualization_hint=visualization_hint,
             sources=sources,
+            validation_errors=result.get("validation_errors", []),
+            validation_warnings=result.get("validation_warnings", []),
             metrics=metrics,
             conversation_id=conversation_id,
         )
