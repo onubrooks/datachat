@@ -7,6 +7,7 @@ Initialization status and guided setup endpoints.
 from fastapi import APIRouter, HTTPException, Request, status
 
 from backend.initialization.initializer import SystemInitializer
+from backend.settings_store import apply_config_defaults, set_value, SYSTEM_DB_KEY, TARGET_DB_KEY
 from backend.models.api import (
     SystemInitializeRequest,
     SystemInitializeResponse,
@@ -26,6 +27,7 @@ async def system_status(request: Request) -> SystemStatusResponse:
     return SystemStatusResponse(
         is_initialized=status_state.is_initialized,
         has_databases=status_state.has_databases,
+        has_system_database=status_state.has_system_database,
         has_datapoints=status_state.has_datapoints,
         setup_required=[
             {
@@ -49,9 +51,15 @@ async def system_initialize(
     initializer = SystemInitializer(app_state)
 
     try:
+        if payload.database_url:
+            set_value(TARGET_DB_KEY, payload.database_url)
+        if payload.system_database_url:
+            set_value(SYSTEM_DB_KEY, payload.system_database_url)
+        apply_config_defaults()
         status_state, message = await initializer.initialize(
             database_url=payload.database_url,
             auto_profile=payload.auto_profile,
+            system_database_url=payload.system_database_url,
         )
     except Exception as exc:
         raise HTTPException(
@@ -63,6 +71,7 @@ async def system_initialize(
         message=message,
         is_initialized=status_state.is_initialized,
         has_databases=status_state.has_databases,
+        has_system_database=status_state.has_system_database,
         has_datapoints=status_state.has_datapoints,
         setup_required=[
             {
