@@ -6,8 +6,14 @@ This module provides fixtures and configuration used across all tests.
 
 import asyncio
 import logging
+import os
 
 import pytest
+
+os.environ.setdefault(
+    "LLM_OPENAI_API_KEY",
+    "sk-test-key-1234567890-abcdefghijklmnop",
+)
 
 # ============================================================================
 # Pytest Configuration
