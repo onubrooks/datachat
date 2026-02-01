@@ -11,7 +11,7 @@ This directory contains utility scripts for testing and development.
 **Usage**:
 
 ```bash
-psql "$DATABASE_URL" -f scripts/demo_seed.sql
+psql "$SYSTEM_DATABASE_URL" -f scripts/demo_seed.sql
 ```
 
 **Related DataPoints**: `datapoints/demo/*.json`
@@ -134,6 +134,22 @@ Query: _
 ```
 
 ---
+
+### 3. `eval_runner.py` - Minimal RAG Evaluation
+
+**Purpose**: Run basic retrieval + end-to-end checks against the local API.
+
+**Usage**:
+
+```bash
+python scripts/eval_runner.py --mode retrieval --dataset eval/retrieval.json
+python scripts/eval_runner.py --mode qa --dataset eval/qa.json
+```
+
+**Notes**:
+
+- Retrieval mode uses `sources` from `/api/v1/chat` as proxies for retrieved DataPoints.
+- Answer types are inferred with a simple heuristic (single value vs table vs time series).
 
 ## Common Issues & Solutions
 
