@@ -35,6 +35,7 @@ from backend.knowledge.graph import KnowledgeGraph
 from backend.knowledge.retriever import Retriever
 from backend.knowledge.vectors import VectorStore
 from backend.pipeline.orchestrator import DataChatPipeline
+from backend.settings_store import apply_config_defaults
 
 console = Console()
 
@@ -85,12 +86,27 @@ class CLIState:
     def get_connection_string(self) -> str | None:
         """Get stored connection string."""
         config = self.load_config()
-        return config.get("connection_string")
+        return config.get("connection_string") or config.get("target_database_url")
+
+    def set_target_database_url(self, connection_string: str) -> None:
+        """Set target database URL."""
+        config = self.load_config()
+        config["target_database_url"] = connection_string
+        config["connection_string"] = connection_string
+        self.save_config(config)
 
     def set_connection_string(self, connection_string: str) -> None:
         """Set connection string."""
+        self.set_target_database_url(connection_string)
+
+    def get_system_database_url(self) -> str | None:
+        """Get stored system database URL."""
+        return self.load_config().get("system_database_url")
+
+    def set_system_database_url(self, system_database_url: str) -> None:
+        """Set system database URL."""
         config = self.load_config()
-        config["connection_string"] = connection_string
+        config["system_database_url"] = system_database_url
         self.save_config(config)
 
 
@@ -104,6 +120,7 @@ state = CLIState()
 
 async def create_pipeline_from_config() -> DataChatPipeline:
     """Create pipeline from configuration."""
+    apply_config_defaults()
     settings = get_settings()
 
     # Initialize vector store
@@ -124,7 +141,15 @@ async def create_pipeline_from_config() -> DataChatPipeline:
     # Initialize connector
     connection_string = state.get_connection_string()
     if not connection_string:
-        connection_string = str(settings.database.url)
+        if settings.database.url:
+            connection_string = str(settings.database.url)
+        else:
+            console.print("[red]No target database configured.[/red]")
+            console.print(
+                "[yellow]Hint: Use 'datachat connect' or run 'datachat setup' to "
+                "set a target DATABASE_URL.[/yellow]"
+            )
+            raise click.ClickException("Missing target database")
 
     # Parse connection string
     from urllib.parse import urlparse
@@ -154,9 +179,16 @@ async def create_pipeline_from_config() -> DataChatPipeline:
     status_state = await initializer.status()
     if not status_state.is_initialized:
         console.print("[red]DataChat requires setup before queries can run.[/red]")
+        if not status_state.has_system_database:
+            console.print(
+                "[yellow]Note: SYSTEM_DATABASE_URL is not set. Registry/profiling and "
+                "demo data are unavailable.[/yellow]"
+            )
         for step in status_state.setup_required:
             console.print(f"[yellow]- {step.title}: {step.description}[/yellow]")
-        console.print("[cyan]Hint: Run 'datachat setup' to continue.[/cyan]")
+        console.print(
+            "[cyan]Hint: Run 'datachat setup' or 'datachat demo' to continue.[/cyan]"
+        )
         raise click.ClickException("System not initialized")
 
     # Create pipeline
@@ -392,6 +424,7 @@ def status():
     """Show connection and system status."""
 
     async def check_status():
+        apply_config_defaults()
         table = Table(title="DataChat Status", show_header=True, header_style="bold cyan")
         table.add_column("Component", style="cyan")
         table.add_column("Status", style="green")
@@ -400,6 +433,10 @@ def status():
         # Check configuration
         settings = get_settings()
         table.add_row("Configuration", "✓", f"Environment: {settings.environment}")
+        if settings.system_database.url:
+            table.add_row("System DB", "✓", "Configured")
+        else:
+            table.add_row("System DB", "⚠️", "SYSTEM_DATABASE_URL not set")
 
         # Check connection string
         conn_str = state.get_connection_string()
@@ -412,12 +449,19 @@ def status():
                 "✓",
                 f"{parsed.hostname}:{parsed.port}/{parsed.path.lstrip('/')}",
             )
-        else:
+        elif settings.database.url:
             table.add_row("Connection", "⚠️", "Using default from config")
+        else:
+            table.add_row("Connection", "✗", "No target database configured")
 
         # Check database connection
         try:
-            connection_string = conn_str or str(settings.database.url)
+            if conn_str:
+                connection_string = conn_str
+            elif settings.database.url:
+                connection_string = str(settings.database.url)
+            else:
+                raise RuntimeError("No target database configured")
             from urllib.parse import urlparse
 
             parsed = urlparse(connection_string)
@@ -466,8 +510,11 @@ def setup():
     """Guide system initialization for first-time setup."""
 
     async def run_setup():
+        apply_config_defaults()
         settings = get_settings()
-        default_url = state.get_connection_string() or str(settings.database.url)
+        default_url = state.get_connection_string() or (
+            str(settings.database.url) if settings.database.url else ""
+        )
 
         console.print(
             Panel.fit(
@@ -477,7 +524,18 @@ def setup():
             )
         )
 
-        database_url = click.prompt("Database URL", default=default_url, show_default=True)
+        database_url = click.prompt("Target Database URL", default=default_url, show_default=True)
+        system_database_url = None
+        if not settings.system_database.url:
+            system_database_url = click.prompt(
+                "System Database URL (for demo/registry)",
+                default="postgresql://datachat:datachat_password@localhost:5432/datachat",
+                show_default=True,
+            )
+        if database_url:
+            state.set_target_database_url(database_url)
+        if system_database_url:
+            state.set_system_database_url(system_database_url)
         auto_profile = click.confirm(
             "Auto-profile database (generate DataPoints draft)",
             default=False,
@@ -491,6 +549,7 @@ def setup():
         status_state, message = await initializer.initialize(
             database_url=database_url,
             auto_profile=auto_profile,
+            system_database_url=system_database_url,
         )
 
         console.print(f"[green]{message}[/green]")
@@ -506,12 +565,25 @@ def setup():
 
 
 @cli.command()
-def demo():
+@click.option(
+    "--persona",
+    type=click.Choice(["base", "analyst", "engineer", "platform", "executive"], case_sensitive=False),
+    default="base",
+    show_default=True,
+    help="Persona-specific demo setup to load.",
+)
+@click.option("--reset", is_flag=True, help="Drop and re-seed demo tables.")
+@click.option("--no-workspace", is_flag=True, help="Skip workspace indexing (if available).")
+def demo(persona: str, reset: bool, no_workspace: bool):
     """Seed demo tables and load demo DataPoints."""
 
     async def run_demo():
+        apply_config_defaults()
         settings = get_settings()
-        database_url = str(settings.database.url)
+        if not settings.system_database.url:
+            raise click.ClickException("SYSTEM_DATABASE_URL must be set to run the demo.")
+        database_url = str(settings.system_database.url)
+        persona_name = persona.lower()
 
         from urllib.parse import urlparse
 
@@ -524,9 +596,13 @@ def demo():
             password=parsed.password or "",
         )
 
-        console.print("[cyan]Seeding demo tables...[/cyan]")
+        console.print(f"[cyan]Seeding demo tables (persona: {persona_name})...[/cyan]")
         await connector.connect()
         try:
+            if reset:
+                await connector.execute("DROP TABLE IF EXISTS orders")
+                await connector.execute("DROP TABLE IF EXISTS users")
+
             await connector.execute(
                 """
                 CREATE TABLE IF NOT EXISTS users (
@@ -577,9 +653,19 @@ def demo():
         finally:
             await connector.close()
 
-        datapoints_dir = Path("datapoints") / "demo"
+        base_dir = Path("datapoints") / "demo"
+        datapoints_dir = base_dir
+        if persona_name != "base":
+            persona_dir = base_dir / persona_name
+            if persona_dir.exists():
+                datapoints_dir = persona_dir
+            else:
+                console.print(
+                    f"[yellow]Persona DataPoints not found at {persona_dir}. Falling back to base demo.[/yellow]"
+                )
+
         if not datapoints_dir.exists():
-            console.print("[red]Demo DataPoints not found at datapoints/demo[/red]")
+            console.print(f"[red]Demo DataPoints not found at {datapoints_dir}[/red]")
             raise click.ClickException("Missing demo DataPoints.")
 
         console.print("[cyan]Loading demo DataPoints...[/cyan]")
@@ -596,6 +682,18 @@ def demo():
         graph = KnowledgeGraph()
         for datapoint in datapoints:
             graph.add_datapoint(datapoint)
+
+        if not no_workspace:
+            workspace_root = Path("workspace_demo") / persona_name
+            if workspace_root.exists():
+                console.print(
+                    "[yellow]Workspace indexing is not implemented yet. "
+                    "Found workspace demo content but skipped indexing.[/yellow]"
+                )
+            else:
+                console.print(
+                    f"[yellow]Workspace demo folder not found at {workspace_root} (skipping).[/yellow]"
+                )
 
         console.print("[green]✓ Demo data loaded. Try: datachat ask \"How many users are active?\"[/green]")
 
