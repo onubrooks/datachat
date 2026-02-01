@@ -894,6 +894,8 @@ async def create_pipeline(
 
     # Initialize connector
     db_url = database_url or config.database.url
+    if not db_url:
+        raise ValueError("DATABASE_URL must be set or provided to create a pipeline.")
 
     if database_type == "postgresql":
         # Parse PostgreSQL URL: postgresql://user:password@host:port/database
