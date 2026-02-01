@@ -237,7 +237,7 @@ class TestSchemaIntrospection:
             assert len(tables) == 1
             table = tables[0]
 
-            assert table.schema == "default"
+            assert table.schema_name == "default"
             assert table.table_name == "events"
             assert table.table_type == "MergeTree"
             assert table.row_count == 1000
