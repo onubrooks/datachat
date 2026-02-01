@@ -25,6 +25,7 @@ from backend.models import (
     LLMError,
     QueryClassification,
 )
+from backend.prompts.loader import PromptLoader
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class ClassifierAgent(BaseAgent):
             )
         else:
             self.llm = llm_provider
+        self.prompts = PromptLoader()
 
     async def execute(self, input: ClassifierAgentInput) -> ClassifierAgentOutput:
         """
@@ -124,62 +126,22 @@ class ClassifierAgent(BaseAgent):
         Returns:
             Formatted prompt string
         """
-        system_prompt = """You are a query classifier for a data assistant.
-Your job is to analyze user queries and extract structured information.
+        system_prompt = self.prompts.load("system/main.md")
 
-**Intent Types:**
-- data_query: User wants to retrieve/analyze data
-- exploration: User wants to understand what data is available
-- explanation: User wants to understand how something works
-- meta: User has questions about the system itself
-
-**Entity Types:**
-- table: Database table names
-- column: Column names
-- metric: Business metrics (revenue, sales, users, etc.)
-- time_reference: Time periods (last quarter, 2024, yesterday)
-- filter: Filter conditions
-- other: Other entities
-
-**Complexity Levels:**
-- simple: Single table, simple aggregation
-- medium: Joins, multiple conditions
-- complex: Multiple joins, subqueries, complex logic
-
-**Response Format (JSON):**
-```json
-{
-  "intent": "data_query|exploration|explanation|meta",
-  "entities": [
-    {
-      "entity_type": "metric",
-      "value": "total revenue",
-      "confidence": 0.95,
-      "normalized_value": "revenue"
-    }
-  ],
-  "complexity": "simple|medium|complex",
-  "clarification_needed": true/false,
-  "clarifying_questions": ["What time period?"],
-  "confidence": 0.92
-}
-```
-
-Be generous with entity extraction - extract anything that might be relevant.
-Mark clarification_needed=true if the query is ambiguous."""
-
-        # Add conversation context if available
         context = ""
         if conversation_history:
-            context = "\n\n**Previous Conversation:**\n"
-            for msg in conversation_history[-3:]:  # Last 3 messages
-                role = msg.role
-                content = msg.content
-                context += f"{role}: {content}\n"
+            lines = []
+            for msg in conversation_history[-3:]:
+                role = getattr(msg, "role", "user")
+                content = getattr(msg, "content", "")
+                lines.append(f"{role}: {content}")
+            context = "\n".join(lines)
 
-        user_prompt = f"""**User Query:** {query}{context}
-
-Analyze this query and return the classification in JSON format."""
+        user_prompt = self.prompts.render(
+            "agents/classifier.md",
+            user_query=query,
+            conversation_history=context or "None",
+        )
 
         return system_prompt, user_prompt
 
