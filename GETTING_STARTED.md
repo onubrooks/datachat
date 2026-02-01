@@ -24,6 +24,9 @@ If you don't have a database ready, you can run the demo dataset to get started 
 git clone https://github.com/onubrooks/datachat.git
 cd datachat
 cp .env.example .env
+# Generate encryption key for saved DB credentials:
+python -c "import secrets; print(secrets.token_hex(32))"
+# Set DATABASE_CREDENTIALS_KEY in .env
 ```
 
 **Option B: Manual Installation**
@@ -62,6 +65,14 @@ LLM_OPENAI_API_KEY=sk-...
 ```
 
 **Important:** Replace `your_database` with your actual database name that contains the data you want to query.
+
+**AWS RDS note:** Many RDS Postgres instances require SSL. Use:
+```
+postgresql://user:password@host:5432/dbname?sslmode=require
+```
+
+**Credentials:** The URL must include username/password. The setup flow does not prompt
+for password separately.
 
 If you prefer a guided setup, use `datachat setup` or run `datachat demo` to load sample data.
 
@@ -108,6 +119,9 @@ datachat setup
 
 When prompted, enable auto-profiling. Approved DataPoints are loaded into the
 vector store and knowledge graph immediately.
+
+**Auto-profiling prerequisites:** Set `SYSTEM_DATABASE_URL` and `DATABASE_CREDENTIALS_KEY`
+to enable the registry and profiling jobs.
 
 #### Option B: Manually Create DataPoints
 
@@ -299,6 +313,9 @@ uvicorn backend.api.main:app --reload
 # Terminal 2: Frontend
 cd frontend
 npm run dev
+
+# Or run both with the CLI (requires frontend deps installed)
+datachat dev
 ```
 
 ### Step 6: Verify Setup

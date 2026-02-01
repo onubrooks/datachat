@@ -12,6 +12,8 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Send, Trash2, AlertCircle } from "lucide-react";
 import { Message } from "./Message";
 import { AgentStatus } from "../agents/AgentStatus";
@@ -23,6 +25,7 @@ import { apiClient, wsClient, type SetupStep } from "@/lib/api";
 import { SystemSetup } from "../system/SystemSetup";
 
 export function ChatInterface() {
+  const router = useRouter();
   const {
     messages,
     conversationId,
@@ -44,6 +47,8 @@ export function ChatInterface() {
   const [setupSteps, setSetupSteps] = useState<SetupStep[]>([]);
   const [isInitialized, setIsInitialized] = useState(true);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [setupNotice, setSetupNotice] = useState<string | null>(null);
+  const [setupCompleted, setSetupCompleted] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -177,6 +182,7 @@ export function ChatInterface() {
     systemDatabaseUrl?: string
   ) => {
     setSetupError(null);
+    setSetupNotice(null);
     setIsInitializing(true);
     try {
       const response = await apiClient.systemInitialize({
@@ -186,8 +192,12 @@ export function ChatInterface() {
       });
       setIsInitialized(response.is_initialized);
       setSetupSteps(response.setup_required || []);
-      if (!response.is_initialized) {
-        setSetupError(response.message);
+      if (response.message) {
+        setSetupNotice(response.message);
+        if (response.message.toLowerCase().includes("initialization completed")) {
+          setSetupCompleted(true);
+          router.push("/databases");
+        }
       }
     } catch (err) {
       console.error("Initialization error:", err);
@@ -210,6 +220,9 @@ export function ChatInterface() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button asChild variant="secondary" size="sm">
+            <Link href="/databases">Manage DataPoints</Link>
+          </Button>
           {/* Connection status indicator */}
           <div className="flex items-center gap-2 text-xs">
             <div
@@ -239,13 +252,23 @@ export function ChatInterface() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4">
-        {!isInitialized && (
+        {!isInitialized && !setupCompleted && (
           <SystemSetup
             steps={setupSteps}
             onInitialize={handleInitialize}
             isSubmitting={isInitializing}
             error={setupError}
+            notice={setupNotice}
           />
+        )}
+        {!isInitialized && setupCompleted && (
+          <div className="mb-4 rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            Setup saved. Add DataPoints from{" "}
+            <Link href="/databases" className="underline">
+              Database Manager
+            </Link>{" "}
+            (or run <strong>datachat demo</strong>) to enable chat.
+          </div>
         )}
         {messages.length === 0 && (
           <div className="flex items-center justify-center h-full text-muted-foreground">

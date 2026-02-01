@@ -83,6 +83,14 @@ That's it! DataChat is now running with:
 >
 > **Without DataPoints, queries will fail.**
 
+**AWS RDS note:** Use SSL if required by your instance:
+```
+postgresql://user:password@host:5432/dbname?sslmode=require
+```
+
+**Credentials:** The URL must include username/password. Setup does not prompt
+for password separately.
+
 ---
 
 ## Manual Installation
@@ -107,6 +115,9 @@ pip install -e .
 # 3. Set up environment
 cp .env.example .env
 # Edit .env with your configuration
+# Generate encryption key for saved DB credentials:
+python -c "import secrets; print(secrets.token_hex(32))"
+# Set DATABASE_CREDENTIALS_KEY in .env
 
 # 4. Start the server
 uvicorn backend.api.main:app --reload --port 8000
@@ -116,6 +127,12 @@ Verify the CLI is available:
 
 ```bash
 datachat --version
+```
+
+Or run both servers together (requires frontend deps installed):
+
+```bash
+datachat dev
 ```
 
 Backend will be available at <http://localhost:8000>
@@ -260,6 +277,8 @@ DataChat stores database connections in the system PostgreSQL database with encr
 `SYSTEM_DATABASE_URL` and `DATABASE_CREDENTIALS_KEY` in your environment and use the API endpoints under `/api/v1/databases`
 to add connections and set a default. Chat requests can target a specific connection by passing
 `target_database` (connection ID) in the chat request.
+
+**Auto-profiling prerequisites:** `SYSTEM_DATABASE_URL` + `DATABASE_CREDENTIALS_KEY`.
 
 ### System vs Target Database
 

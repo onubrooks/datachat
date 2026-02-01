@@ -33,6 +33,9 @@ Before testing, ensure you have:
    ```bash
    cp .env.example .env
    # Edit .env and add your OpenAI API key
+   # Generate encryption key for saved DB credentials:
+   python -c "import secrets; print(secrets.token_hex(32))"
+   # Set DATABASE_CREDENTIALS_KEY in .env
    ```
 
 2. **CLI Installed:**
@@ -55,9 +58,22 @@ Before testing, ensure you have:
    npm run dev
    ```
 
+   ```bash
+   # Or run both with the CLI (requires frontend deps installed)
+   datachat dev
+   ```
+
    Frontend should be on `http://localhost:3000`.
 
-4. **Setup Persistence:**
+4. **Reset everything (optional):**
+
+   ```bash
+   datachat reset
+   # Add --include-target to clear demo tables in the target DB
+   # Add --drop-all-target to drop all public tables (dangerous)
+   ```
+
+5. **Setup Persistence:**
 
    Setup saves database URLs to `~/.datachat/config.json` for reuse.
 
@@ -88,6 +104,11 @@ Before testing, ensure you have:
    DATABASE_URL=postgresql://datachat:datachat_password@localhost:5432/datachat
    SYSTEM_DATABASE_URL=postgresql://datachat:datachat_password@localhost:5432/datachat
    ```
+
+   **AWS RDS note:** many instances require SSL:
+   `postgresql://user:pass@host:5432/dbname?sslmode=require`
+
+   **Credentials:** URL must include username/password.
 
 4. **Optional (Multi-DB Registry):**
 
@@ -229,9 +250,12 @@ curl -X POST http://localhost:8000/api/v1/system/initialize \
   -H "Content-Type: application/json" \
   -d '{
     "database_url": "postgresql://datachat:datachat_password@localhost:5432/datachat",
+    "system_database_url": "postgresql://datachat:datachat_password@localhost:5432/datachat",
     "auto_profile": true
   }'
 ```
+
+Auto-profiling requires `SYSTEM_DATABASE_URL` + `DATABASE_CREDENTIALS_KEY`.
 
 #### 2.3 Chat Endpoint (Simple Query)
 
@@ -544,6 +568,12 @@ cp .env.example .env.local
 npm run dev
 
 # Frontend should start on http://localhost:3000
+```
+
+Or run both servers together:
+
+```bash
+datachat dev
 ```
 
 **Expected Output:**

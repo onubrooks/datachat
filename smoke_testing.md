@@ -7,6 +7,13 @@ Quick checklist for validating a working local setup before demos or deeper test
 ## Prerequisites
 
 - `.env` configured with `OPENAI_API_KEY`, `DATABASE_URL`, and `SYSTEM_DATABASE_URL`.
+- Generate a credentials key if needed:
+
+  ```bash
+  python -c "import secrets; print(secrets.token_hex(32))"
+  ```
+
+  Set `DATABASE_CREDENTIALS_KEY` in `.env`.
 - CLI installed:
 
   ```bash
@@ -27,7 +34,18 @@ Quick checklist for validating a working local setup before demos or deeper test
   npm run dev
   ```
 
+- Or run both servers together (requires frontend deps installed):
+
+  ```bash
+  datachat dev
+  ```
+
 - Setup saves database URLs to `~/.datachat/config.json`.
+- Reset everything (optional):
+
+  ```bash
+  datachat reset
+  ```
 
 ---
 

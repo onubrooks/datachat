@@ -22,6 +22,7 @@ interface SystemSetupProps {
   ) => Promise<void>;
   isSubmitting: boolean;
   error: string | null;
+  notice?: string | null;
 }
 
 export function SystemSetup({
@@ -29,6 +30,7 @@ export function SystemSetup({
   onInitialize,
   isSubmitting,
   error,
+  notice,
 }: SystemSetupProps) {
   const [databaseUrl, setDatabaseUrl] = useState("");
   const [systemDatabaseUrl, setSystemDatabaseUrl] = useState("");
@@ -126,6 +128,9 @@ export function SystemSetup({
           </label>
           {error && (
             <div className="text-xs text-destructive">{error}</div>
+          )}
+          {notice && !error && (
+            <div className="text-xs text-muted-foreground">{notice}</div>
           )}
           <Button
             type="submit"

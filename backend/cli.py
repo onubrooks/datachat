@@ -10,12 +10,16 @@ Usage:
     datachat dp list                       # List DataPoints
     datachat dp add schema file.json       # Add DataPoint
     datachat dp sync                       # Rebuild vectors and graph
+    datachat dev                           # Run backend + frontend dev servers
+    datachat reset                         # Reset system state for testing
     datachat status                        # Show connection status
 """
 
 import asyncio
 import json
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -506,6 +510,73 @@ def status():
 
 
 @cli.command()
+@click.option("--backend-port", default=8000, show_default=True, type=int)
+@click.option("--frontend-port", default=3000, show_default=True, type=int)
+@click.option("--backend-host", default="127.0.0.1", show_default=True)
+@click.option("--frontend-host", default="127.0.0.1", show_default=True)
+@click.option("--no-backend", is_flag=True, help="Skip starting the backend API server.")
+@click.option("--no-frontend", is_flag=True, help="Skip starting the frontend dev server.")
+def dev(
+    backend_port: int,
+    frontend_port: int,
+    backend_host: str,
+    frontend_host: str,
+    no_backend: bool,
+    no_frontend: bool,
+):
+    """Run backend and frontend dev servers in one command."""
+    processes: list[subprocess.Popen] = []
+
+    if no_backend and no_frontend:
+        raise click.ClickException("Nothing to run. Remove --no-backend or --no-frontend.")
+
+    if not no_backend:
+        backend_cmd = [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "backend.api.main:app",
+            "--reload",
+            "--host",
+            backend_host,
+            "--port",
+            str(backend_port),
+        ]
+        console.print(f"[cyan]Starting backend:[/cyan] {' '.join(backend_cmd)}")
+        processes.append(subprocess.Popen(backend_cmd))
+
+    if not no_frontend:
+        frontend_dir = Path(__file__).resolve().parents[1] / "frontend"
+        if not frontend_dir.exists():
+            raise click.ClickException("Frontend directory not found. Run from repo root.")
+        frontend_cmd = [
+            "npm",
+            "run",
+            "dev",
+            "--",
+            "-p",
+            str(frontend_port),
+            "-H",
+            frontend_host,
+        ]
+        console.print(f"[cyan]Starting frontend:[/cyan] {' '.join(frontend_cmd)}")
+        processes.append(subprocess.Popen(frontend_cmd, cwd=str(frontend_dir)))
+
+    try:
+        for process in processes:
+            process.wait()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stopping dev servers...[/yellow]")
+        for process in processes:
+            process.terminate()
+        for process in processes:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+
+
+@cli.command()
 def setup():
     """Guide system initialization for first-time setup."""
 
@@ -562,6 +633,138 @@ def setup():
             console.print("[green]✓ System initialized. You're ready to query.[/green]")
 
     asyncio.run(run_setup())
+
+
+@cli.command()
+@click.option("--include-target", is_flag=True, help="Also clear target database tables.")
+@click.option(
+    "--drop-all-target",
+    is_flag=True,
+    help="Drop all tables in the target database (dangerous). Requires --include-target.",
+)
+@click.option("--keep-config", is_flag=True, help="Keep ~/.datachat/config.json.")
+@click.option("--keep-vectors", is_flag=True, help="Keep local vector store on disk.")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompts (use with caution).")
+def reset(
+    include_target: bool,
+    drop_all_target: bool,
+    keep_config: bool,
+    keep_vectors: bool,
+    yes: bool,
+):
+    """Reset system state for testing or clean setup."""
+
+    async def run_reset() -> None:
+        apply_config_defaults()
+        settings = get_settings()
+
+        if drop_all_target and not include_target:
+            raise click.ClickException("--drop-all-target requires --include-target.")
+
+        if not yes:
+            console.print(
+                Panel.fit(
+                    "[bold red]Reset DataChat State[/bold red]\n"
+                    "This clears system registry/profiling, local vectors, and saved config.",
+                    border_style="red",
+                )
+            )
+            if not click.confirm("Continue?", default=False, show_default=True):
+                console.print("[yellow]Reset cancelled.[/yellow]")
+                return
+
+        system_db_url = (
+            str(settings.system_database.url) if settings.system_database.url else None
+        )
+        if system_db_url:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(system_db_url)
+            connector = PostgresConnector(
+                host=parsed.hostname or "localhost",
+                port=parsed.port or 5432,
+                database=parsed.path.lstrip("/") if parsed.path else "datachat",
+                user=parsed.username or "postgres",
+                password=parsed.password or "",
+            )
+            await connector.connect()
+            try:
+                await connector.execute(
+                    "TRUNCATE database_connections, profiling_jobs, "
+                    "profiling_profiles, pending_datapoints"
+                )
+                console.print("[green]✓ System DB state cleared[/green]")
+            finally:
+                await connector.close()
+        else:
+            console.print("[yellow]System DB not configured; skipped registry reset.[/yellow]")
+
+        if include_target:
+            target_db_url = (
+                state.get_connection_string()
+                or (str(settings.database.url) if settings.database.url else None)
+            )
+            if not target_db_url:
+                console.print("[yellow]Target DB not configured; skipped target reset.[/yellow]")
+            else:
+                from urllib.parse import urlparse
+
+                parsed = urlparse(target_db_url)
+                connector = PostgresConnector(
+                    host=parsed.hostname or "localhost",
+                    port=parsed.port or 5432,
+                    database=parsed.path.lstrip("/") if parsed.path else "datachat",
+                    user=parsed.username or "postgres",
+                    password=parsed.password or "",
+                )
+                await connector.connect()
+                try:
+                    if drop_all_target:
+                        await connector.execute(
+                            """
+                            DO $$
+                            DECLARE r RECORD;
+                            BEGIN
+                              FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public')
+                              LOOP
+                                EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename)
+                                || ' CASCADE';
+                              END LOOP;
+                            END $$;
+                            """
+                        )
+                        console.print("[green]✓ Target DB tables dropped[/green]")
+                    else:
+                        await connector.execute("DROP TABLE IF EXISTS orders CASCADE")
+                        await connector.execute("DROP TABLE IF EXISTS users CASCADE")
+                        console.print("[green]✓ Target DB demo tables cleared[/green]")
+                finally:
+                    await connector.close()
+
+        if not keep_vectors:
+            vector_store = VectorStore()
+            await vector_store.initialize()
+            await vector_store.clear()
+            shutil.rmtree(settings.chroma.persist_dir, ignore_errors=True)
+            console.print("[green]✓ Local vector store cleared[/green]")
+
+        managed_dir = Path("datapoints") / "managed"
+        if managed_dir.exists():
+            shutil.rmtree(managed_dir, ignore_errors=True)
+            console.print("[green]✓ Managed DataPoints cleared[/green]")
+
+        if not keep_config:
+            state.refresh_paths()
+            if state.config_file.exists():
+                try:
+                    state.config_file.unlink()
+                    console.print("[green]✓ Saved config cleared[/green]")
+                except OSError:
+                    console.print("[yellow]Failed to remove saved config.[/yellow]")
+
+        console.print("[green]Reset complete.[/green]")
+
+    asyncio.run(run_reset())
 
 
 @cli.command()

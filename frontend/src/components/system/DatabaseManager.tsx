@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -230,9 +231,14 @@ export function DatabaseManager() {
             Add connections, run profiling, and review generated DataPoints.
           </p>
         </div>
-        <Button onClick={refresh} disabled={isLoading}>
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="secondary">
+            <Link href="/">Back to Chat</Link>
+          </Button>
+          <Button onClick={refresh} disabled={isLoading}>
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {error && <div className="text-sm text-destructive">{error}</div>}
@@ -340,6 +346,14 @@ export function DatabaseManager() {
             Sync Now
           </Button>
         </div>
+        {job && (
+          <div className="rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            Auto-profiling {job.status}.{" "}
+            {job.status === "completed"
+              ? "Generate DataPoints to review and approve."
+              : "This page will refresh as the job progresses."}
+          </div>
+        )}
         {syncError && <div className="text-xs text-destructive">{syncError}</div>}
         {!syncStatus && (
           <p className="text-sm text-muted-foreground">

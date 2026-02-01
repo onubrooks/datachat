@@ -389,6 +389,11 @@ class Settings(BaseSettings):
     system_database: SystemDatabaseSettings = Field(default_factory=SystemDatabaseSettings)
     chroma: ChromaSettings = Field(default_factory=ChromaSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    database_credentials_key: str | None = Field(
+        default=None,
+        description="Fernet key for encrypting stored database credentials.",
+        validation_alias="DATABASE_CREDENTIALS_KEY",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

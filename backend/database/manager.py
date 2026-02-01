@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -53,7 +52,7 @@ class DatabaseConnectionManager:
             str(settings.system_database.url) if settings.system_database.url else None
         )
         self._pool = pool
-        self._encryption_key = encryption_key or os.getenv("DATABASE_CREDENTIALS_KEY")
+        self._encryption_key = encryption_key or settings.database_credentials_key
         self._cipher: Fernet | None = None
 
     async def initialize(self) -> None:
