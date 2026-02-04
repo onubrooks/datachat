@@ -51,6 +51,10 @@ from backend.models.agent import (
     # ContextAgent models
     ContextAgentInput,
     ContextAgentOutput,
+    ContextAnswer,
+    ContextAnswerAgentInput,
+    ContextAnswerAgentOutput,
+    EvidenceItem,
     CorrectionAttempt,
     DatabaseError,
     # ExecutorAgent models
@@ -136,6 +140,10 @@ __all__ = [
     # ContextAgent models
     "ContextAgentInput",
     "ContextAgentOutput",
+    "ContextAnswer",
+    "ContextAnswerAgentInput",
+    "ContextAnswerAgentOutput",
+    "EvidenceItem",
     "InvestigationMemory",
     "RetrievedDataPoint",
     # ClassifierAgent models

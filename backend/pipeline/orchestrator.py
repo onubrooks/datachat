@@ -19,6 +19,7 @@ from langgraph.graph import END, StateGraph
 
 from backend.agents.classifier import ClassifierAgent
 from backend.agents.context import ContextAgent
+from backend.agents.context_answer import ContextAnswerAgent
 from backend.agents.executor import ExecutorAgent
 from backend.agents.sql import SQLAgent
 from backend.agents.validator import ValidatorAgent
@@ -29,8 +30,10 @@ from backend.connectors.postgres import PostgresConnector
 from backend.knowledge.retriever import Retriever
 from backend.models import (
     ClassifierAgentInput,
+    ContextAnswerAgentInput,
     ContextAgentInput,
     ExecutorAgentInput,
+    EvidenceItem,
     GeneratedSQL,
     Message,
     SQLAgentInput,
@@ -68,6 +71,7 @@ class PipelineState(TypedDict, total=False):
     # Context output
     investigation_memory: dict[str, Any] | None
     retrieved_datapoints: list[dict[str, Any]]
+    context_confidence: float | None
 
     # SQL output
     generated_sql: str | None
@@ -92,6 +96,9 @@ class PipelineState(TypedDict, total=False):
     natural_language_answer: str | None
     visualization_hint: str | None
     key_insights: list[str]
+    answer_source: str | None
+    answer_confidence: float | None
+    evidence: list[dict[str, Any]]
 
     # Pipeline metadata
     current_agent: str | None
@@ -155,6 +162,7 @@ class DataChatPipeline:
         # Initialize agents
         self.classifier = ClassifierAgent()
         self.context = ContextAgent(retriever=retriever)
+        self.context_answer = ContextAnswerAgent()
         self.sql = SQLAgent()
         self.validator = ValidatorAgent()
         self.executor = ExecutorAgent()
@@ -176,6 +184,7 @@ class DataChatPipeline:
         # Add nodes
         workflow.add_node("classifier", self._run_classifier)
         workflow.add_node("context", self._run_context)
+        workflow.add_node("context_answer", self._run_context_answer)
         workflow.add_node("sql", self._run_sql)
         workflow.add_node("validator", self._run_validator)
         workflow.add_node("executor", self._run_executor)
@@ -186,7 +195,14 @@ class DataChatPipeline:
 
         # Add edges
         workflow.add_edge("classifier", "context")
-        workflow.add_edge("context", "sql")
+        workflow.add_conditional_edges(
+            "context",
+            self._should_use_context_answer,
+            {
+                "context": "context_answer",
+                "sql": "sql",
+            },
+        )
 
         # Conditional edge from validator
         workflow.add_conditional_edges(
@@ -201,6 +217,7 @@ class DataChatPipeline:
 
         workflow.add_edge("sql", "validator")
         workflow.add_edge("executor", END)
+        workflow.add_edge("context_answer", END)
         workflow.add_edge("error_handler", END)
 
         return workflow.compile()
@@ -293,6 +310,7 @@ class DataChatPipeline:
                 "sources_used": output.investigation_memory.sources_used,
             }
             state["retrieved_datapoints"] = state["investigation_memory"]["datapoints"]
+            state["context_confidence"] = output.context_confidence
 
             # Update metadata
             elapsed = (time.time() - start_time) * 1000
@@ -306,6 +324,78 @@ class DataChatPipeline:
         except Exception as e:
             logger.error(f"ContextAgent failed: {e}")
             state["error"] = f"Context retrieval failed: {e}"
+
+        return state
+
+    async def _run_context_answer(self, state: PipelineState) -> PipelineState:
+        """Run ContextAnswerAgent."""
+        start_time = time.time()
+        state["current_agent"] = "ContextAnswerAgent"
+
+        if state.get("error"):
+            return state
+
+        try:
+            from backend.models import InvestigationMemory, RetrievedDataPoint
+
+            datapoints = [
+                RetrievedDataPoint(
+                    datapoint_id=dp["datapoint_id"],
+                    datapoint_type=dp["datapoint_type"],
+                    name=dp["name"],
+                    score=dp["score"],
+                    source=dp["source"],
+                    metadata=dp["metadata"],
+                )
+                for dp in state.get("retrieved_datapoints", [])
+            ]
+
+            investigation_memory = InvestigationMemory(
+                query=state["query"],
+                datapoints=datapoints,
+                total_retrieved=state.get("investigation_memory", {}).get(
+                    "total_retrieved", len(datapoints)
+                ),
+                retrieval_mode=state.get("investigation_memory", {}).get(
+                    "retrieval_mode", "hybrid"
+                ),
+                sources_used=state.get("investigation_memory", {}).get("sources_used", []),
+            )
+
+            input_data = ContextAnswerAgentInput(
+                query=state["query"],
+                conversation_history=state.get("conversation_history", []),
+                investigation_memory=investigation_memory,
+                intent=state.get("intent"),
+                context_confidence=state.get("context_confidence"),
+            )
+
+            output = await self.context_answer.execute(input_data)
+
+            state["natural_language_answer"] = output.context_answer.answer
+            state["answer_source"] = "context"
+            state["answer_confidence"] = output.context_answer.confidence
+            state["evidence"] = [
+                evidence.model_dump()
+                for evidence in output.context_answer.evidence
+            ]
+            state["generated_sql"] = None
+            state["validated_sql"] = None
+            state["query_result"] = None
+            state["visualization_hint"] = None
+            state["clarification_needed"] = bool(output.context_answer.clarifying_questions)
+            state["clarifying_questions"] = output.context_answer.clarifying_questions
+
+            elapsed = (time.time() - start_time) * 1000
+            state["agent_timings"]["context_answer"] = elapsed
+            state["total_latency_ms"] += elapsed
+            state["llm_calls"] += output.metadata.llm_calls
+
+            logger.info("ContextAnswerAgent complete")
+
+        except Exception as e:
+            logger.error(f"ContextAnswerAgent failed: {e}")
+            state["error"] = f"Context answer failed: {e}"
 
         return state
 
@@ -532,6 +622,12 @@ class DataChatPipeline:
             state["natural_language_answer"] = output.executed_query.natural_language_answer
             state["visualization_hint"] = output.executed_query.visualization_hint
             state["key_insights"] = output.executed_query.key_insights
+            state["answer_source"] = "sql"
+            state["answer_confidence"] = state.get("sql_confidence", 0.7)
+            state["evidence"] = [
+                evidence.model_dump()
+                for evidence in self._build_evidence_items(state)
+            ]
 
             # Update metadata
             elapsed = (time.time() - start_time) * 1000
@@ -558,6 +654,7 @@ class DataChatPipeline:
     async def _handle_error(self, state: PipelineState) -> PipelineState:
         """Handle pipeline errors."""
         state["current_agent"] = "ErrorHandler"
+        state["answer_source"] = "error"
         logger.error(f"Pipeline error: {state.get('error', 'Unknown error')}")
 
         # Provide graceful error message
@@ -572,6 +669,60 @@ class DataChatPipeline:
     # ========================================================================
     # Conditional Edge Logic
     # ========================================================================
+
+    def _should_use_context_answer(self, state: PipelineState) -> str:
+        if state.get("error"):
+            return "sql"
+
+        intent = state.get("intent") or "data_query"
+        confidence = state.get("context_confidence") or 0.0
+        query = (state.get("query") or "").lower()
+
+        if intent in ("exploration", "explanation", "meta"):
+            return "context"
+
+        if self._query_requires_sql(query):
+            return "sql"
+
+        if confidence >= 0.7:
+            return "context"
+
+        return "sql"
+
+    def _query_requires_sql(self, query: str) -> bool:
+        keywords = (
+            "total",
+            "sum",
+            "count",
+            "average",
+            "avg",
+            "min",
+            "max",
+            "trend",
+            "by",
+            "per",
+            "over time",
+            "last",
+            "this month",
+            "this year",
+            "yesterday",
+        )
+        return any(keyword in query for keyword in keywords)
+
+    def _build_evidence_items(self, state: PipelineState) -> list[EvidenceItem]:
+        evidence: list[EvidenceItem] = []
+        datapoints = {dp.get("datapoint_id"): dp for dp in state.get("retrieved_datapoints", [])}
+        for datapoint_id in state.get("used_datapoints", []):
+            dp = datapoints.get(datapoint_id, {})
+            evidence.append(
+                EvidenceItem(
+                    datapoint_id=datapoint_id,
+                    name=dp.get("name"),
+                    type=dp.get("datapoint_type", dp.get("type")),
+                    reason="Used for SQL generation",
+                )
+            )
+        return evidence
 
     def _should_retry_sql(self, state: PipelineState) -> str:
         """
@@ -644,6 +795,12 @@ class DataChatPipeline:
             "key_insights": [],
             "used_datapoints": [],
             "assumptions": [],
+            "investigation_memory": None,
+            "retrieved_datapoints": [],
+            "context_confidence": None,
+            "answer_source": None,
+            "answer_confidence": None,
+            "evidence": [],
         }
 
         logger.info(f"Starting pipeline for query: {query[:100]}...")
@@ -702,6 +859,12 @@ class DataChatPipeline:
             "key_insights": [],
             "used_datapoints": [],
             "assumptions": [],
+            "investigation_memory": None,
+            "retrieved_datapoints": [],
+            "context_confidence": None,
+            "answer_source": None,
+            "answer_confidence": None,
+            "evidence": [],
         }
 
         logger.info(f"Starting streaming pipeline for query: {query[:100]}...")
@@ -770,6 +933,12 @@ class DataChatPipeline:
             "key_insights": [],
             "used_datapoints": [],
             "assumptions": [],
+            "investigation_memory": None,
+            "retrieved_datapoints": [],
+            "context_confidence": None,
+            "answer_source": None,
+            "answer_confidence": None,
+            "evidence": [],
         }
 
         logger.info(f"Starting streaming pipeline for query: {query[:100]}...")
@@ -830,6 +999,12 @@ class DataChatPipeline:
                                     query_result.get("row_count", 0) if query_result else 0
                                 ),
                                 "visualization_hint": state_update.get("visualization_hint"),
+                            }
+                        elif current_agent == "ContextAnswerAgent":
+                            agent_data = {
+                                "answer_source": state_update.get("answer_source"),
+                                "confidence": state_update.get("answer_confidence"),
+                                "evidence_count": len(state_update.get("evidence", [])),
                             }
 
                         await event_callback(

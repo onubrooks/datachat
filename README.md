@@ -16,6 +16,7 @@ Ask questions in plain English and get SQL queries, data visualizations, and ins
 - **Multi-Agent Pipeline** - 5 specialized agents (Classifier, Context, SQL, Validator, Executor)
 - **Knowledge Graph** - Semantic understanding of your database schema and business logic
 - **Vector Search** - RAG-powered context retrieval for accurate SQL generation
+- **Context-Only Answers** - Respond directly from DataPoints when SQL isn't required
 - **Real-Time Updates** - WebSocket streaming of agent execution status
 - **Multiple LLM Providers** - OpenAI, Anthropic (Claude), Google (Gemini), or local models
 - **SQL Validation** - Security checks, syntax validation, performance warnings

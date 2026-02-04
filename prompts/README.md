@@ -12,6 +12,7 @@ prompts/
 │   ├── sql_generator.md
 │   ├── validator.md
 │   ├── classifier.md
+│   ├── context_answer.md
 │   ├── executor_summary.md
 │   └── sql_correction.md
 └── templates/        # Reusable components (future)

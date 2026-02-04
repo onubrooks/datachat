@@ -36,6 +36,7 @@ datachat/prompts/
 ├── agents/                     # Agent-specific prompts
 │   ├── classifier.md          # Query classification
 │   ├── context.md             # Schema retrieval
+│   ├── context_answer.md      # Context-only answers
 │   ├── sql_generator.md       # SQL generation
 │   ├── validator.md           # Query validation
 │   └── executor.md            # Execution guidance

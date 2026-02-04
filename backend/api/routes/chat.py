@@ -148,6 +148,9 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             data=data,
             visualization_hint=visualization_hint,
             sources=sources,
+            answer_source=result.get("answer_source"),
+            answer_confidence=result.get("answer_confidence"),
+            evidence=_build_evidence(result),
             validation_errors=result.get("validation_errors", []),
             validation_warnings=result.get("validation_warnings", []),
             metrics=metrics,
@@ -223,3 +226,18 @@ def _build_metrics(result: dict[str, Any]) -> ChatMetrics | None:
     except Exception as e:
         logger.warning(f"Failed to build metrics: {e}")
         return None
+
+
+def _build_evidence(result: dict[str, Any]) -> list[dict[str, Any]]:
+    evidence_items = []
+    for item in result.get("evidence", []):
+        if isinstance(item, dict):
+            evidence_items.append(
+                {
+                    "datapoint_id": item.get("datapoint_id", "unknown"),
+                    "name": item.get("name"),
+                    "type": item.get("type"),
+                    "reason": item.get("reason"),
+                }
+            )
+    return evidence_items

@@ -50,6 +50,14 @@ export interface ChatResponse {
   data: Record<string, unknown[]> | null;
   visualization_hint: string | null;
   sources: DataSource[];
+  answer_source?: string | null;
+  answer_confidence?: number | null;
+  evidence?: {
+    datapoint_id: string;
+    name?: string | null;
+    type?: string | null;
+    reason?: string | null;
+  }[];
   validation_errors?: SQLValidationError[];
   validation_warnings?: ValidationWarning[];
   metrics: ChatMetrics;

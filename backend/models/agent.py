@@ -311,6 +311,9 @@ class ContextAgentOutput(AgentOutput):
     investigation_memory: InvestigationMemory = Field(
         ..., description="Retrieved context and DataPoints"
     )
+    context_confidence: float | None = Field(
+        default=None, description="Confidence that context can answer without SQL"
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -323,6 +326,7 @@ class ContextAgentOutput(AgentOutput):
                     "llm_calls": 0,  # ContextAgent doesn't use LLM
                 },
                 "next_agent": "SQLAgent",
+                "context_confidence": 0.7,
                 "investigation_memory": {
                     "query": "What were total sales last quarter?",
                     "datapoints": [],
@@ -333,6 +337,43 @@ class ContextAgentOutput(AgentOutput):
             }
         }
     )
+
+
+class EvidenceItem(BaseModel):
+    """Evidence item used for context-only answers."""
+
+    datapoint_id: str
+    name: str | None = None
+    type: str | None = None
+    reason: str | None = None
+
+
+class ContextAnswer(BaseModel):
+    """Context-only answer synthesized from DataPoints."""
+
+    answer: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    needs_sql: bool = False
+    clarifying_questions: list[str] = Field(default_factory=list)
+
+
+class ContextAnswerAgentInput(AgentInput):
+    """Input for ContextAnswerAgent."""
+
+    investigation_memory: InvestigationMemory = Field(
+        ..., description="Retrieved context and DataPoints"
+    )
+    intent: str | None = Field(default=None, description="Classifier intent")
+    context_confidence: float | None = Field(
+        default=None, description="Context-only confidence from ContextAgent"
+    )
+
+
+class ContextAnswerAgentOutput(AgentOutput):
+    """Output from ContextAnswerAgent."""
+
+    context_answer: ContextAnswer = Field(..., description="Context-only answer payload")
 
 
 # ============================================================================

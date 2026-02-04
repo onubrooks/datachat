@@ -6,7 +6,7 @@ Pydantic models for FastAPI endpoints.
 
 from pydantic import BaseModel, Field
 
-from backend.models.agent import SQLValidationError, ValidationWarning
+from backend.models.agent import EvidenceItem, SQLValidationError, ValidationWarning
 
 
 class Message(BaseModel):
@@ -69,6 +69,15 @@ class ChatResponse(BaseModel):
     sources: list[DataSource] = Field(
         default_factory=list, description="Data sources used to answer"
     )
+    answer_source: str | None = Field(
+        default=None, description="Answer source (context|sql|error)"
+    )
+    answer_confidence: float | None = Field(
+        default=None, description="Confidence score for the answer"
+    )
+    evidence: list[EvidenceItem] = Field(
+        default_factory=list, description="Evidence items supporting the answer"
+    )
     validation_errors: list[SQLValidationError] = Field(
         default_factory=list, description="SQL validation errors (if any)"
     )
@@ -91,6 +100,16 @@ class ChatResponse(BaseModel):
                         "type": "Schema",
                         "name": "Fact Sales Table",
                         "relevance_score": 0.95,
+                    }
+                ],
+                "answer_source": "sql",
+                "answer_confidence": 0.92,
+                "evidence": [
+                    {
+                        "datapoint_id": "table_fact_sales_001",
+                        "name": "Fact Sales Table",
+                        "type": "Schema",
+                        "reason": "Used for SQL generation",
                     }
                 ],
                 "metrics": {
