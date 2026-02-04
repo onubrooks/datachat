@@ -72,6 +72,7 @@ class PipelineState(TypedDict, total=False):
     investigation_memory: dict[str, Any] | None
     retrieved_datapoints: list[dict[str, Any]]
     context_confidence: float | None
+    context_needs_sql: bool | None
 
     # SQL output
     generated_sql: str | None
@@ -203,6 +204,14 @@ class DataChatPipeline:
                 "sql": "sql",
             },
         )
+        workflow.add_conditional_edges(
+            "context_answer",
+            self._should_execute_after_context_answer,
+            {
+                "sql": "sql",
+                "end": END,
+            },
+        )
 
         # Conditional edge from validator
         workflow.add_conditional_edges(
@@ -217,7 +226,6 @@ class DataChatPipeline:
 
         workflow.add_edge("sql", "validator")
         workflow.add_edge("executor", END)
-        workflow.add_edge("context_answer", END)
         workflow.add_edge("error_handler", END)
 
         return workflow.compile()
@@ -379,6 +387,7 @@ class DataChatPipeline:
                 evidence.model_dump()
                 for evidence in output.context_answer.evidence
             ]
+            state["context_needs_sql"] = output.context_answer.needs_sql
             state["generated_sql"] = None
             state["validated_sql"] = None
             state["query_result"] = None
@@ -709,6 +718,13 @@ class DataChatPipeline:
         )
         return any(keyword in query for keyword in keywords)
 
+    def _should_execute_after_context_answer(self, state: PipelineState) -> str:
+        if state.get("error"):
+            return "end"
+        if state.get("context_needs_sql"):
+            return "sql"
+        return "end"
+
     def _build_evidence_items(self, state: PipelineState) -> list[EvidenceItem]:
         evidence: list[EvidenceItem] = []
         datapoints = {dp.get("datapoint_id"): dp for dp in state.get("retrieved_datapoints", [])}
@@ -798,6 +814,7 @@ class DataChatPipeline:
             "investigation_memory": None,
             "retrieved_datapoints": [],
             "context_confidence": None,
+            "context_needs_sql": None,
             "answer_source": None,
             "answer_confidence": None,
             "evidence": [],
@@ -862,6 +879,7 @@ class DataChatPipeline:
             "investigation_memory": None,
             "retrieved_datapoints": [],
             "context_confidence": None,
+            "context_needs_sql": None,
             "answer_source": None,
             "answer_confidence": None,
             "evidence": [],
@@ -936,6 +954,7 @@ class DataChatPipeline:
             "investigation_memory": None,
             "retrieved_datapoints": [],
             "context_confidence": None,
+            "context_needs_sql": None,
             "answer_source": None,
             "answer_confidence": None,
             "evidence": [],

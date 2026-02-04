@@ -23,6 +23,7 @@ import { Card } from "../ui/card";
 import { useChatStore } from "@/lib/stores/chat";
 import { apiClient, wsClient, type SetupStep } from "@/lib/api";
 import { SystemSetup } from "../system/SystemSetup";
+import { getWaitingUxMode, type WaitingUxMode } from "@/lib/settings";
 
 export function ChatInterface() {
   const router = useRouter();
@@ -51,6 +52,7 @@ export function ChatInterface() {
   const [setupCompleted, setSetupCompleted] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [isBackendReachable, setIsBackendReachable] = useState(false);
+  const [waitingMode, setWaitingMode] = useState<WaitingUxMode>("animated");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -75,6 +77,17 @@ export function ChatInterface() {
       });
     return () => {
       isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setWaitingMode(getWaitingUxMode());
+    const handleStorage = () => {
+      setWaitingMode(getWaitingUxMode());
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
     };
   }, []);
 
@@ -131,6 +144,9 @@ export function ChatInterface() {
               data: response.data,
               visualization_hint: response.visualization_hint,
               sources: response.sources,
+              answer_source: response.answer_source,
+              answer_confidence: response.answer_confidence,
+              evidence: response.evidence,
               metrics: response.metrics,
             });
             if (response.conversation_id) {
@@ -223,6 +239,9 @@ export function ChatInterface() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button asChild variant="ghost" size="sm">
+            <Link href="/settings">Settings</Link>
+          </Button>
           <Button asChild variant="secondary" size="sm">
             <Link href="/databases">Manage DataPoints</Link>
           </Button>
@@ -296,7 +315,7 @@ export function ChatInterface() {
         ))}
 
         {/* Agent Status */}
-        <AgentStatus />
+        <AgentStatus mode={waitingMode} />
 
         {/* Error Display */}
         {error && (

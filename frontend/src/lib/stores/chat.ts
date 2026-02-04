@@ -19,6 +19,14 @@ export interface Message extends ChatMessage {
     name: string;
     relevance_score: number;
   }>;
+  answer_source?: string | null;
+  answer_confidence?: number | null;
+  evidence?: Array<{
+    datapoint_id: string;
+    name?: string | null;
+    type?: string | null;
+    reason?: string | null;
+  }>;
   metrics?: {
     total_latency_ms: number;
     agent_timings: Record<string, number>;
@@ -151,6 +159,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         data: response.data,
         visualization_hint: response.visualization_hint,
         sources: response.sources,
+        answer_source: response.answer_source,
+        answer_confidence: response.answer_confidence,
+        evidence: response.evidence,
         metrics: response.metrics,
       };
 

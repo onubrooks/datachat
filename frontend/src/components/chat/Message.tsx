@@ -12,7 +12,15 @@
 "use client";
 
 import React from "react";
-import { User, Bot, Code, Table as TableIcon, BookOpen, Clock } from "lucide-react";
+import {
+  User,
+  Bot,
+  Code,
+  Table as TableIcon,
+  BookOpen,
+  Clock,
+  BadgeCheck,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { cn } from "@/lib/utils";
 import type { Message as MessageType } from "@/lib/stores/chat";
@@ -58,6 +66,16 @@ export function Message({ message }: MessageProps) {
               : "bg-muted text-muted-foreground"
           )}
         >
+          {!isUser && message.answer_source && (
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+              <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-1 text-foreground">
+                <BadgeCheck size={12} />
+                {message.answer_source}
+                {typeof message.answer_confidence === "number" &&
+                  ` · ${message.answer_confidence.toFixed(2)}`}
+              </span>
+            </div>
+          )}
           {/* Main message text */}
           <div className="whitespace-pre-wrap">{message.content}</div>
 
@@ -149,6 +167,44 @@ export function Message({ message }: MessageProps) {
                     </li>
                   ))}
                 </ul>
+              </CardContent>
+            </Card>
+          )}
+
+          {message.evidence && message.evidence.length > 0 && (
+            <Card className="mt-4">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <BookOpen size={16} />
+                  Evidence ({message.evidence.length})
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <details className="text-sm">
+                  <summary className="cursor-pointer text-xs text-muted-foreground">
+                    Show evidence details
+                  </summary>
+                  <ul className="mt-2 space-y-2">
+                    {message.evidence.map((item) => (
+                      <li
+                        key={item.datapoint_id}
+                        className="text-sm flex items-start gap-2"
+                      >
+                        <span className="text-xs px-2 py-0.5 rounded bg-secondary">
+                          {item.type || "DataPoint"}
+                        </span>
+                        <span className="flex-1">
+                          {item.name || item.datapoint_id}
+                          {item.reason && (
+                            <span className="text-xs text-muted-foreground ml-2">
+                              ({item.reason})
+                            </span>
+                          )}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               </CardContent>
             </Card>
           )}

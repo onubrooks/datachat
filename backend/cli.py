@@ -259,6 +259,35 @@ def _build_columnar_data(query_result: dict[str, Any] | None) -> dict[str, list]
     return None
 
 
+def _format_source_footer(result: dict[str, Any]) -> str | None:
+    source = result.get("answer_source")
+    confidence = result.get("answer_confidence")
+    if not source:
+        return None
+    if isinstance(confidence, (int, float)):
+        return f"Source: {source} ({confidence:.2f})"
+    return f"Source: {source}"
+
+
+def _print_evidence(result: dict[str, Any]) -> None:
+    evidence = result.get("evidence") or []
+    if not evidence:
+        console.print("[dim]No evidence items available.[/dim]")
+        return
+    table = Table(title="Evidence", show_header=True, header_style="bold cyan")
+    table.add_column("DataPoint")
+    table.add_column("Type")
+    table.add_column("Reason")
+    for item in evidence:
+        if isinstance(item, dict):
+            table.add_row(
+                str(item.get("name") or item.get("datapoint_id") or "unknown"),
+                str(item.get("type") or "DataPoint"),
+                str(item.get("reason") or ""),
+            )
+    console.print(table)
+
+
 # ============================================================================
 # CLI Commands
 # ============================================================================
@@ -272,7 +301,8 @@ def cli():
 
 
 @cli.command()
-def chat():
+@click.option("--evidence", is_flag=True, help="Show DataPoint evidence details")
+def chat(evidence: bool):
     """Interactive REPL mode for conversations."""
     console.print(
         Panel.fit(
@@ -321,6 +351,11 @@ def chat():
                     console.print()
                     format_answer(answer, sql, data)
 
+                    footer = _format_source_footer(result)
+                    if footer:
+                        console.print(f"[dim]{footer}[/dim]")
+                        console.print()
+
                     # Display metrics
                     metrics = Table(show_header=False, box=None)
                     metrics.add_row(
@@ -331,6 +366,10 @@ def chat():
                     metrics.add_row("🔄 Retries:", str(result.get("retry_count", 0)))
                     console.print(metrics)
                     console.print()
+
+                    if evidence:
+                        _print_evidence(result)
+                        console.print()
 
                     # Update conversation history
                     conversation_history.append({"role": "user", "content": query})
@@ -359,7 +398,8 @@ def chat():
 
 @cli.command()
 @click.argument("query")
-def ask(query: str):
+@click.option("--evidence", is_flag=True, help="Show DataPoint evidence details")
+def ask(query: str, evidence: bool):
     """Ask a single question and exit."""
 
     async def run_query():
@@ -380,6 +420,13 @@ def ask(query: str):
             console.print()
             format_answer(answer, sql, data)
             console.print()
+            footer = _format_source_footer(result)
+            if footer:
+                console.print(f"[dim]{footer}[/dim]")
+                console.print()
+            if evidence:
+                _print_evidence(result)
+                console.print()
 
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")
