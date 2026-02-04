@@ -17,6 +17,8 @@ import pytest
 from backend.models import (
     AgentMetadata,
     ClassifierAgentOutput,
+    ContextAnswer,
+    ContextAnswerAgentOutput,
     ContextAgentOutput,
     ExecutedQuery,
     ExecutorAgentOutput,
@@ -116,7 +118,22 @@ class TestPipelineExecution:
                     total_retrieved=1,
                     sources_used=["vector"],
                 ),
+                context_confidence=0.2,
                 metadata=AgentMetadata(agent_name="ContextAgent", llm_calls=0),
+            )
+        )
+
+        pipeline.context_answer.execute = AsyncMock(
+            return_value=ContextAnswerAgentOutput(
+                success=True,
+                context_answer=ContextAnswer(
+                    answer="Here is a context-only answer.",
+                    confidence=0.8,
+                    evidence=[],
+                    needs_sql=False,
+                    clarifying_questions=[],
+                ),
+                metadata=AgentMetadata(agent_name="ContextAnswerAgent", llm_calls=1),
             )
         )
 
@@ -186,6 +203,7 @@ class TestPipelineExecution:
         assert mock_agents.sql.execute.called
         assert mock_agents.validator.execute.called
         assert mock_agents.executor.execute.called
+        assert not mock_agents.context_answer.execute.called
 
         # Verify final state
         assert result["natural_language_answer"] == "Found 1 result."
@@ -233,6 +251,108 @@ class TestPipelineExecution:
         # ExecutorAgent outputs
         assert result["natural_language_answer"] == "Found 1 result."
         assert result["visualization_hint"] == "table"
+
+    @pytest.mark.asyncio
+    async def test_routes_to_context_answer_for_exploration(self, mock_agents):
+        mock_agents.classifier.execute = AsyncMock(
+            return_value=ClassifierAgentOutput(
+                success=True,
+                classification=QueryClassification(
+                    intent="exploration",
+                    entities=[],
+                    complexity="simple",
+                    clarification_needed=False,
+                    clarifying_questions=[],
+                    confidence=0.9,
+                ),
+                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=1),
+            )
+        )
+        mock_agents.context.execute = AsyncMock(
+            return_value=ContextAgentOutput(
+                success=True,
+                data={},
+                investigation_memory=InvestigationMemory(
+                    query="test query",
+                    datapoints=[],
+                    retrieval_mode="hybrid",
+                    total_retrieved=0,
+                    sources_used=[],
+                ),
+                context_confidence=0.8,
+                metadata=AgentMetadata(agent_name="ContextAgent", llm_calls=0),
+            )
+        )
+        mock_agents.context_answer.execute = AsyncMock(
+            return_value=ContextAnswerAgentOutput(
+                success=True,
+                context_answer=ContextAnswer(
+                    answer="Context-only response.",
+                    confidence=0.7,
+                    evidence=[],
+                    needs_sql=False,
+                    clarifying_questions=[],
+                ),
+                metadata=AgentMetadata(agent_name="ContextAnswerAgent", llm_calls=1),
+            )
+        )
+
+        result = await mock_agents.run("what tables exist?")
+
+        assert mock_agents.context_answer.execute.called
+        assert not mock_agents.sql.execute.called
+        assert result["answer_source"] == "context"
+
+    @pytest.mark.asyncio
+    async def test_context_answer_can_fall_through_to_sql(self, mock_agents):
+        mock_agents.classifier.execute = AsyncMock(
+            return_value=ClassifierAgentOutput(
+                success=True,
+                classification=QueryClassification(
+                    intent="exploration",
+                    entities=[],
+                    complexity="simple",
+                    clarification_needed=False,
+                    clarifying_questions=[],
+                    confidence=0.9,
+                ),
+                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=1),
+            )
+        )
+        mock_agents.context.execute = AsyncMock(
+            return_value=ContextAgentOutput(
+                success=True,
+                data={},
+                investigation_memory=InvestigationMemory(
+                    query="test query",
+                    datapoints=[],
+                    retrieval_mode="hybrid",
+                    total_retrieved=0,
+                    sources_used=[],
+                ),
+                context_confidence=0.8,
+                metadata=AgentMetadata(agent_name="ContextAgent", llm_calls=0),
+            )
+        )
+        mock_agents.context_answer.execute = AsyncMock(
+            return_value=ContextAnswerAgentOutput(
+                success=True,
+                context_answer=ContextAnswer(
+                    answer="Need numbers.",
+                    confidence=0.5,
+                    evidence=[],
+                    needs_sql=True,
+                    clarifying_questions=[],
+                ),
+                metadata=AgentMetadata(agent_name="ContextAnswerAgent", llm_calls=1),
+            )
+        )
+
+        result = await mock_agents.run("show me counts")
+
+        assert mock_agents.context_answer.execute.called
+        assert mock_agents.sql.execute.called
+        assert result["answer_source"] == "sql"
 
 
 class TestRetryLogic:
