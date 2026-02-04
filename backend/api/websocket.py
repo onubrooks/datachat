@@ -11,6 +11,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
+from fastapi.encoders import jsonable_encoder
 
 from backend.initialization.initializer import SystemInitializer
 
@@ -222,7 +223,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
             "metrics": metrics,
             "conversation_id": conversation_id,
         }
-        await websocket.send_json(payload, default=str)
+        await websocket.send_json(jsonable_encoder(payload))
 
         logger.info(
             "WebSocket request completed successfully",
