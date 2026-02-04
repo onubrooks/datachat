@@ -207,20 +207,19 @@ async def websocket_chat(websocket: WebSocket) -> None:
         }
 
         # Send final complete event
-        await websocket.send_json(
-            {
-                "event": "complete",
-                "answer": answer,
-                "sql": sql_query,
-                "data": data_result,
-                "visualization_hint": visualization_hint,
-                "sources": sources,
-                "validation_errors": result.get("validation_errors", []),
-                "validation_warnings": result.get("validation_warnings", []),
-                "metrics": metrics,
-                "conversation_id": conversation_id,
-            }
-        )
+        payload = {
+            "event": "complete",
+            "answer": answer,
+            "sql": sql_query,
+            "data": data_result,
+            "visualization_hint": visualization_hint,
+            "sources": sources,
+            "validation_errors": result.get("validation_errors", []),
+            "validation_warnings": result.get("validation_warnings", []),
+            "metrics": metrics,
+            "conversation_id": conversation_id,
+        }
+        await websocket.send_json(payload, default=str)
 
         logger.info(
             "WebSocket request completed successfully",
