@@ -11,8 +11,8 @@ def test_prompt_hashes_unchanged():
     loader = PromptLoader()
     expected = {
         "system/main.md": "1748205ee881",
-        "agents/sql_generator.md": "7dae91c01a37",
-        "agents/classifier.md": "eee05843efe4",
+        "agents/sql_generator.md": "522088291668",
+        "agents/classifier.md": "22bdc6be918c",
         "agents/executor_summary.md": "62cdfade0184",
         "agents/sql_correction.md": "7334d4e253be",
     }

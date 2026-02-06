@@ -376,6 +376,35 @@ class ContextAnswerAgentOutput(AgentOutput):
     context_answer: ContextAnswer = Field(..., description="Context-only answer payload")
 
 
+class ToolCall(BaseModel):
+    """Tool call requested by ToolPlanner."""
+
+    name: str = Field(..., description="Tool name")
+    arguments: dict[str, Any] = Field(default_factory=dict, description="Tool arguments")
+
+
+class ToolPlan(BaseModel):
+    """Plan returned by the tool planner."""
+
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    rationale: str | None = None
+    fallback: Literal["pipeline", "none"] = "pipeline"
+
+
+class ToolPlannerAgentInput(AgentInput):
+    """Input for ToolPlannerAgent."""
+
+    query: str = Field(..., description="User query")
+    conversation_history: list[Message] = Field(default_factory=list)
+    available_tools: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ToolPlannerAgentOutput(AgentOutput):
+    """Output from ToolPlannerAgent."""
+
+    plan: ToolPlan = Field(..., description="Tool plan")
+
+
 # ============================================================================
 # SQLAgent Models
 # ============================================================================

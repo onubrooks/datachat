@@ -7,6 +7,7 @@ Uses LLM to compose a grounded answer and evidence list.
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from backend.agents.base import BaseAgent
@@ -44,6 +45,26 @@ class ContextAnswerAgent(BaseAgent):
         logger.info(f"[{self.name}] Generating context-only answer")
 
         try:
+            datapoint_count = self._count_managed_datapoints(input.query)
+            if datapoint_count is not None:
+                context_answer = ContextAnswer(
+                    answer=(
+                        f"I have {datapoint_count} DataPoints loaded for this workspace."
+                    ),
+                    confidence=0.9,
+                    evidence=[],
+                    needs_sql=False,
+                    clarifying_questions=[],
+                )
+                metadata = self._create_metadata()
+                metadata.llm_calls = 0
+                return ContextAnswerAgentOutput(
+                    success=True,
+                    context_answer=context_answer,
+                    metadata=metadata,
+                    next_agent=None,
+                )
+
             context_summary = self._build_context_summary(input.investigation_memory)
             prompt = self.prompts.render(
                 "agents/context_answer.md",
@@ -62,6 +83,8 @@ class ContextAnswerAgent(BaseAgent):
             response = await self.llm.generate(request)
 
             context_answer = self._parse_response(response.content, input)
+            if self._requires_sql(input.query):
+                context_answer.needs_sql = True
 
             metadata = self._create_metadata()
             metadata.llm_calls = 1
@@ -150,6 +173,8 @@ class ContextAnswerAgent(BaseAgent):
                     reason=item.get("reason"),
                 )
             )
+            if len(items) >= 3:
+                break
         return items
 
     def _fallback_answer(self, input: ContextAnswerAgentInput) -> ContextAnswer:
@@ -159,7 +184,7 @@ class ContextAnswerAgent(BaseAgent):
                 answer="I don't have enough context to answer that yet.",
                 confidence=0.1,
                 evidence=[],
-                needs_sql=True,
+                needs_sql=self._requires_sql(input.query),
                 clarifying_questions=["Which table or metric should I use?"],
             )
 
@@ -172,10 +197,65 @@ class ContextAnswerAgent(BaseAgent):
                 reason="Top retrieved DataPoint",
             )
         ]
+        needs_sql = self._requires_sql(input.query)
+        summary = self._summarize_datapoint(top)
+        answer = summary
         return ContextAnswer(
-            answer=f"Here is a relevant DataPoint: {top.name}.",
+            answer=answer,
             confidence=0.4,
             evidence=evidence,
-            needs_sql=False,
+            needs_sql=needs_sql,
             clarifying_questions=[],
         )
+
+    def _summarize_datapoint(self, datapoint) -> str:
+        if datapoint.datapoint_type != "Schema":
+            return f"{datapoint.name} looks most relevant to your question."
+
+        metadata = datapoint.metadata if isinstance(datapoint.metadata, dict) else {}
+        table = metadata.get("table_name")
+        schema = metadata.get("schema") or metadata.get("schema_name")
+        full_name = f"{schema}.{table}" if schema and table else table
+        purpose = metadata.get("business_purpose")
+        columns = metadata.get("key_columns") or []
+        column_names = [col.get("name", "unknown") for col in columns[:5]]
+
+        parts = []
+        if full_name:
+            parts.append(f"The {full_name} table is relevant.")
+        else:
+            parts.append(f"{datapoint.name} is a relevant table.")
+        if purpose:
+            parts.append(purpose)
+        if column_names:
+            parts.append(f"Key columns include {', '.join(column_names)}.")
+        return " ".join(parts)
+
+    def _requires_sql(self, query: str) -> bool:
+        query_lower = query.lower()
+        keywords = (
+            "how many",
+            "count",
+            "total",
+            "sum",
+            "average",
+            "avg",
+            "min",
+            "max",
+            "row count",
+            "rows",
+            "number of",
+        )
+        return any(keyword in query_lower for keyword in keywords)
+
+    def _count_managed_datapoints(self, query: str) -> int | None:
+        query_lower = query.lower()
+        if "datapoint" not in query_lower and "data point" not in query_lower:
+            return None
+        if not self._requires_sql(query_lower):
+            return None
+
+        managed_dir = Path("datapoints") / "managed"
+        if not managed_dir.exists():
+            return 0
+        return sum(1 for path in managed_dir.rglob("*.json") if path.is_file())

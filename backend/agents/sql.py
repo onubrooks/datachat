@@ -227,6 +227,28 @@ class SQLAgent(BaseAgent):
                 clarifying_questions=[],
             )
 
+        sample_sql = self._build_sample_rows_fallback(input)
+        if sample_sql:
+            return GeneratedSQL(
+                sql=sample_sql,
+                explanation="Returns a small sample of rows from the most relevant table.",
+                used_datapoints=[],
+                confidence=0.9,
+                assumptions=[],
+                clarifying_questions=[],
+            )
+
+        row_count_sql = self._build_row_count_fallback(input)
+        if row_count_sql:
+            return GeneratedSQL(
+                sql=row_count_sql,
+                explanation="Counts rows using the most relevant table.",
+                used_datapoints=[],
+                confidence=0.9,
+                assumptions=[],
+                clarifying_questions=[],
+            )
+
         # Build prompt with context
         prompt = await self._build_generation_prompt(input)
 
@@ -248,7 +270,19 @@ class SQLAgent(BaseAgent):
             self._track_llm_call(tokens=response.usage.total_tokens)
 
             # Parse structured response
-            generated_sql = self._parse_llm_response(response.content, input)
+            try:
+                generated_sql = self._parse_llm_response(response.content, input)
+            except ValueError:
+                retry_request = llm_request.model_copy()
+                retry_request.messages.append(
+                    LLMMessage(
+                        role="system",
+                        content="Return ONLY JSON with a top-level 'sql' field.",
+                    )
+                )
+                retry_response = await self.llm.generate(retry_request)
+                self._track_llm_call(tokens=retry_response.usage.total_tokens)
+                generated_sql = self._parse_llm_response(retry_response.content, input)
 
             logger.debug(
                 f"Generated SQL: {generated_sql.sql[:200]}...",
@@ -467,6 +501,76 @@ class SQLAgent(BaseAgent):
             "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
             "ORDER BY table_schema, table_name"
         )
+
+    def _build_row_count_fallback(self, input: SQLAgentInput) -> str | None:
+        if not self._requires_row_count(input.query):
+            return None
+        if self._requires_sample_rows(input.query):
+            return None
+        table_name = self._select_schema_table(input)
+        if not table_name:
+            return None
+        return f"SELECT COUNT(*) FROM {table_name}"
+
+    def _requires_row_count(self, query: str) -> bool:
+        text = query.lower()
+        patterns = [
+            r"\brow count\b",
+            r"\bhow many rows\b",
+            r"\bnumber of rows\b",
+            r"\bcount of rows\b",
+            r"\btotal rows\b",
+            r"\brow total\b",
+            r"\bhow many records\b",
+            r"\brecord count\b",
+            r"\brecords in\b",
+        ]
+        return any(re.search(pattern, text) for pattern in patterns)
+
+    def _build_sample_rows_fallback(self, input: SQLAgentInput) -> str | None:
+        if not self._requires_sample_rows(input.query):
+            return None
+        table_name = self._select_schema_table(input)
+        if not table_name:
+            return None
+        limit = self._extract_sample_limit(input.query)
+        return f"SELECT * FROM {table_name} LIMIT {limit}"
+
+    def _requires_sample_rows(self, query: str) -> bool:
+        text = query.lower()
+        patterns = [
+            r"\bshow\b.*\brows\b",
+            r"\bfirst\s+\d+\b",
+            r"\btop\s+\d+\b",
+            r"\bpreview\b",
+            r"\bsample\b",
+            r"\bexample\b",
+            r"\bshow me\b.*\brows\b",
+            r"\bdisplay\b.*\brows\b",
+            r"\blimit\b",
+        ]
+        return any(re.search(pattern, text) for pattern in patterns)
+
+    def _extract_sample_limit(self, query: str) -> int:
+        text = query.lower()
+        match = re.search(r"\b(first|top|limit)\s+(\d+)\b", text)
+        if match:
+            try:
+                value = int(match.group(2))
+                return max(1, min(value, 25))
+            except ValueError:
+                return 3
+        return 3
+
+    def _select_schema_table(self, input: SQLAgentInput) -> str | None:
+        for dp in input.investigation_memory.datapoints:
+            if dp.datapoint_type != "Schema":
+                continue
+            metadata = dp.metadata if isinstance(dp.metadata, dict) else {}
+            table_name = metadata.get("table_name") or metadata.get("table")
+            if table_name:
+                return table_name
+        return None
 
     def _get_system_prompt(self) -> str:
         """

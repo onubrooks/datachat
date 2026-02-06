@@ -74,6 +74,10 @@ That's it! DataChat is now running with:
 >
 > - Open <http://localhost:3000> and follow the setup prompt, or run:
 >   `docker-compose exec backend datachat setup`
+> - Non-interactive CLI setup:
+>   `datachat setup --target-db postgresql://postgres:@localhost:5432/postgres \
+>   --system-db postgresql://datachat:datachat_password@localhost:5432/datachat \
+>   --auto-profile --max-tables 10 --non-interactive`
 > - Enable auto-profiling to generate draft DataPoints, then review them in the
 >   Database Management page. Approving a DataPoint replaces any existing
 >   approved DataPoint for the same table.
@@ -83,9 +87,10 @@ That's it! DataChat is now running with:
 > **Option B: Manual DataPoints**
 >
 > - Create DataPoint files (examples in [GETTING_STARTED.md](GETTING_STARTED.md))
-> - Load them: `docker-compose exec backend datachat dp sync`
+> - Load them: `docker-compose exec backend datachat dp sync --datapoints-dir datapoints/managed`
+>   (or `datapoints/demo` if you loaded the demo dataset)
 >
-> **Without DataPoints, queries will fail.**
+> **Without DataPoints, DataChat falls back to live schema only.**
 
 **AWS RDS note:** Use SSL if required by your instance:
 ```
@@ -381,6 +386,9 @@ datachat status
 datachat dp list
 datachat dp add schema ./datapoints/tables/fact_sales.json
 datachat dp sync --datapoints-dir ./datapoints
+datachat dp pending list
+datachat dp pending approve <pending_id>
+datachat dp pending approve-all
 ```
 
 ### API

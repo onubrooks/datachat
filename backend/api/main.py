@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse
 
 from backend.agents.base import AgentError
 from backend.api import websocket
-from backend.api.routes import chat, databases, datapoints, health, profiling, system
+from backend.api.routes import chat, databases, datapoints, health, profiling, system, tools
 from backend.config import get_settings
 from backend.connectors.base import ConnectionError as ConnectorConnectionError
 from backend.connectors.base import QueryError
@@ -298,6 +298,7 @@ app.include_router(system.router, prefix="/api/v1", tags=["system"])
 app.include_router(databases.router, prefix="/api/v1", tags=["databases"])
 app.include_router(profiling.router, prefix="/api/v1", tags=["profiling"])
 app.include_router(datapoints.router, prefix="/api/v1", tags=["datapoints"])
+app.include_router(tools.router, prefix="/api/v1", tags=["tools"])
 app.include_router(websocket.router, tags=["websocket"])
 
 

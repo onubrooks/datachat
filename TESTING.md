@@ -353,8 +353,16 @@ Optional profiling + generation via CLI:
 datachat profile start --connection-id <uuid> --sample-size 100
 
 # Start DataPoint generation with batching + depth
-datachat dp generate --profile-id <uuid> --depth metrics_full --batch-size 10
+# If --profile-id is omitted, the latest profile on the default connection is used.
+datachat dp generate --max-tables 10 --depth metrics_full --batch-size 10
+
+# Review pending items (requires backend)
+datachat dp pending list
+datachat dp pending approve-all --latest
 ```
+
+Note: `--max-tables` limits the number of tables profiled, but each table can generate
+multiple DataPoints (schema + metrics), so the pending count can exceed the table limit.
 
 UI reset:
 - Database Manager has a **Reset System** button that clears registry/profiling,
@@ -417,6 +425,9 @@ datachat status
 # Single query mode
 datachat ask "How many tables are in the database?"
 
+# For long outputs, use a scrollable pager
+datachat ask --pager "Describe the public.events table"
+
 # Expected output (will show agent status during processing):
 ╭─ Answer ──────────────────────────────────╮
 │ Based on the database schema, there are   │
@@ -439,19 +450,26 @@ datachat ask "How many tables are in the database?"
 
 #### 3.5 Test Onboarding Guardrails (Missing DB/DataPoints)
 
-If you haven't configured a database or loaded DataPoints, the CLI should block queries:
+If you haven't configured a database, the CLI should block queries. If you have
+a database but no DataPoints, the CLI should proceed with live schema only.
 
 ```bash
 datachat ask "How many users signed up last week?"
 ```
 
-Expected output:
+Expected output (no database configured):
 ```text
 DataChat requires setup before queries can run.
 Note: SYSTEM_DATABASE_URL enables registry/profiling and demo data.
 - Connect a database: ...
 - Load DataPoints: ...
 Hint: Run 'datachat setup' or 'datachat demo' to continue.
+```
+
+Expected output (database configured, no DataPoints):
+```text
+No DataPoints loaded. Continuing with live schema only.
+Hint: Run 'datachat dp sync' or enable profiling for richer answers.
 ```
 
 #### 3.6 Test Interactive Chat Mode
@@ -494,6 +512,11 @@ datachat dp list
 
 # Expected output (if no DataPoints yet):
 No DataPoints found in knowledge base.
+
+# Review pending DataPoints (requires backend running)
+datachat dp pending list
+datachat dp pending approve <pending_id>
+datachat dp pending approve-all
 
 # Add a sample DataPoint (create one first)
 cat > /tmp/sample_table.json << 'EOF'
@@ -774,7 +797,7 @@ Open Developer Tools (F12):
    EOF
 
    # Sync DataPoints
-   docker-compose exec backend datachat dp sync
+   docker-compose exec backend datachat dp sync --datapoints-dir datapoints/managed
    ```
 
 3. **Test via Web UI:**
@@ -983,7 +1006,7 @@ After successful testing:
 
 1. **Add Your Data:**
    - Create DataPoints for your database schema
-   - Use `datachat dp sync` to load them
+   - Use `datachat dp sync --datapoints-dir datapoints/managed` to load them
 
 2. **Customize:**
    - Adjust LLM models in .env

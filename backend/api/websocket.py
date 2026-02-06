@@ -220,6 +220,9 @@ async def websocket_chat(websocket: WebSocket) -> None:
             "evidence": result.get("evidence", []),
             "validation_errors": result.get("validation_errors", []),
             "validation_warnings": result.get("validation_warnings", []),
+            "tool_approval_required": bool(result.get("tool_approval_required")),
+            "tool_approval_message": result.get("tool_approval_message"),
+            "tool_approval_calls": result.get("tool_approval_calls", []),
             "metrics": metrics,
             "conversation_id": conversation_id,
         }

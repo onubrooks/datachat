@@ -53,6 +53,13 @@ export function ChatInterface() {
   const [isInitializing, setIsInitializing] = useState(false);
   const [isBackendReachable, setIsBackendReachable] = useState(false);
   const [waitingMode, setWaitingMode] = useState<WaitingUxMode>("animated");
+  const [toolApprovalOpen, setToolApprovalOpen] = useState(false);
+  const [toolApprovalCalls, setToolApprovalCalls] = useState<
+    { name: string; arguments?: Record<string, unknown> }[]
+  >([]);
+  const [toolApprovalMessage, setToolApprovalMessage] = useState<string | null>(null);
+  const [toolApprovalRunning, setToolApprovalRunning] = useState(false);
+  const [toolApprovalError, setToolApprovalError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -148,9 +155,20 @@ export function ChatInterface() {
               answer_confidence: response.answer_confidence,
               evidence: response.evidence,
               metrics: response.metrics,
+              tool_approval_required: response.tool_approval_required,
+              tool_approval_message: response.tool_approval_message,
+              tool_approval_calls: response.tool_approval_calls,
             });
             if (response.conversation_id) {
               setConversationId(response.conversation_id);
+            }
+            if (response.tool_approval_required && response.tool_approval_calls?.length) {
+              setToolApprovalCalls(response.tool_approval_calls);
+              setToolApprovalMessage(
+                response.tool_approval_message ||
+                  "Approval required to run the requested tool."
+              );
+              setToolApprovalOpen(true);
             }
             setLoading(false);
             resetAgentStatus();
@@ -177,6 +195,63 @@ export function ChatInterface() {
       setLoading(false);
       resetAgentStatus();
     }
+  };
+
+  const handleApproveTools = async () => {
+    setToolApprovalError(null);
+    setToolApprovalRunning(true);
+    try {
+      for (const call of toolApprovalCalls) {
+        const result = await apiClient.executeTool({
+          name: call.name,
+          arguments: call.arguments || {},
+          approved: true,
+        });
+        const payload = result.result || {};
+        const summary =
+          (payload as Record<string, unknown>).message ||
+          (payload as Record<string, unknown>).answer ||
+          `Tool ${call.name} completed.`;
+        addMessage({
+          role: "assistant",
+          content: String(summary),
+        });
+      }
+      setToolApprovalOpen(false);
+      setToolApprovalCalls([]);
+      setToolApprovalMessage(null);
+    } catch (err) {
+      setToolApprovalError((err as Error).message);
+    } finally {
+      setToolApprovalRunning(false);
+    }
+  };
+
+  const toolCostEstimate = () => {
+    if (!toolApprovalCalls.length) {
+      return null;
+    }
+    const estimates = toolApprovalCalls.map((call) => {
+      if (call.name === "profile_and_generate_datapoints") {
+        const args = call.arguments || {};
+        const batchSize = Number(args.batch_size || 10);
+        const maxTables = args.max_tables ? Number(args.max_tables) : null;
+        const tableCount = maxTables || "unknown";
+        const batches =
+          typeof tableCount === "number"
+            ? Math.ceil(tableCount / batchSize)
+            : "unknown";
+        return {
+          tool: call.name,
+          tables: tableCount,
+          batchSize,
+          batches,
+          llmCalls: typeof batches === "number" ? batches : "unknown",
+        };
+      }
+      return { tool: call.name };
+    });
+    return estimates;
   };
 
   // Handle key press (Enter to send)
@@ -358,6 +433,62 @@ export function ChatInterface() {
           Press Enter to send
         </p>
       </div>
+      {toolApprovalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-lg bg-background p-6 shadow-lg">
+            <h3 className="text-base font-semibold">Tool Approval Required</h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {toolApprovalMessage}
+            </p>
+            <div className="mt-4 space-y-2 text-xs text-muted-foreground">
+              {toolApprovalCalls.map((call) => (
+                <div key={call.name} className="rounded-md border border-border p-2">
+                  <div className="font-medium text-foreground">{call.name}</div>
+                  <pre className="mt-1 whitespace-pre-wrap">
+                    {JSON.stringify(call.arguments || {}, null, 2)}
+                  </pre>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              Cost hint:
+              {toolCostEstimate() ? (
+                <div className="mt-2 space-y-1">
+                  {toolCostEstimate()?.map((item, index) => (
+                    <div key={`${item.tool}-${index}`}>
+                      {item.tool}: tables={item.tables ?? "unknown"} · batch size=
+                      {"batchSize" in item ? item.batchSize : "n/a"} · batches=
+                      {"batches" in item ? item.batches : "unknown"} · LLM calls≈
+                      {"llmCalls" in item ? item.llmCalls : "unknown"}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <span> this may run LLM calls or database profiling.</span>
+              )}
+            </div>
+            {toolApprovalError && (
+              <div className="mt-2 text-xs text-destructive">{toolApprovalError}</div>
+            )}
+            <div className="mt-4 flex gap-2">
+              <button
+                className="rounded-md bg-primary px-3 py-2 text-xs text-primary-foreground"
+                onClick={handleApproveTools}
+                disabled={toolApprovalRunning}
+              >
+                {toolApprovalRunning ? "Approving..." : "Approve"}
+              </button>
+              <button
+                className="rounded-md border border-border px-3 py-2 text-xs"
+                onClick={() => setToolApprovalOpen(false)}
+                disabled={toolApprovalRunning}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

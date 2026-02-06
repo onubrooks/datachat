@@ -345,8 +345,8 @@ class TestCLIErrorHandling:
         assert result.exit_code != 0
 
     @pytest.mark.asyncio
-    async def test_cli_blocks_when_system_not_initialized(self):
-        """Ensure CLI prevents queries when setup is incomplete."""
+    async def test_cli_allows_live_schema_when_no_datapoints(self):
+        """Ensure CLI allows live schema queries when DataPoints are missing."""
         not_initialized = SystemStatus(
             is_initialized=False,
             has_databases=True,
@@ -360,8 +360,9 @@ class TestCLIErrorHandling:
         ):
             with patch("backend.cli.VectorStore.initialize", new=AsyncMock()):
                 with patch("backend.cli.PostgresConnector.connect", new=AsyncMock()):
-                    with pytest.raises(click.ClickException):
-                        await create_pipeline_from_config()
+                    with patch("backend.cli.DataChatPipeline") as pipeline_cls:
+                        pipeline = await create_pipeline_from_config()
+                        assert pipeline is pipeline_cls.return_value
 
 
 class TestCLISetup:

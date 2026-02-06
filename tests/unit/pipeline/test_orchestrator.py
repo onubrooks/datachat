@@ -29,6 +29,8 @@ from backend.models import (
     RetrievedDataPoint,
     SQLAgentOutput,
     SQLValidationError,
+    ToolPlan,
+    ToolPlannerAgentOutput,
     ValidatedSQL,
     ValidatorAgentOutput,
 )
@@ -76,6 +78,14 @@ class TestPipelineExecution:
         pipeline.classifier.llm = mock_llm_provider
         pipeline.sql.llm = mock_llm_provider
         pipeline.executor.llm = mock_llm_provider
+        pipeline.tool_planner.execute = AsyncMock(
+            return_value=ToolPlannerAgentOutput(
+                success=True,
+                plan=ToolPlan(tool_calls=[], rationale="No tools needed.", fallback="pipeline"),
+                metadata=AgentMetadata(agent_name="ToolPlannerAgent", llm_calls=0),
+            )
+        )
+        pipeline.response_synthesis.execute = AsyncMock(return_value="Found 1 result.")
         return pipeline
 
     @pytest.fixture
@@ -224,7 +234,7 @@ class TestPipelineExecution:
         assert "validator" in result["agent_timings"]
         assert "executor" in result["agent_timings"]
 
-        assert result["llm_calls"] == 3  # classifier + sql + executor
+        assert result["llm_calls"] == 4  # classifier + sql + executor + response_synthesis
         assert result["total_latency_ms"] > 0
 
     @pytest.mark.asyncio
@@ -274,10 +284,19 @@ class TestPipelineExecution:
                 data={},
                 investigation_memory=InvestigationMemory(
                     query="test query",
-                    datapoints=[],
+                    datapoints=[
+                        RetrievedDataPoint(
+                            datapoint_id="table_001",
+                            datapoint_type="Schema",
+                            name="Test Table",
+                            score=0.9,
+                            source="vector",
+                            metadata={"type": "Schema"},
+                        )
+                    ],
                     retrieval_mode="hybrid",
-                    total_retrieved=0,
-                    sources_used=[],
+                    total_retrieved=1,
+                    sources_used=["vector"],
                 ),
                 context_confidence=0.8,
                 metadata=AgentMetadata(agent_name="ContextAgent", llm_calls=0),
@@ -297,7 +316,7 @@ class TestPipelineExecution:
             )
         )
 
-        result = await mock_agents.run("what tables exist?")
+        result = await mock_agents.run("Explain what this dataset is about.")
 
         assert mock_agents.context_answer.execute.called
         assert not mock_agents.sql.execute.called
@@ -325,10 +344,19 @@ class TestPipelineExecution:
                 data={},
                 investigation_memory=InvestigationMemory(
                     query="test query",
-                    datapoints=[],
+                    datapoints=[
+                        RetrievedDataPoint(
+                            datapoint_id="table_001",
+                            datapoint_type="Schema",
+                            name="Test Table",
+                            score=0.9,
+                            source="vector",
+                            metadata={"type": "Schema"},
+                        )
+                    ],
                     retrieval_mode="hybrid",
-                    total_retrieved=0,
-                    sources_used=[],
+                    total_retrieved=1,
+                    sources_used=["vector"],
                 ),
                 context_confidence=0.8,
                 metadata=AgentMetadata(agent_name="ContextAgent", llm_calls=0),
@@ -391,6 +419,14 @@ class TestRetryLogic:
         pipeline.classifier.llm = mock_llm_provider
         pipeline.sql.llm = mock_llm_provider
         pipeline.executor.llm = mock_llm_provider
+        pipeline.tool_planner.execute = AsyncMock(
+            return_value=ToolPlannerAgentOutput(
+                success=True,
+                plan=ToolPlan(tool_calls=[], rationale="No tools needed.", fallback="pipeline"),
+                metadata=AgentMetadata(agent_name="ToolPlannerAgent", llm_calls=0),
+            )
+        )
+        pipeline.response_synthesis.execute = AsyncMock(return_value="Found 1 result.")
         return pipeline
 
     @pytest.mark.asyncio
@@ -631,6 +667,14 @@ class TestStreaming:
         pipeline.classifier.llm = mock_llm_provider
         pipeline.sql.llm = mock_llm_provider
         pipeline.executor.llm = mock_llm_provider
+        pipeline.tool_planner.execute = AsyncMock(
+            return_value=ToolPlannerAgentOutput(
+                success=True,
+                plan=ToolPlan(tool_calls=[], rationale="No tools needed.", fallback="pipeline"),
+                metadata=AgentMetadata(agent_name="ToolPlannerAgent", llm_calls=0),
+            )
+        )
+        pipeline.response_synthesis.execute = AsyncMock(return_value="Result is 1")
         return pipeline
 
     @pytest.mark.asyncio
@@ -756,11 +800,20 @@ class TestErrorHandling:
     @pytest.fixture
     def pipeline(self, mock_retriever, mock_connector):
         """Create pipeline."""
-        return DataChatPipeline(
+        pipeline = DataChatPipeline(
             retriever=mock_retriever,
             connector=mock_connector,
             max_retries=2,
         )
+        pipeline.tool_planner.execute = AsyncMock(
+            return_value=ToolPlannerAgentOutput(
+                success=True,
+                plan=ToolPlan(tool_calls=[], rationale="No tools needed.", fallback="pipeline"),
+                metadata=AgentMetadata(agent_name="ToolPlannerAgent", llm_calls=0),
+            )
+        )
+        pipeline.response_synthesis.execute = AsyncMock(return_value="Found 1 result.")
+        return pipeline
 
     @pytest.mark.asyncio
     async def test_classifier_error_is_captured(self, pipeline):

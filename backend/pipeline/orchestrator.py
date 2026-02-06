@@ -10,9 +10,12 @@ LangGraph-based pipeline that orchestrates all agents:
 """
 
 import logging
+import json
+import re
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC
+from pathlib import Path
 from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -21,7 +24,9 @@ from backend.agents.classifier import ClassifierAgent
 from backend.agents.context import ContextAgent
 from backend.agents.context_answer import ContextAnswerAgent
 from backend.agents.executor import ExecutorAgent
+from backend.agents.response_synthesis import ResponseSynthesisAgent
 from backend.agents.sql import SQLAgent
+from backend.agents.tool_planner import ToolPlannerAgent
 from backend.agents.validator import ValidatorAgent
 from backend.config import get_settings
 from backend.connectors.base import BaseConnector
@@ -37,8 +42,13 @@ from backend.models import (
     GeneratedSQL,
     Message,
     SQLAgentInput,
+    ToolPlannerAgentInput,
     ValidatorAgentInput,
 )
+from backend.tools import ToolExecutor, initialize_tools
+from backend.tools.base import ToolContext
+from backend.tools.policy import ToolPolicyError
+from backend.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +70,9 @@ class PipelineState(TypedDict, total=False):
     conversation_history: list[Message]
     database_type: str
     database_url: str | None
+    user_id: str | None
+    correlation_id: str | None
+    tool_approved: bool
 
     # Classifier output
     intent: str | None
@@ -73,6 +86,8 @@ class PipelineState(TypedDict, total=False):
     retrieved_datapoints: list[dict[str, Any]]
     context_confidence: float | None
     context_needs_sql: bool | None
+    context_preface: str | None
+    context_evidence: list[dict[str, Any]]
 
     # SQL output
     generated_sql: str | None
@@ -101,6 +116,16 @@ class PipelineState(TypedDict, total=False):
     answer_confidence: float | None
     evidence: list[dict[str, Any]]
 
+    # Tool planner/executor output
+    tool_plan: dict[str, Any] | None
+    tool_calls: list[dict[str, Any]]
+    tool_results: list[dict[str, Any]]
+    tool_error: str | None
+    tool_used: bool
+    tool_approval_required: bool
+    tool_approval_message: str | None
+    tool_approval_calls: list[dict[str, Any]]
+
     # Pipeline metadata
     current_agent: str | None
     error: str | None
@@ -108,6 +133,7 @@ class PipelineState(TypedDict, total=False):
     total_latency_ms: float
     agent_timings: dict[str, float]
     llm_calls: int
+    schema_refresh_attempted: bool
 
 
 # ============================================================================
@@ -167,6 +193,12 @@ class DataChatPipeline:
         self.sql = SQLAgent()
         self.validator = ValidatorAgent()
         self.executor = ExecutorAgent()
+        self.response_synthesis = ResponseSynthesisAgent()
+        self.tool_planner = ToolPlannerAgent()
+        self.tool_executor = ToolExecutor()
+        self.tooling_enabled = self.config.tools.enabled
+        self.tool_planner_enabled = self.config.tools.planner_enabled
+        initialize_tools(self.config.tools.policy_path)
 
         # Build LangGraph
         self.graph = self._build_graph()
@@ -183,16 +215,38 @@ class DataChatPipeline:
         workflow = StateGraph(PipelineState)
 
         # Add nodes
+        workflow.add_node("tool_planner", self._run_tool_planner)
+        workflow.add_node("tool_executor", self._run_tool_executor)
         workflow.add_node("classifier", self._run_classifier)
         workflow.add_node("context", self._run_context)
         workflow.add_node("context_answer", self._run_context_answer)
         workflow.add_node("sql", self._run_sql)
         workflow.add_node("validator", self._run_validator)
         workflow.add_node("executor", self._run_executor)
+        workflow.add_node("response_synthesis", self._run_response_synthesis)
         workflow.add_node("error_handler", self._handle_error)
 
         # Set entry point
-        workflow.set_entry_point("classifier")
+        workflow.set_entry_point(
+            "tool_planner" if self.tooling_enabled and self.tool_planner_enabled else "classifier"
+        )
+
+        workflow.add_conditional_edges(
+            "tool_planner",
+            self._should_use_tools,
+            {
+                "tools": "tool_executor",
+                "pipeline": "classifier",
+            },
+        )
+        workflow.add_conditional_edges(
+            "tool_executor",
+            self._should_continue_after_tool_execution,
+            {
+                "end": END,
+                "pipeline": "classifier",
+            },
+        )
 
         # Add edges
         workflow.add_edge("classifier", "context")
@@ -225,7 +279,15 @@ class DataChatPipeline:
         )
 
         workflow.add_edge("sql", "validator")
-        workflow.add_edge("executor", END)
+        workflow.add_conditional_edges(
+            "executor",
+            self._should_synthesize_response,
+            {
+                "synthesize": "response_synthesis",
+                "end": END,
+            },
+        )
+        workflow.add_edge("response_synthesis", END)
         workflow.add_edge("error_handler", END)
 
         return workflow.compile()
@@ -233,6 +295,104 @@ class DataChatPipeline:
     # ========================================================================
     # Agent Execution Methods
     # ========================================================================
+
+    async def _run_tool_planner(self, state: PipelineState) -> PipelineState:
+        """Run ToolPlannerAgent."""
+        start_time = time.time()
+        state["current_agent"] = "ToolPlannerAgent"
+
+        try:
+            tools = [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "category": tool.category.value,
+                    "parameters_schema": tool.parameters_schema,
+                }
+                for tool in ToolRegistry.list_definitions()
+            ]
+            output = await self.tool_planner.execute(
+                ToolPlannerAgentInput(
+                    query=state["query"],
+                    conversation_history=state.get("conversation_history", []),
+                    available_tools=tools,
+                )
+            )
+            plan = output.plan
+            state["tool_plan"] = plan.model_dump()
+            state["tool_calls"] = [call.model_dump() for call in plan.tool_calls]
+            state["tool_used"] = bool(plan.tool_calls)
+
+            elapsed = (time.time() - start_time) * 1000
+            state.setdefault("agent_timings", {})["tool_planner"] = elapsed
+            state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
+            state["llm_calls"] = state.get("llm_calls", 0) + output.metadata.llm_calls
+
+        except Exception as exc:
+            logger.error(f"ToolPlannerAgent failed: {exc}")
+            state["tool_error"] = str(exc)
+            state["tool_calls"] = []
+            state["tool_used"] = False
+
+        return state
+
+    async def _run_tool_executor(self, state: PipelineState) -> PipelineState:
+        """Execute planned tools."""
+        start_time = time.time()
+        state["current_agent"] = "ToolExecutor"
+
+        tool_calls = state.get("tool_calls", [])
+        if not tool_calls:
+            return state
+
+        if not state.get("tool_approved"):
+            approval_calls = []
+            for call in tool_calls:
+                definition = ToolRegistry.get_definition(call.get("name", ""))
+                if definition and definition.policy.requires_approval:
+                    approval_calls.append(call)
+            if approval_calls:
+                state["tool_approval_required"] = True
+                state["tool_approval_calls"] = approval_calls
+                state["tool_approval_message"] = (
+                    "Approval required to run this tool."
+                )
+                state["answer_source"] = "approval"
+                state["natural_language_answer"] = (
+                    "This action needs approval before I can proceed."
+                )
+                return state
+
+        ctx = ToolContext(
+            user_id=state.get("user_id", "unknown"),
+            correlation_id=state.get("correlation_id", "unknown"),
+            approved=state.get("tool_approved", False),
+            metadata={
+                "retriever": self.retriever,
+                "connector": self.connector,
+                "database_type": state.get("database_type") or self.config.database.db_type,
+                "database_url": state.get("database_url"),
+            },
+            state=state,
+        )
+
+        try:
+            results = await self.tool_executor.execute_plan(tool_calls, ctx)
+            state["tool_results"] = results
+
+            elapsed = (time.time() - start_time) * 1000
+            state.setdefault("agent_timings", {})["tool_executor"] = elapsed
+            state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
+
+            self._apply_tool_results(state, results)
+        except ToolPolicyError as exc:
+            state["tool_error"] = str(exc)
+            state["tool_results"] = []
+        except Exception as exc:
+            state["tool_error"] = str(exc)
+            state["tool_results"] = []
+
+        return state
 
     async def _run_classifier(self, state: PipelineState) -> PipelineState:
         """Run ClassifierAgent."""
@@ -300,9 +460,8 @@ class DataChatPipeline:
             output = await self.context.execute(input_data)
 
             # Update state
-            state["investigation_memory"] = {
-                "query": output.investigation_memory.query,
-                "datapoints": [
+            filtered_datapoints = await self._filter_datapoints_by_live_schema(
+                [
                     {
                         "datapoint_id": dp.datapoint_id,
                         "datapoint_type": dp.datapoint_type,
@@ -312,13 +471,19 @@ class DataChatPipeline:
                         "metadata": dp.metadata,
                     }
                     for dp in output.investigation_memory.datapoints
-                ],
-                "total_retrieved": output.investigation_memory.total_retrieved,
+                ]
+            )
+            sources_used = list({dp["datapoint_id"] for dp in filtered_datapoints})
+            state["investigation_memory"] = {
+                "query": output.investigation_memory.query,
+                "datapoints": filtered_datapoints,
+                "total_retrieved": len(filtered_datapoints),
                 "retrieval_mode": output.investigation_memory.retrieval_mode,
-                "sources_used": output.investigation_memory.sources_used,
+                "sources_used": sources_used,
             }
             state["retrieved_datapoints"] = state["investigation_memory"]["datapoints"]
             state["context_confidence"] = output.context_confidence
+            self._maybe_set_schema_preface(state)
 
             # Update metadata
             elapsed = (time.time() - start_time) * 1000
@@ -392,6 +557,12 @@ class DataChatPipeline:
             state["validated_sql"] = None
             state["query_result"] = None
             state["visualization_hint"] = None
+            if output.context_answer.needs_sql:
+                state["context_preface"] = output.context_answer.answer
+                state["context_evidence"] = [
+                    evidence.model_dump()
+                    for evidence in output.context_answer.evidence
+                ]
             state["clarification_needed"] = bool(output.context_answer.clarifying_questions)
             state["clarifying_questions"] = output.context_answer.clarifying_questions
 
@@ -407,6 +578,120 @@ class DataChatPipeline:
             state["error"] = f"Context answer failed: {e}"
 
         return state
+
+    async def _filter_datapoints_by_live_schema(
+        self, datapoints: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        live_tables = await self._get_live_table_catalog()
+        if not live_tables:
+            return datapoints
+
+        filtered: list[dict[str, Any]] = []
+        for dp in datapoints:
+            table_key = self._extract_datapoint_table_key(dp)
+            if table_key and table_key not in live_tables:
+                continue
+            filtered.append(dp)
+
+        if len(filtered) != len(datapoints):
+            logger.info(
+                "Filtered %s datapoints not present in live schema",
+                len(datapoints) - len(filtered),
+            )
+
+        return filtered
+
+    async def _get_live_table_catalog(self) -> set[str] | None:
+        try:
+            if not self.connector.is_connected:
+                await self.connector.connect()
+            tables = await self.connector.get_schema()
+        except Exception as exc:
+            logger.warning(f"Failed to fetch live schema catalog: {exc}")
+            return None
+
+        catalog: set[str] = set()
+        for table in tables:
+            schema_name = getattr(table, "schema_name", None) or getattr(table, "schema", None)
+            table_name = getattr(table, "table_name", None)
+            if schema_name and table_name:
+                catalog.add(f"{schema_name}.{table_name}".lower())
+            elif table_name:
+                catalog.add(str(table_name).lower())
+        return catalog or None
+
+    def _extract_datapoint_table_key(self, datapoint: dict[str, Any]) -> str | None:
+        metadata = datapoint.get("metadata") or {}
+        table_name = (
+            metadata.get("table_name")
+            or metadata.get("table")
+            or metadata.get("table_key")
+            or datapoint.get("table_name")
+        )
+        if not table_name:
+            return None
+        schema = metadata.get("schema")
+        table_key = str(table_name)
+        if "." not in table_key and schema:
+            table_key = f"{schema}.{table_key}"
+        return table_key.lower()
+
+    def _maybe_set_schema_preface(self, state: PipelineState) -> None:
+        if state.get("context_preface"):
+            return
+        datapoints = state.get("retrieved_datapoints") or []
+        for datapoint in datapoints:
+            if datapoint.get("datapoint_type") != "Schema":
+                continue
+            datapoint_id = datapoint.get("datapoint_id")
+            if not datapoint_id:
+                continue
+            summary = self._load_schema_preface(datapoint_id)
+            if summary:
+                state["context_preface"] = summary
+                return
+
+    def _load_schema_preface(self, datapoint_id: str) -> str | None:
+        data_dir = Path("datapoints") / "managed"
+        path = data_dir / f"{datapoint_id}.json"
+        if not path.exists():
+            return None
+        try:
+            with path.open() as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            return None
+
+        name = payload.get("name")
+        table_name = payload.get("table_name")
+        schema = payload.get("schema")
+        business_purpose = payload.get("business_purpose")
+        key_columns = payload.get("key_columns") or []
+        column_names = []
+        for col in key_columns:
+            if isinstance(col, dict) and col.get("name"):
+                column_names.append(col["name"])
+            if len(column_names) >= 5:
+                break
+
+        parts = []
+        if name and table_name:
+            parts.append(f"{name} ({table_name})")
+        elif table_name:
+            parts.append(table_name)
+        elif name:
+            parts.append(name)
+
+        if business_purpose:
+            parts.append(business_purpose)
+
+        if column_names:
+            parts.append(f"Key columns include {', '.join(column_names)}.")
+
+        if not parts:
+            return None
+
+        return " ".join(parts)
 
     async def _run_sql(self, state: PipelineState) -> PipelineState:
         """Run SQLAgent."""
@@ -633,10 +918,24 @@ class DataChatPipeline:
             state["key_insights"] = output.executed_query.key_insights
             state["answer_source"] = "sql"
             state["answer_confidence"] = state.get("sql_confidence", 0.7)
-            state["evidence"] = [
+            sql_evidence = [
                 evidence.model_dump()
                 for evidence in self._build_evidence_items(state)
             ]
+            context_evidence = state.get("context_evidence") or []
+            seen_ids = set()
+            merged_evidence = []
+            for item in [*context_evidence, *sql_evidence]:
+                datapoint_id = item.get("datapoint_id")
+                if datapoint_id and datapoint_id not in seen_ids:
+                    seen_ids.add(datapoint_id)
+                    merged_evidence.append(item)
+            state["evidence"] = merged_evidence
+            context_preface = state.get("context_preface")
+            if context_preface:
+                state["natural_language_answer"] = (
+                    f"{context_preface}\n\n{state['natural_language_answer']}"
+                )
 
             # Update metadata
             elapsed = (time.time() - start_time) * 1000
@@ -651,13 +950,97 @@ class DataChatPipeline:
 
         except Exception as e:
             logger.error(f"ExecutorAgent failed: {e}")
-            state["error"] = f"Execution failed: {e}"
-            if not state.get("natural_language_answer"):
+            error_message = str(e)
+            state["error"] = f"Execution failed: {error_message}"
+            if "Missing table in live schema" in error_message:
+                if not state.get("schema_refresh_attempted"):
+                    state["schema_refresh_attempted"] = True
+                    await self._run_schema_refresh(state)
+                    if state.get("tool_error"):
+                        state["error"] = (
+                            "Schema refresh failed. Please check database connectivity "
+                            "or refresh manually."
+                        )
+                        return await self._handle_error(state)
+                    state.pop("error", None)
+                    return await self._rerun_after_schema_refresh(state)
+                state["answer_source"] = "error"
+                state["natural_language_answer"] = (
+                    "I refreshed the database schema, but the referenced table is still missing. "
+                    "Please verify the table name or update your DataPoints."
+                )
+            elif not state.get("natural_language_answer"):
                 state["natural_language_answer"] = (
                     f"I encountered an error while processing your query: {state.get('error')}. "
                     "Please try rephrasing your question or contact support if the issue persists."
                 )
 
+        return state
+
+    async def _run_schema_refresh(self, state: PipelineState) -> None:
+        if not self.tooling_enabled:
+            logger.warning("Tooling disabled; skipping schema refresh.")
+            return
+        ctx = ToolContext(
+            user_id=state.get("user_id"),
+            correlation_id=state.get("correlation_id"),
+            approved=True,
+        )
+        try:
+            result = await self.tool_executor.execute(
+                "profile_and_generate_datapoints",
+                {"depth": "schema_only", "batch_size": 10},
+                ctx,
+            )
+            state["tool_results"] = [result]
+        except Exception as exc:
+            logger.error(f"Schema refresh failed: {exc}")
+            state["tool_error"] = str(exc)
+
+    async def _rerun_after_schema_refresh(self, state: PipelineState) -> PipelineState:
+        state = await self._run_context(state)
+        if self._should_use_context_answer(state) == "context":
+            state = await self._run_context_answer(state)
+            if self._should_execute_after_context_answer(state) == "end":
+                return state
+
+        while True:
+            state = await self._run_sql(state)
+            state = await self._run_validator(state)
+            decision = self._should_retry_sql(state)
+            if decision == "retry":
+                continue
+            if decision == "execute":
+                return await self._run_executor(state)
+            return await self._handle_error(state)
+
+    async def _run_response_synthesis(self, state: PipelineState) -> PipelineState:
+        """Run ResponseSynthesisAgent."""
+        start_time = time.time()
+        state["current_agent"] = "ResponseSynthesisAgent"
+        try:
+            query_result = state.get("query_result") or {}
+            rows = query_result.get("rows") or []
+            columns = query_result.get("columns") or []
+            preview_rows = rows[:3]
+            result_summary = {
+                "row_count": query_result.get("row_count"),
+                "columns": columns,
+                "preview": preview_rows,
+            }
+            synthesized = await self.response_synthesis.execute(
+                query=state.get("query", ""),
+                sql=state.get("validated_sql") or state.get("generated_sql") or "",
+                result_summary=json.dumps(result_summary),
+                context_preface=state.get("context_preface"),
+            )
+            state["natural_language_answer"] = synthesized
+            elapsed = (time.time() - start_time) * 1000
+            state.setdefault("agent_timings", {})["response_synthesis"] = elapsed
+            state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
+            state["llm_calls"] = state.get("llm_calls", 0) + 1
+        except Exception as exc:
+            logger.error(f"ResponseSynthesisAgent failed: {exc}")
         return state
 
     async def _handle_error(self, state: PipelineState) -> PipelineState:
@@ -686,6 +1069,16 @@ class DataChatPipeline:
         intent = state.get("intent") or "data_query"
         confidence = state.get("context_confidence") or 0.0
         query = (state.get("query") or "").lower()
+        retrieved = state.get("retrieved_datapoints") or []
+
+        if not retrieved:
+            return "sql"
+
+        if self._query_is_table_list(query):
+            return "sql"
+
+        if "datapoint" in query or "data point" in query:
+            return "context"
 
         if intent in ("exploration", "explanation", "meta"):
             return "context"
@@ -698,7 +1091,40 @@ class DataChatPipeline:
 
         return "sql"
 
+    def _query_is_table_list(self, query: str) -> bool:
+        patterns = [
+            r"\bwhat tables\b",
+            r"\blist tables\b",
+            r"\bshow tables\b",
+            r"\bavailable tables\b",
+            r"\bwhich tables\b",
+            r"\bwhat tables exist\b",
+        ]
+        return any(re.search(pattern, query) for pattern in patterns)
+
+    def _should_use_tools(self, state: PipelineState) -> str:
+        if state.get("tool_error"):
+            return "pipeline"
+        tool_calls = state.get("tool_calls", [])
+        tool_plan = state.get("tool_plan") or {}
+        if tool_plan.get("fallback") == "pipeline":
+            return "pipeline"
+        if tool_calls:
+            return "tools"
+        return "pipeline"
+
+    def _should_continue_after_tool_execution(self, state: PipelineState) -> str:
+        if state.get("tool_error"):
+            return "pipeline"
+        if state.get("tool_approval_required"):
+            return "end"
+        if state.get("tool_used") and state.get("natural_language_answer"):
+            return "end"
+        return "pipeline"
+
     def _query_requires_sql(self, query: str) -> bool:
+        if "datapoint" in query or "data point" in query:
+            return False
         keywords = (
             "total",
             "sum",
@@ -740,6 +1166,40 @@ class DataChatPipeline:
             )
         return evidence
 
+    def _apply_tool_results(
+        self, state: PipelineState, results: list[dict[str, Any]]
+    ) -> None:
+        for result in results:
+            payload = result.get("result") or {}
+            answer = payload.get("answer")
+            if answer:
+                state["natural_language_answer"] = answer
+            if payload.get("answer_source"):
+                state["answer_source"] = payload.get("answer_source")
+            if payload.get("confidence") is not None:
+                state["answer_confidence"] = payload.get("confidence")
+            if payload.get("evidence"):
+                state["evidence"] = payload.get("evidence")
+            if payload.get("sql"):
+                state["validated_sql"] = payload.get("sql")
+            if payload.get("data"):
+                state["query_result"] = payload.get("data")
+            if payload.get("visualization_hint"):
+                state["visualization_hint"] = payload.get("visualization_hint")
+            if payload.get("retrieved_datapoints"):
+                state["retrieved_datapoints"] = payload.get("retrieved_datapoints")
+            if payload.get("used_datapoints"):
+                state["used_datapoints"] = payload.get("used_datapoints")
+            if payload.get("validation_warnings"):
+                state["validation_warnings"] = payload.get("validation_warnings")
+            if payload.get("validation_errors"):
+                state["validation_errors"] = payload.get("validation_errors")
+
+        if state.get("used_datapoints") and not state.get("evidence"):
+            state["evidence"] = [
+                item.model_dump() for item in self._build_evidence_items(state)
+            ]
+
     def _should_retry_sql(self, state: PipelineState) -> str:
         """
         Determine if SQL should be retried or execution should proceed.
@@ -765,6 +1225,13 @@ class DataChatPipeline:
             return "retry"
 
         return "error"
+
+    def _should_synthesize_response(self, state: PipelineState) -> str:
+        if state.get("error"):
+            return "end"
+        if state.get("validated_sql") and state.get("query_result"):
+            return "synthesize"
+        return "end"
 
     # ========================================================================
     # Public API
@@ -794,6 +1261,9 @@ class DataChatPipeline:
             "conversation_history": conversation_history or [],
             "database_type": database_type,
             "database_url": database_url,
+            "user_id": "anonymous",
+            "correlation_id": f"local-{int(time.time() * 1000)}",
+            "tool_approved": False,
             "current_agent": None,
             "error": None,
             "total_cost": 0.0,
@@ -815,9 +1285,19 @@ class DataChatPipeline:
             "retrieved_datapoints": [],
             "context_confidence": None,
             "context_needs_sql": None,
+            "context_preface": None,
+            "context_evidence": [],
             "answer_source": None,
             "answer_confidence": None,
             "evidence": [],
+            "tool_plan": None,
+            "tool_calls": [],
+            "tool_results": [],
+            "tool_error": None,
+            "tool_used": False,
+            "tool_approval_required": False,
+            "tool_approval_message": None,
+            "tool_approval_calls": [],
         }
 
         logger.info(f"Starting pipeline for query: {query[:100]}...")
@@ -859,6 +1339,9 @@ class DataChatPipeline:
             "conversation_history": conversation_history or [],
             "database_type": database_type,
             "database_url": database_url,
+            "user_id": "anonymous",
+            "correlation_id": f"stream-{int(time.time() * 1000)}",
+            "tool_approved": False,
             "current_agent": None,
             "error": None,
             "total_cost": 0.0,
@@ -880,9 +1363,19 @@ class DataChatPipeline:
             "retrieved_datapoints": [],
             "context_confidence": None,
             "context_needs_sql": None,
+            "context_preface": None,
+            "context_evidence": [],
             "answer_source": None,
             "answer_confidence": None,
             "evidence": [],
+            "tool_plan": None,
+            "tool_calls": [],
+            "tool_results": [],
+            "tool_error": None,
+            "tool_used": False,
+            "tool_approval_required": False,
+            "tool_approval_message": None,
+            "tool_approval_calls": [],
         }
 
         logger.info(f"Starting streaming pipeline for query: {query[:100]}...")
@@ -934,6 +1427,9 @@ class DataChatPipeline:
             "conversation_history": conversation_history or [],
             "database_type": database_type,
             "database_url": database_url,
+            "user_id": "anonymous",
+            "correlation_id": f"stream-{int(time.time() * 1000)}",
+            "tool_approved": False,
             "current_agent": None,
             "error": None,
             "total_cost": 0.0,
@@ -955,9 +1451,19 @@ class DataChatPipeline:
             "retrieved_datapoints": [],
             "context_confidence": None,
             "context_needs_sql": None,
+            "context_preface": None,
+            "context_evidence": [],
             "answer_source": None,
             "answer_confidence": None,
             "evidence": [],
+            "tool_plan": None,
+            "tool_calls": [],
+            "tool_results": [],
+            "tool_error": None,
+            "tool_used": False,
+            "tool_approval_required": False,
+            "tool_approval_message": None,
+            "tool_approval_calls": [],
         }
 
         logger.info(f"Starting streaming pipeline for query: {query[:100]}...")
@@ -1024,6 +1530,15 @@ class DataChatPipeline:
                                 "answer_source": state_update.get("answer_source"),
                                 "confidence": state_update.get("answer_confidence"),
                                 "evidence_count": len(state_update.get("evidence", [])),
+                            }
+                        elif current_agent == "ToolPlannerAgent":
+                            agent_data = {
+                                "tool_calls": len(state_update.get("tool_calls", [])),
+                            }
+                        elif current_agent == "ToolExecutor":
+                            agent_data = {
+                                "tool_results": len(state_update.get("tool_results", [])),
+                                "tool_error": state_update.get("tool_error"),
                             }
 
                         await event_callback(

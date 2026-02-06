@@ -330,6 +330,25 @@ class LoggingSettings(BaseSettings):
         )
 
 
+class ToolsSettings(BaseSettings):
+    """Tooling configuration."""
+
+    enabled: bool = Field(default=True, description="Enable tool planner/executor")
+    planner_enabled: bool = Field(
+        default=True, description="Enable LLM tool planner"
+    )
+    policy_path: str = Field(
+        default="config/tools.yaml",
+        description="Path to tool policy configuration",
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="TOOLS_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+
 class Settings(BaseSettings):
     """
     Main application settings.
@@ -394,6 +413,7 @@ class Settings(BaseSettings):
     system_database: SystemDatabaseSettings = Field(default_factory=SystemDatabaseSettings)
     chroma: ChromaSettings = Field(default_factory=ChromaSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    tools: ToolsSettings = Field(default_factory=ToolsSettings)
     database_credentials_key: str | None = Field(
         default=None,
         description="Fernet key for encrypting stored database credentials.",

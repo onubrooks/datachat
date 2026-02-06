@@ -494,4 +494,19 @@ Before returning a query:
 
 ---
 
+## Output Format (Required)
+
+Return ONLY valid JSON with the following keys. Do not include markdown or commentary.
+
+```json
+{
+  "sql": "SELECT ...",
+  "explanation": "Short explanation",
+  "used_datapoints": [],
+  "confidence": 0.0,
+  "assumptions": [],
+  "clarifying_questions": []
+}
+```
+
 *Generate accurate SQL. When in doubt, ask. Never hallucinate.*

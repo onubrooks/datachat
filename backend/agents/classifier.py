@@ -92,6 +92,15 @@ class ClassifierAgent(BaseAgent):
 
             # Parse structured response
             classification = self._parse_classification_response(response.content)
+            extra_calls = 0
+
+            if self._should_deep_classify(classification):
+                deep_classification = await self._deep_classify(
+                    input.query, input.conversation_history
+                )
+                if deep_classification:
+                    classification = deep_classification
+                    extra_calls = 1
 
             logger.info(
                 f"[{self.name}] Classification complete: intent={classification.intent}, "
@@ -100,7 +109,7 @@ class ClassifierAgent(BaseAgent):
 
             # Create metadata with LLM call count
             metadata = self._create_metadata()
-            metadata.llm_calls = 1
+            metadata.llm_calls = 1 + extra_calls
 
             return ClassifierAgentOutput(
                 success=True,
@@ -144,6 +153,44 @@ class ClassifierAgent(BaseAgent):
         )
 
         return system_prompt, user_prompt
+
+    def _should_deep_classify(self, classification: QueryClassification) -> bool:
+        if classification.confidence < 0.6:
+            return True
+        if not classification.entities and classification.complexity != "simple":
+            return True
+        return False
+
+    async def _deep_classify(
+        self, query: str, conversation_history: list[Any]
+    ) -> QueryClassification | None:
+        system_prompt = self.prompts.load("system/main.md")
+        context = ""
+        if conversation_history:
+            lines = []
+            for msg in conversation_history[-3:]:
+                role = getattr(msg, "role", "user")
+                content = getattr(msg, "content", "")
+                lines.append(f"{role}: {content}")
+            context = "\n".join(lines)
+        user_prompt = self.prompts.render(
+            "agents/classifier_deep.md",
+            user_query=query,
+            conversation_history=context or "None",
+        )
+        response = await self.llm.generate(
+            LLMRequest(
+                messages=[
+                    LLMMessage(role="system", content=system_prompt),
+                    LLMMessage(role="user", content=user_prompt),
+                ],
+                temperature=0.2,
+            )
+        )
+        try:
+            return self._parse_classification_response(response.content)
+        except Exception:
+            return None
 
     def _parse_classification_response(self, response: str) -> QueryClassification:
         """

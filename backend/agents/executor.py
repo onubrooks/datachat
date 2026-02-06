@@ -97,6 +97,19 @@ class ExecutorAgent(BaseAgent):
                     input.timeout_seconds,
                 )
             except QueryError as exc:
+                missing_relation = self._extract_missing_relation(exc)
+                if missing_relation:
+                    catalog = await self._fetch_schema_catalog(
+                        connector, input.database_type
+                    )
+                    if catalog and not self._relation_in_catalog(
+                        missing_relation, catalog
+                    ):
+                        raise QueryError(
+                            f"Missing table in live schema: {missing_relation}. "
+                            "Schema refresh required."
+                        ) from exc
+
                 schema_context = self._load_schema_context(input.source_datapoints)
                 if self._should_probe_schema(exc, input.database_type):
                     db_context = await self._fetch_schema_context(connector, input.database_type)
@@ -387,21 +400,96 @@ class ExecutorAgent(BaseAgent):
 
         return f"**Tables in database:** {tables}{columns_context}"
 
-    def _parse_correction_response(self, content: str) -> str | None:
+    async def _fetch_schema_catalog(
+        self, connector: BaseConnector, database_type: str
+    ) -> set[str] | None:
+        if database_type != "postgresql":
+            return None
+
+        tables_query = (
+            "SELECT table_schema, table_name "
+            "FROM information_schema.tables "
+            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+            "ORDER BY table_schema, table_name"
+        )
         try:
-            payload = json.loads(content)
+            result = await connector.execute(tables_query)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch schema catalog: {exc}")
+            return None
+
+        catalog: set[str] = set()
+        for row in result.rows:
+            schema = row.get("table_schema")
+            table = row.get("table_name")
+            if schema and table:
+                catalog.add(f"{schema}.{table}".lower())
+            elif table:
+                catalog.add(str(table).lower())
+        return catalog or None
+
+    def _extract_missing_relation(self, error: Exception) -> str | None:
+        message = str(error)
+        match = re.search(r'relation \"([^\"]+)\" does not exist', message, re.IGNORECASE)
+        if match:
+            return match.group(1)
+        return None
+
+    def _relation_in_catalog(self, relation: str, catalog: set[str]) -> bool:
+        normalized = relation.lower()
+        if normalized in catalog:
+            return True
+        if "." in normalized:
+            _, table = normalized.split(".", 1)
+            return table in catalog
+        return False
+
+    def _parse_correction_response(self, content: str) -> str | None:
+        payload = self._extract_json_payload(content)
+        if payload:
             sql = payload.get("sql")
             if isinstance(sql, str) and sql.strip():
                 return sql.strip()
-        except json.JSONDecodeError:
-            pass
 
         fenced = self._extract_code_block(content)
         if fenced:
             return fenced
         return None
 
-    def _extract_code_block(self, content: str) -> str | None:
+    def _extract_json_payload(self, content: str) -> dict | None:
+        try:
+            payload = json.loads(content)
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+
+        fenced = self._extract_code_block(content, include_json=True)
+        if fenced:
+            stripped = fenced.strip()
+            if stripped.startswith("json"):
+                stripped = stripped[4:].strip()
+            try:
+                payload = json.loads(stripped)
+                if isinstance(payload, dict):
+                    return payload
+            except json.JSONDecodeError:
+                pass
+
+        brace_start = content.find("{")
+        brace_end = content.rfind("}")
+        if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
+            snippet = content[brace_start : brace_end + 1]
+            try:
+                payload = json.loads(snippet)
+                if isinstance(payload, dict):
+                    return payload
+            except json.JSONDecodeError:
+                pass
+
+        return None
+
+    def _extract_code_block(self, content: str, include_json: bool = False) -> str | None:
         if "```" not in content:
             return None
         chunks = content.split("```")
@@ -409,6 +497,8 @@ class ExecutorAgent(BaseAgent):
             block = chunks[i].strip()
             if block.startswith("sql"):
                 block = block[3:].strip()
+            elif include_json and block.startswith("json"):
+                block = block[4:].strip()
             if block:
                 return block
         return None
