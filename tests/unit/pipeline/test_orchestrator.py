@@ -738,6 +738,14 @@ class TestIntentGate:
         assert not pipeline.classifier.execute.called
 
     @pytest.mark.asyncio
+    async def test_intent_gate_exit_detects_never_mind(self, pipeline):
+        result = await pipeline.run("never mind, i'll ask later")
+        assert result.get("intent_gate") == "exit"
+        assert result.get("answer_source") == "system"
+        assert "Ending the session" in result.get("natural_language_answer", "")
+        assert not pipeline.classifier.execute.called
+
+    @pytest.mark.asyncio
     async def test_intent_gate_ambiguous_prompts_clarification(self, pipeline):
         pipeline.intent_llm = None
         result = await pipeline.run("ok")
@@ -816,6 +824,22 @@ class TestIntentGate:
         assert result.get("intent_gate") == "data_query"
         assert result.get("fast_path") is True
         assert pipeline.sql.execute.called
+
+    def test_short_command_like_message_not_treated_as_followup_hint(self, pipeline):
+        assert pipeline._is_short_followup("show columns") is False
+
+    def test_clean_hint_handles_regarding_prefix(self, pipeline):
+        hint = pipeline._clean_hint(
+            'Regarding "Which table should I list columns for?": vbs_registrations'
+        )
+        assert hint == "vbs_registrations"
+
+    def test_merge_query_with_table_hint_rewrites_explicit_table(self, pipeline):
+        merged = pipeline._merge_query_with_table_hint(
+            "show 2 rows in public.sales",
+            "petra_campuses",
+        )
+        assert merged == "Show 2 rows from petra_campuses"
 
 
 class TestStreaming:

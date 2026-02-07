@@ -11,6 +11,7 @@ import pytest
 from click.testing import CliRunner
 
 from backend.cli import (
+    _should_exit_chat,
     ask,
     cli,
     connect,
@@ -78,6 +79,10 @@ class TestCLIBasics:
         result = runner.invoke(cli, ["dp", "--help"])
         assert result.exit_code == 0
         assert "Manage DataPoints" in result.output
+
+    def test_exit_phrase_detection_end_and_never_mind(self):
+        assert _should_exit_chat("end") is True
+        assert _should_exit_chat("never mind, i'll ask later") is True
 
 
 class TestConnectCommand:

@@ -209,6 +209,30 @@ Insights:
 
         assert "no results" in result.executed_query.natural_language_answer.lower()
 
+    @pytest.mark.asyncio
+    async def test_empty_information_schema_columns_is_non_hallucinatory(
+        self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
+    ):
+        sample_input.validated_sql.sql = (
+            "SELECT table_schema, table_name, column_name, data_type "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'sales' AND table_schema = 'public'"
+        )
+        mock_postgres_connector.execute = AsyncMock(
+            return_value=ConnectorQueryResult(
+                rows=[],
+                row_count=0,
+                columns=["table_schema", "table_name", "column_name", "data_type"],
+                execution_time_ms=9.0,
+            )
+        )
+        mock_llm_provider.set_response("Answer: hallucinated")
+
+        result = await executor_agent.execute(sample_input)
+
+        assert "No columns were found for table `sales`." == result.executed_query.natural_language_answer
+        assert result.metadata.llm_calls == 0
+
     # ============================================================================
     # Timeout Tests
     # ============================================================================

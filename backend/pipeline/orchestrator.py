@@ -1144,7 +1144,7 @@ class DataChatPipeline:
                 validated_sql=validated_sql,
                 database_type=state.get("database_type", "postgresql"),
                 database_url=state.get("database_url"),
-                max_rows=1000,
+                max_rows=10,
                 timeout_seconds=30,
                 source_datapoints=state.get("used_datapoints", []),
             )
@@ -1199,22 +1199,19 @@ class DataChatPipeline:
             error_message = str(e)
             state["error"] = f"Execution failed: {error_message}"
             if "Missing table in live schema" in error_message:
-                if not state.get("schema_refresh_attempted"):
-                    state["schema_refresh_attempted"] = True
-                    await self._run_schema_refresh(state)
-                    if state.get("tool_error"):
-                        state["error"] = (
-                            "Schema refresh failed. Please check database connectivity "
-                            "or refresh manually."
-                        )
-                        return await self._handle_error(state)
-                    state.pop("error", None)
-                    return await self._rerun_after_schema_refresh(state)
-                state["answer_source"] = "error"
+                missing = error_message.split("Missing table in live schema:", 1)[-1].strip()
+                missing = re.sub(r"\.\s*Schema refresh required\.?", "", missing).strip()
+                state["answer_source"] = "clarification"
                 state["natural_language_answer"] = (
-                    "I refreshed the database schema, but the referenced table is still missing. "
-                    "Please verify the table name or update your DataPoints."
+                    f"I couldn't find `{missing}` in the connected database schema. "
+                    "Please verify the table name or run `list tables` to choose a valid table."
                 )
+                state["answer_confidence"] = 0.3
+                state["clarification_needed"] = True
+                state["clarifying_questions"] = [
+                    "Which existing table should I use instead?",
+                ]
+                state.pop("error", None)
             elif not state.get("natural_language_answer"):
                 state["natural_language_answer"] = (
                     f"I encountered an error while processing your query: {state.get('error')}. "
@@ -1360,6 +1357,19 @@ class DataChatPipeline:
             r"\bavailable tables\b",
             r"\bwhich tables\b",
             r"\bwhat tables exist\b",
+        ]
+        return any(re.search(pattern, query) for pattern in patterns)
+
+    def _query_is_column_list(self, query: str) -> bool:
+        patterns = [
+            r"\bshow columns\b",
+            r"\blist columns\b",
+            r"\bwhat columns\b",
+            r"\bwhich columns\b",
+            r"\bdescribe table\b",
+            r"\btable schema\b",
+            r"\bcolumn list\b",
+            r"\bfields in\b",
         ]
         return any(re.search(pattern, query) for pattern in patterns)
 
@@ -1628,8 +1638,9 @@ class DataChatPipeline:
                     summary["table_hints"] = [cleaned_hint]
                     summary["slots"]["table"] = cleaned_hint
                     if previous_user_text:
-                        summary["resolved_query"] = (
-                            f"{previous_user_text} Use table {cleaned_hint}."
+                        summary["resolved_query"] = self._merge_query_with_table_hint(
+                            previous_user_text,
+                            cleaned_hint,
                         )
                 elif "column" in combined_questions or "field" in combined_questions:
                     summary["column_hints"] = [cleaned_hint]
@@ -1836,6 +1847,8 @@ class DataChatPipeline:
     def _is_exit_intent(self, text: str) -> bool:
         if text in {"exit", "quit", "bye", "goodbye", "stop", "end"}:
             return True
+        if re.search(r"\bnever\s*mind\b", text):
+            return True
         if re.search(r"\b(i'?m|im|we'?re|were)\s+done\b", text):
             return True
         if re.search(r"\b(done for now|done here|that'?s all|all set)\b", text):
@@ -1849,6 +1862,25 @@ class DataChatPipeline:
         if re.search(r"\b(end|stop|quit|exit)\b.*\b(chat|conversation|session)\b", text):
             return True
         return False
+
+    def _merge_query_with_table_hint(self, previous_query: str, table_hint: str) -> str:
+        base = previous_query.strip()
+        hint = table_hint.strip().strip("`").strip('"')
+        if not base or not hint:
+            return previous_query
+
+        lower = base.lower()
+        limit_match = re.search(r"\b(first|top|limit|show)\s+(\d+)\s+rows?\b", lower)
+        if limit_match:
+            limit = max(1, min(int(limit_match.group(2)), 10))
+            return f"Show {limit} rows from {hint}"
+        if re.search(r"\b(show|sample|preview)\b.*\brows?\b", lower):
+            return f"Show 3 rows from {hint}"
+        if "column" in lower or "columns" in lower or "fields" in lower:
+            return f"Show columns in {hint}"
+        if re.search(r"\b(row count|how many rows|records?)\b", lower):
+            return f"How many rows are in {hint}?"
+        return f"{base.rstrip('. ')} Use table {hint}."
 
     def _is_setup_help_intent(self, text: str) -> bool:
         patterns = [
@@ -1959,7 +1991,7 @@ class DataChatPipeline:
         text = query.strip().lower()
         if not text:
             return False
-        if self._query_is_table_list(text):
+        if self._query_is_table_list(text) or self._query_is_column_list(text):
             return True
 
         table_ref = self._extract_table_reference(text)
@@ -2103,8 +2135,26 @@ class DataChatPipeline:
         }
 
     def _is_short_followup(self, text: str) -> bool:
-        tokens = text.strip().split()
-        return 0 < len(tokens) <= 5
+        candidate = text.strip().lower()
+        if ":" in candidate:
+            candidate = candidate.rsplit(":", 1)[-1].strip()
+        tokens = [token for token in candidate.split() if token]
+        if not (0 < len(tokens) <= 5):
+            return False
+        disallowed = {
+            "show",
+            "list",
+            "count",
+            "select",
+            "describe",
+            "what",
+            "which",
+            "how",
+            "rows",
+            "columns",
+            "help",
+        }
+        return not any(token in disallowed for token in tokens)
 
     def _extract_clarifying_questions(self, text: str) -> list[str]:
         questions: list[str] = []
@@ -2139,7 +2189,10 @@ class DataChatPipeline:
         return any(trigger in lower for trigger in triggers)
 
     def _clean_hint(self, text: str) -> str | None:
-        cleaned = re.sub(r"[^\w.]+", " ", text.lower()).strip()
+        candidate = text.strip()
+        if ":" in candidate:
+            candidate = candidate.rsplit(":", 1)[-1].strip()
+        cleaned = re.sub(r"[^\w.]+", " ", candidate.lower()).strip()
         if not cleaned:
             return None
         tokens = [
@@ -2147,9 +2200,33 @@ class DataChatPipeline:
             for token in cleaned.split()
             if token
             and token
-            not in {"table", "column", "field", "use", "the", "a", "an", "any"}
+            not in {
+                "table",
+                "column",
+                "field",
+                "use",
+                "the",
+                "a",
+                "an",
+                "any",
+                "which",
+                "what",
+                "how",
+                "should",
+                "show",
+                "list",
+                "rows",
+                "columns",
+                "for",
+                "i",
+                "to",
+                "do",
+                "we",
+            }
         ]
         if not tokens:
+            return None
+        if len(tokens) > 3:
             return None
         return tokens[0] if len(tokens) == 1 else "_".join(tokens)
 

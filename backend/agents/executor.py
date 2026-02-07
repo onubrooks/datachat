@@ -134,10 +134,16 @@ class ExecutorAgent(BaseAgent):
                     raise
 
             # Generate natural language summary
-            nl_answer, insights = await self._generate_summary(
+            deterministic_summary = self._generate_deterministic_summary(
                 input.query, sql_to_execute, query_result
             )
-            llm_calls += 1
+            if deterministic_summary:
+                nl_answer, insights = deterministic_summary
+            else:
+                nl_answer, insights = await self._generate_summary(
+                    input.query, sql_to_execute, query_result
+                )
+                llm_calls += 1
 
             # Suggest visualization
             viz_hint = self._suggest_visualization(query_result)
@@ -581,6 +587,106 @@ class ExecutorAgent(BaseAgent):
             logger.error(f"Failed to generate summary: {e}")
             # Fallback to basic summary
             return self._generate_basic_summary(query_result), []
+
+    def _generate_deterministic_summary(
+        self, original_query: str, sql: str, query_result: QueryResult
+    ) -> tuple[str, list[str]] | None:
+        if query_result.row_count == 0:
+            requested_table = self._extract_information_schema_target_table(sql)
+            table_name = self._extract_table_name_from_sql(sql)
+            if "information_schema.columns" in sql.lower() and table_name:
+                return (
+                    f"No columns were found for table `{requested_table or table_name}`.",
+                    [],
+                )
+            if table_name:
+                return (f"No results found for `{table_name}`.", [])
+            return ("No results found.", [])
+
+        lower_sql = sql.lower()
+        if "information_schema.columns" in lower_sql:
+            table_name = (
+                self._extract_information_schema_target_table(sql)
+                or self._extract_table_name_from_sql(sql)
+                or "the selected table"
+            )
+            column_values = []
+            for row in query_result.rows:
+                value = row.get("column_name")
+                if value is not None:
+                    column_values.append(str(value))
+            unique_columns = list(dict.fromkeys(column_values))
+            if not unique_columns:
+                return (f"No columns were found for table `{table_name}`.", [])
+            preview = ", ".join(unique_columns[:10])
+            suffix = (
+                f" (and {len(unique_columns) - 10} more)"
+                if len(unique_columns) > 10
+                else ""
+            )
+            return (
+                f"The `{table_name}` table has {len(unique_columns)} column(s): {preview}{suffix}.",
+                [],
+            )
+
+        if "information_schema.tables" in lower_sql:
+            table_names = []
+            for row in query_result.rows:
+                table = row.get("table_name")
+                schema = row.get("table_schema")
+                if table is None:
+                    continue
+                table_names.append(f"{schema}.{table}" if schema else str(table))
+            unique_tables = list(dict.fromkeys(table_names))
+            if not unique_tables:
+                return ("No tables were found.", [])
+            preview = ", ".join(unique_tables[:10])
+            suffix = (
+                f" (and {len(unique_tables) - 10} more)"
+                if len(unique_tables) > 10
+                else ""
+            )
+            return (
+                f"Found {len(unique_tables)} table(s): {preview}{suffix}.",
+                [],
+            )
+
+        if query_result.row_count == 1 and query_result.columns == ["row_count"]:
+            value = query_result.rows[0].get("row_count")
+            table_name = self._extract_table_name_from_sql(sql)
+            if table_name:
+                return (f"Table `{table_name}` has {value} row(s).", [])
+            return (f"The row count is {value}.", [])
+
+        if re.match(r"^\s*select\s+\*\s+from\s+", lower_sql):
+            table_name = self._extract_table_name_from_sql(sql)
+            if table_name:
+                return (
+                    f"Returned {query_result.row_count} row(s) from `{table_name}`.",
+                    [],
+                )
+
+        return None
+
+    def _extract_table_name_from_sql(self, sql: str) -> str | None:
+        match = re.search(
+            r"\bfrom\s+([a-zA-Z0-9_.`\"]+)",
+            sql,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        return match.group(1).strip().strip("`").strip('"')
+
+    def _extract_information_schema_target_table(self, sql: str) -> str | None:
+        match = re.search(
+            r"\btable_name\s*=\s*'([^']+)'",
+            sql,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        return match.group(1).strip()
 
     def _build_summary_prompt(self, query: str, sql: str, query_result: QueryResult) -> str:
         """Build prompt for result summarization."""

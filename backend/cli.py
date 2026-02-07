@@ -396,6 +396,7 @@ def _should_exit_chat(query: str) -> bool:
         "exit",
         "quit",
         "q",
+        "end",
         "bye",
         "goodbye",
         "stop",
@@ -419,6 +420,8 @@ def _should_exit_chat(query: str) -> bool:
         "stop chat",
     }
     if text in exit_phrases:
+        return True
+    if re.search(r"\bnever\s*mind\b", text):
         return True
     if re.search(r"\b(i'?m|im|we'?re|were)\s+done\b", text):
         return True

@@ -3,6 +3,7 @@
 from backend.database.catalog_templates import (
     get_catalog_aliases,
     get_catalog_schemas,
+    get_list_columns_query,
     get_list_tables_query,
     normalize_database_type,
 )
@@ -31,3 +32,19 @@ def test_catalog_aliases_cover_redshift_and_clickhouse_system_tables():
     clickhouse_aliases = get_catalog_aliases("clickhouse")
     assert "svv_tables" in redshift_aliases
     assert "system.tables" in clickhouse_aliases
+
+
+def test_list_columns_query_exists_for_supported_databases():
+    for db_type in ("postgresql", "mysql", "clickhouse", "bigquery", "redshift"):
+        query = get_list_columns_query(db_type, table_name="sales")
+        assert query is not None
+        assert "column" in query.lower()
+
+
+def test_list_columns_query_accepts_schema_override():
+    query = get_list_columns_query(
+        "postgresql",
+        table_name="sales",
+        schema_name="analytics",
+    )
+    assert "table_schema = 'analytics'" in query

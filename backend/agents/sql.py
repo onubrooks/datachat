@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from backend.agents.base import BaseAgent
 from backend.config import get_settings
 from backend.connectors.postgres import PostgresConnector
+from backend.database.catalog import CatalogIntelligence
 from backend.database.catalog_templates import (
     get_catalog_aliases,
     get_catalog_schemas,
@@ -100,6 +101,7 @@ class SQLAgent(BaseAgent):
             extra={"provider": provider_name, "model": model_name},
         )
         self.prompts = PromptLoader()
+        self.catalog = CatalogIntelligence()
         self._live_schema_cache: dict[str, str] = {}
         self._live_schema_tables_cache: dict[str, set[str]] = {}
         self._live_profile_cache: dict[str, dict[str, dict[str, object]]] = {}
@@ -254,38 +256,20 @@ class SQLAgent(BaseAgent):
         if resolved_query != input.query:
             input = input.model_copy(update={"query": resolved_query})
 
-        fallback_sql = self._build_introspection_query(
-            input.query,
-            input.database_type,
+        catalog_plan = self.catalog.plan_query(
+            query=input.query,
+            database_type=input.database_type,
+            investigation_memory=input.investigation_memory,
         )
-        if fallback_sql:
-            return GeneratedSQL(
-                sql=fallback_sql,
-                explanation="Lists available tables using the database catalog.",
-                used_datapoints=[],
-                confidence=0.95,
-                assumptions=[],
-                clarifying_questions=[],
-            )
+        if catalog_plan and catalog_plan.clarifying_questions:
+            raise SQLClarificationNeeded(catalog_plan.clarifying_questions)
 
-        sample_sql = self._build_sample_rows_fallback(input)
-        if sample_sql:
+        if catalog_plan and catalog_plan.sql:
             return GeneratedSQL(
-                sql=sample_sql,
-                explanation="Returns a small sample of rows from the most relevant table.",
+                sql=catalog_plan.sql,
+                explanation=catalog_plan.explanation,
                 used_datapoints=[],
-                confidence=0.9,
-                assumptions=[],
-                clarifying_questions=[],
-            )
-
-        row_count_sql = self._build_row_count_fallback(input)
-        if row_count_sql:
-            return GeneratedSQL(
-                sql=row_count_sql,
-                explanation="Counts rows using the most relevant table.",
-                used_datapoints=[],
-                confidence=0.9,
+                confidence=catalog_plan.confidence,
                 assumptions=[],
                 clarifying_questions=[],
             )
@@ -571,32 +555,30 @@ class SQLAgent(BaseAgent):
         database_type: str | None = None,
     ) -> str | None:
         text = query.lower().strip()
-        patterns = [
-            r"\bwhat tables\b",
-            r"\blist tables\b",
-            r"\bshow tables\b",
-            r"\bavailable tables\b",
-            r"\bwhich tables\b",
-            r"\bwhat tables exist\b",
-        ]
-        if not any(re.search(pattern, text) for pattern in patterns):
+        if not self.catalog.is_list_tables_query(text):
             return None
-        target_db_type = database_type or getattr(
-            self.config.database, "db_type", "postgresql"
-        )
+        target_db_type = database_type or getattr(self.config.database, "db_type", "postgresql")
         return get_list_tables_query(target_db_type)
 
+    def _build_list_columns_fallback(self, input: SQLAgentInput) -> str | None:
+        plan = self.catalog.plan_query(
+            query=input.query,
+            database_type=input.database_type,
+            investigation_memory=input.investigation_memory,
+        )
+        if plan and plan.operation == "list_columns":
+            return plan.sql
+        return None
+
     def _build_row_count_fallback(self, input: SQLAgentInput) -> str | None:
-        if not self._requires_row_count(input.query):
-            return None
-        if self._requires_sample_rows(input.query):
-            return None
-        table_name = self._select_schema_table(input)
-        if not table_name:
-            table_name = self._extract_explicit_table_name(input.query)
-        if not table_name:
-            return None
-        return f"SELECT COUNT(*) FROM {table_name}"
+        plan = self.catalog.plan_query(
+            query=input.query,
+            database_type=input.database_type,
+            investigation_memory=input.investigation_memory,
+        )
+        if plan and plan.operation == "row_count":
+            return plan.sql
+        return None
 
     def _requires_row_count(self, query: str) -> bool:
         text = query.lower()
@@ -614,15 +596,14 @@ class SQLAgent(BaseAgent):
         return any(re.search(pattern, text) for pattern in patterns)
 
     def _build_sample_rows_fallback(self, input: SQLAgentInput) -> str | None:
-        if not self._requires_sample_rows(input.query):
-            return None
-        table_name = self._extract_explicit_table_name(input.query)
-        if not table_name:
-            table_name = self._select_schema_table(input)
-        if not table_name:
-            return None
-        limit = self._extract_sample_limit(input.query)
-        return f"SELECT * FROM {table_name} LIMIT {limit}"
+        plan = self.catalog.plan_query(
+            query=input.query,
+            database_type=input.database_type,
+            investigation_memory=input.investigation_memory,
+        )
+        if plan and plan.operation == "sample_rows":
+            return plan.sql
+        return None
 
     def _requires_sample_rows(self, query: str) -> bool:
         text = query.lower()
@@ -690,7 +671,11 @@ class SQLAgent(BaseAgent):
             return input.query, None
 
         query_text = input.query.strip()
-        if not query_text or len(query_text.split()) > 4:
+        if (
+            not query_text
+            or len(query_text.split()) > 4
+            or not self._looks_like_followup_hint(query_text)
+        ):
             return input.query, None
 
         previous_user = None
@@ -716,8 +701,53 @@ class SQLAgent(BaseAgent):
         if not table_hint:
             return input.query, None
 
-        resolved_query = f"{previous_text} Use table {table_hint}."
+        resolved_query = self._merge_query_with_table_hint(previous_text, table_hint)
         return resolved_query, table_hint
+
+    def _looks_like_followup_hint(self, text: str) -> bool:
+        lowered = text.lower().strip()
+        if not lowered:
+            return False
+        if ":" in lowered:
+            lowered = lowered.rsplit(":", 1)[-1].strip()
+        disallowed = {
+            "show",
+            "list",
+            "count",
+            "select",
+            "describe",
+            "help",
+            "what",
+            "which",
+            "how",
+            "rows",
+            "columns",
+            "table",
+            "tables",
+        }
+        words = [word for word in re.split(r"\s+", lowered) if word]
+        if any(word in disallowed for word in words):
+            return False
+        return bool(re.fullmatch(r"[a-zA-Z0-9_.`\"'-]+", lowered))
+
+    def _merge_query_with_table_hint(self, previous_query: str, table_hint: str) -> str:
+        base = previous_query.strip()
+        hint = table_hint.strip().strip("`").strip('"')
+        if not base or not hint:
+            return previous_query
+
+        lower = base.lower()
+        limit_match = re.search(r"\b(first|top|limit|show)\s+(\d+)\s+rows?\b", lower)
+        if limit_match:
+            limit = max(1, min(int(limit_match.group(2)), 10))
+            return f"Show {limit} rows from {hint}"
+        if re.search(r"\b(show|sample|preview)\b.*\brows?\b", lower):
+            return f"Show 3 rows from {hint}"
+        if "column" in lower or "columns" in lower or "fields" in lower:
+            return f"Show columns in {hint}"
+        if re.search(r"\b(row count|how many rows|records?)\b", lower):
+            return f"How many rows are in {hint}?"
+        return f"{base.rstrip('. ')} Use table {hint}."
 
     def _extract_explicit_table_name(self, query: str) -> str | None:
         patterns = [
@@ -776,6 +806,15 @@ class SQLAgent(BaseAgent):
         resolved_query, _ = self._resolve_followup_query(input)
         # Extract schema and business context
         schema_context = self._format_schema_context(input.investigation_memory)
+        ranked_catalog_context = self.catalog.build_ranked_schema_context(
+            query=resolved_query,
+            investigation_memory=input.investigation_memory,
+        )
+        if ranked_catalog_context:
+            if schema_context == "No schema context available":
+                schema_context = ranked_catalog_context
+            else:
+                schema_context = f"{schema_context}\n\n{ranked_catalog_context}"
         include_profile = not input.investigation_memory.datapoints
         live_context = await self._get_live_schema_context(
             query=resolved_query,
@@ -802,7 +841,7 @@ class SQLAgent(BaseAgent):
             business_context=business_context,
             conversation_context=conversation_context,
             backend=input.database_type or getattr(self.config.database, "db_type", "postgresql"),
-            user_preferences={"default_limit": 1000},
+            user_preferences={"default_limit": 10},
         )
 
     async def _get_live_schema_context(

@@ -217,6 +217,80 @@ class TestExecution:
         assert output.needs_clarification is True
         assert len(output.generated_sql.clarifying_questions) == 1
 
+    @pytest.mark.asyncio
+    async def test_uses_deterministic_catalog_for_table_list(
+        self, sql_agent, sample_investigation_memory
+    ):
+        input_data = SQLAgentInput(
+            query="list tables",
+            investigation_memory=sample_investigation_memory,
+            database_type="postgresql",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.success is True
+        assert output.generated_sql.sql.startswith("SELECT table_schema, table_name")
+        assert output.metadata.llm_calls == 0
+        sql_agent.llm.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_uses_deterministic_catalog_for_list_columns(
+        self, sql_agent, sample_investigation_memory
+    ):
+        input_data = SQLAgentInput(
+            query="show columns in analytics.fact_sales",
+            investigation_memory=sample_investigation_memory,
+            database_type="postgresql",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.success is True
+        assert "information_schema.columns" in output.generated_sql.sql
+        assert "table_name = 'fact_sales'" in output.generated_sql.sql
+        assert output.metadata.llm_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_requests_clarification_for_columns_without_table(
+        self, sql_agent, sample_investigation_memory
+    ):
+        memory = InvestigationMemory(
+            query="show columns",
+            datapoints=[
+                RetrievedDataPoint(
+                    datapoint_id="table_sales_001",
+                    datapoint_type="Schema",
+                    name="Sales",
+                    score=0.9,
+                    source="hybrid",
+                    metadata={"table_name": "public.sales", "key_columns": [{"name": "amount"}]},
+                ),
+                RetrievedDataPoint(
+                    datapoint_id="table_orders_001",
+                    datapoint_type="Schema",
+                    name="Orders",
+                    score=0.85,
+                    source="hybrid",
+                    metadata={"table_name": "public.orders", "key_columns": [{"name": "order_id"}]},
+                ),
+            ],
+            total_retrieved=2,
+            retrieval_mode="hybrid",
+            sources_used=["table_sales_001", "table_orders_001"],
+        )
+        input_data = SQLAgentInput(
+            query="show columns",
+            investigation_memory=memory,
+            database_type="postgresql",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.needs_clarification is True
+        assert "Which table should I list columns for?" in output.generated_sql.clarifying_questions
+        assert output.metadata.llm_calls == 0
+
 
 class TestSelfCorrection:
     """Test SQLAgent self-correction capabilities."""
@@ -643,7 +717,7 @@ class TestDatabaseContext:
             investigation_memory=memory,
         )
         sql = sql_agent._build_row_count_fallback(sql_input)
-        assert sql == "SELECT COUNT(*) FROM pg_tables"
+        assert sql == "SELECT COUNT(*) AS row_count FROM pg_tables"
 
     def test_row_count_fallback_schema_qualified_table(self, sql_agent):
         memory = InvestigationMemory(
@@ -658,7 +732,7 @@ class TestDatabaseContext:
             investigation_memory=memory,
         )
         sql = sql_agent._build_row_count_fallback(sql_input)
-        assert sql == "SELECT COUNT(*) FROM information_schema.tables"
+        assert sql == "SELECT COUNT(*) AS row_count FROM information_schema.tables"
 
     def test_sample_rows_fallback_uses_explicit_table(self, sql_agent):
         memory = InvestigationMemory(
@@ -674,6 +748,24 @@ class TestDatabaseContext:
         )
         sql = sql_agent._build_sample_rows_fallback(sql_input)
         assert sql == "SELECT * FROM public.orders LIMIT 2"
+
+    def test_list_columns_fallback_uses_explicit_table(self, sql_agent):
+        memory = InvestigationMemory(
+            query="show columns in public.orders",
+            datapoints=[],
+            total_retrieved=0,
+            retrieval_mode="hybrid",
+            sources_used=[],
+        )
+        sql_input = SQLAgentInput(
+            query="show columns in public.orders",
+            investigation_memory=memory,
+            database_type="postgresql",
+        )
+        sql = sql_agent._build_list_columns_fallback(sql_input)
+        assert sql is not None
+        assert "information_schema.columns" in sql
+        assert "table_name = 'orders'" in sql
 
     @pytest.mark.asyncio
     async def test_build_prompt_uses_input_database_context(
@@ -715,7 +807,7 @@ class TestDatabaseContext:
 
         assert "conversation" in prompt.lower()
         assert "which table should i use" in prompt.lower()
-        assert "use table sales" in prompt.lower()
+        assert "show 5 rows from sales" in prompt.lower()
 
     @pytest.mark.asyncio
     async def test_live_schema_lookup_prefers_input_database_url(self, sql_agent):
@@ -825,6 +917,16 @@ class TestErrorHandling:
         )
         extracted = sql_agent._extract_sql_statement(text)
         assert extracted is None
+
+    def test_short_command_like_followup_is_not_treated_as_table_hint(self, sql_agent):
+        assert sql_agent._looks_like_followup_hint("show columns") is False
+
+    def test_merge_query_with_table_hint_replaces_old_table_reference(self, sql_agent):
+        merged = sql_agent._merge_query_with_table_hint(
+            "show 2 rows in public.sales",
+            "petra_campuses",
+        )
+        assert merged == "Show 2 rows from petra_campuses"
 
 
 class TestInputValidation:
