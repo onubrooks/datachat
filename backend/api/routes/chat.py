@@ -120,6 +120,8 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             else:
                 answer = "I was unable to process your query. Please try rephrasing."
         answer = _maybe_append_live_schema_notice(answer, status_state.has_datapoints)
+        answer_source = _resolve_answer_source(result)
+        answer_confidence = _resolve_answer_confidence(result, answer_source)
 
         # Extract SQL
         sql_query = result.get("validated_sql") or result.get("generated_sql")
@@ -154,8 +156,8 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             data=data,
             visualization_hint=visualization_hint,
             sources=sources,
-            answer_source=result.get("answer_source"),
-            answer_confidence=result.get("answer_confidence"),
+            answer_source=answer_source,
+            answer_confidence=answer_confidence,
             evidence=_build_evidence(result),
             validation_errors=result.get("validation_errors", []),
             validation_warnings=result.get("validation_warnings", []),
@@ -258,3 +260,40 @@ def _maybe_append_live_schema_notice(answer: str, has_datapoints: bool) -> str:
     if LIVE_SCHEMA_MODE_NOTICE in answer:
         return answer
     return f"{answer}\n\n{LIVE_SCHEMA_MODE_NOTICE}"
+
+
+def _resolve_answer_source(result: dict[str, Any]) -> str:
+    source = result.get("answer_source")
+    if source:
+        return source
+    if result.get("tool_approval_required"):
+        return "approval"
+    if result.get("clarification_needed") or result.get("clarifying_questions"):
+        return "clarification"
+    if result.get("error"):
+        return "error"
+    if result.get("validated_sql") or result.get("generated_sql") or result.get("query_result"):
+        return "sql"
+    if result.get("natural_language_answer"):
+        return "context"
+    return "error"
+
+
+def _resolve_answer_confidence(result: dict[str, Any], source: str) -> float:
+    confidence = result.get("answer_confidence")
+    if confidence is not None:
+        try:
+            numeric = float(confidence)
+        except (TypeError, ValueError):
+            numeric = 0.5
+        return max(0.0, min(1.0, numeric))
+
+    defaults = {
+        "sql": 0.7,
+        "context": 0.6,
+        "clarification": 0.2,
+        "system": 0.8,
+        "approval": 0.5,
+        "error": 0.0,
+    }
+    return defaults.get(source, 0.5)

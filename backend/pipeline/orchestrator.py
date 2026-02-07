@@ -729,10 +729,14 @@ class DataChatPipeline:
                     for evidence in output.context_answer.evidence
                 ]
             if output.context_answer.clarifying_questions:
+                clarification_intro = (
+                    output.context_answer.answer
+                    or "I need a bit more detail before I can continue."
+                )
                 self._apply_clarification_response(
                     state,
                     output.context_answer.clarifying_questions,
-                    default_intro="I need a bit more detail before I can continue.",
+                    default_intro=clarification_intro,
                 )
             else:
                 state["clarification_needed"] = False
@@ -981,6 +985,25 @@ class DataChatPipeline:
                 if not questions:
                     questions = ["Which table should I use to answer this?"]
                 self._apply_clarification_response(state, questions)
+                return state
+
+            if await self._should_gate_low_confidence_sql(state, output):
+                fallback = await self._build_clarification_fallback(state)
+                if fallback:
+                    self._apply_clarification_response(
+                        state,
+                        fallback["questions"],
+                        default_intro=fallback["answer"],
+                    )
+                else:
+                    self._apply_clarification_response(
+                        state,
+                        ["Which table should I use to answer this?"],
+                        default_intro=(
+                            "I am not confident enough to run this query yet. "
+                            "Please confirm the table first."
+                        ),
+                    )
                 return state
 
             # Clear any stale clarification flags from earlier agents.
@@ -1735,14 +1758,18 @@ class DataChatPipeline:
         ranked = self._rank_table_candidates(state.get("query") or "", candidates, limit=5)
         if not ranked:
             return None
-
+        focus_hint = self._extract_focus_hint(state.get("query") or "")
+        focus_text = f" for {focus_hint}" if focus_hint else ""
         table_list = ", ".join(ranked)
         answer = (
             "I still need a bit more detail to generate SQL. "
             f"Here are a few tables that look relevant: {table_list}. "
             "Which table should I use?"
         )
-        return {"answer": answer, "questions": ["Which table should I use?"]}
+        return {
+            "answer": answer,
+            "questions": [f"Which table should I use{focus_text}?"],
+        }
 
     def _collect_table_candidates(self, state: PipelineState) -> list[str]:
         candidates: list[str] = []
@@ -1801,6 +1828,35 @@ class DataChatPipeline:
             return [name for _, name in scored[:limit]]
 
         return [name for score, name in scored if score > 0][:limit]
+
+    async def _should_gate_low_confidence_sql(
+        self,
+        state: PipelineState,
+        output: Any,
+    ) -> bool:
+        """Block low-confidence semantic SQL and request clarification first."""
+        query = (state.get("query") or "").strip()
+        if not query:
+            return False
+        if self._is_deterministic_sql_query(query):
+            return False
+        if self._query_is_table_list(query.lower()) or self._query_is_column_list(query.lower()):
+            return False
+        if self._extract_table_reference(query.lower()):
+            return False
+
+        confidence = float(output.generated_sql.confidence or 0.0)
+        if confidence >= 0.55:
+            return False
+
+        if self._extract_focus_hint(query):
+            return True
+
+        if self._contains_data_keywords(query.lower()):
+            return True
+
+        summary = state.get("intent_summary") or {}
+        return bool(self._is_ambiguous_intent(state, summary))
 
     def _classify_intent_gate(self, query: str) -> str:
         text = query.strip().lower()
@@ -1881,6 +1937,24 @@ class DataChatPipeline:
         if re.search(r"\b(row count|how many rows|records?)\b", lower):
             return f"How many rows are in {hint}?"
         return f"{base.rstrip('. ')} Use table {hint}."
+
+    def _extract_focus_hint(self, query: str) -> str | None:
+        lowered = query.lower()
+        for token in (
+            "revenue",
+            "sales",
+            "growth",
+            "churn",
+            "retention",
+            "conversion",
+            "registrations",
+            "orders",
+            "users",
+            "customers",
+        ):
+            if token in lowered:
+                return token
+        return None
 
     def _is_setup_help_intent(self, text: str) -> bool:
         patterns = [
@@ -2318,6 +2392,7 @@ class DataChatPipeline:
 
         # Run graph
         result = await self.graph.ainvoke(initial_state)
+        self._normalize_answer_metadata(result)
 
         total_time = (time.time() - start_time) * 1000
         logger.info(
@@ -2584,6 +2659,7 @@ class DataChatPipeline:
         total_latency_ms = (time.time() - pipeline_start) * 1000
         if final_state:
             final_state["total_latency_ms"] = total_latency_ms
+            self._normalize_answer_metadata(final_state)
 
         logger.info(
             f"Pipeline streaming complete in {total_latency_ms:.1f}ms "
@@ -2591,6 +2667,44 @@ class DataChatPipeline:
         )
 
         return final_state or initial_state
+
+    def _normalize_answer_metadata(self, state: PipelineState) -> None:
+        """Ensure answer source/confidence are consistently populated."""
+        source = state.get("answer_source")
+        if not source:
+            if state.get("tool_approval_required"):
+                source = "approval"
+            elif state.get("clarification_needed") or state.get("clarifying_questions"):
+                source = "clarification"
+            elif state.get("error"):
+                source = "error"
+            elif (
+                state.get("validated_sql")
+                or state.get("generated_sql")
+                or state.get("query_result")
+            ):
+                source = "sql"
+            elif state.get("intent_gate") in {"exit", "out_of_scope", "small_talk", "setup_help"}:
+                source = "system"
+            elif state.get("natural_language_answer"):
+                source = "context"
+            else:
+                source = "error"
+            state["answer_source"] = source
+
+        if state.get("answer_confidence") is None:
+            defaults = {
+                "sql": 0.7,
+                "context": 0.6,
+                "clarification": 0.2,
+                "system": 0.8,
+                "approval": 0.5,
+                "error": 0.0,
+            }
+            state["answer_confidence"] = defaults.get(source, 0.5)
+        else:
+            confidence = float(state.get("answer_confidence", 0.5))
+            state["answer_confidence"] = max(0.0, min(1.0, confidence))
 
 
 # ============================================================================

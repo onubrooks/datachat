@@ -940,6 +940,97 @@ class TestIntentGate:
         )
         assert merged == "Show 2 rows from petra_campuses"
 
+    @pytest.mark.asyncio
+    async def test_low_confidence_semantic_sql_triggers_clarification(self, pipeline):
+        pipeline.classifier.execute = AsyncMock(
+            return_value=ClassifierAgentOutput(
+                success=True,
+                classification=QueryClassification(
+                    intent="data_query",
+                    entities=[],
+                    complexity="simple",
+                    clarification_needed=False,
+                    clarifying_questions=[],
+                    confidence=0.9,
+                ),
+                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=0),
+            )
+        )
+        pipeline.context.execute = AsyncMock(
+            return_value=ContextAgentOutput(
+                success=True,
+                data={},
+                investigation_memory=InvestigationMemory(
+                    query="Show revenue by campus this month",
+                    datapoints=[
+                        RetrievedDataPoint(
+                            datapoint_id="table_orders_001",
+                            datapoint_type="Schema",
+                            name="Orders",
+                            score=0.91,
+                            source="vector",
+                            metadata={"table_name": "public.orders"},
+                        )
+                    ],
+                    retrieval_mode="hybrid",
+                    total_retrieved=1,
+                    sources_used=["table_orders_001"],
+                ),
+                context_confidence=0.1,
+                metadata=AgentMetadata(agent_name="ContextAgent", llm_calls=0),
+            )
+        )
+        pipeline.sql.execute = AsyncMock(
+            return_value=SQLAgentOutput(
+                success=True,
+                generated_sql=GeneratedSQL(
+                    sql="SELECT SUM(amount) FROM public.orders",
+                    explanation="Guessing revenue from orders amount.",
+                    confidence=0.32,
+                    used_datapoints=["table_orders_001"],
+                    assumptions=["revenue maps to orders.amount"],
+                    clarifying_questions=[],
+                ),
+                metadata=AgentMetadata(agent_name="SQLAgent", llm_calls=1),
+            )
+        )
+        pipeline.validator.execute = AsyncMock()
+        pipeline.executor.execute = AsyncMock()
+
+        result = await pipeline.run("Show revenue by campus this month")
+
+        assert result.get("answer_source") == "clarification"
+        assert result.get("clarifying_questions")
+        assert "revenue" in result.get("clarifying_questions", [""])[0].lower()
+        assert pipeline.validator.execute.call_count == 0
+        assert pipeline.executor.execute.call_count == 0
+
+    def test_normalize_answer_metadata_assigns_defaults(self, pipeline):
+        state = {
+            "natural_language_answer": "Found rows.",
+            "validated_sql": "SELECT * FROM public.orders LIMIT 2",
+            "answer_source": None,
+            "answer_confidence": None,
+        }
+
+        pipeline._normalize_answer_metadata(state)
+
+        assert state["answer_source"] == "sql"
+        assert state["answer_confidence"] == 0.7
+
+    def test_normalize_answer_metadata_treats_generated_sql_as_sql(self, pipeline):
+        state = {
+            "generated_sql": "SELECT * FROM public.orders LIMIT 2",
+            "answer_source": None,
+            "answer_confidence": None,
+            "error": None,
+        }
+
+        pipeline._normalize_answer_metadata(state)
+
+        assert state["answer_source"] == "sql"
+        assert state["answer_confidence"] == 0.7
+
 
 class TestStreaming:
     """Test streaming functionality."""

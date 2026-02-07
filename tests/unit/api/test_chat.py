@@ -416,3 +416,69 @@ class TestChatEndpoint:
                 assert response.status_code == 200
                 data = response.json()
                 assert data["conversation_id"] == "my_custom_id"
+
+    @pytest.mark.asyncio
+    async def test_chat_infers_answer_source_and_confidence_defaults(
+        self, client, initialized_status
+    ):
+        pipeline_result = {
+            "natural_language_answer": "Found 2 rows.",
+            "validated_sql": "SELECT * FROM public.orders LIMIT 2",
+            "query_result": {"rows": [{"id": 1}, {"id": 2}], "columns": ["id"]},
+            "total_latency_ms": 10.0,
+            "agent_timings": {},
+            "llm_calls": 0,
+            "retry_count": 0,
+        }
+        with patch(
+            "backend.api.routes.chat.SystemInitializer.status",
+            new=AsyncMock(return_value=initialized_status),
+        ):
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
+                response = client.post(
+                    "/api/v1/chat",
+                    json={"message": "show 2 rows from public.orders"},
+                )
+
+                assert response.status_code == 200
+                payload = response.json()
+                assert payload["answer_source"] == "sql"
+                assert payload["answer_confidence"] == 0.7
+
+    @pytest.mark.asyncio
+    async def test_chat_clamps_answer_confidence(
+        self, client, initialized_status
+    ):
+        pipeline_result = {
+            "natural_language_answer": "Summary.",
+            "answer_source": "context",
+            "answer_confidence": 2.5,
+            "total_latency_ms": 10.0,
+            "agent_timings": {},
+            "llm_calls": 0,
+            "retry_count": 0,
+        }
+        with patch(
+            "backend.api.routes.chat.SystemInitializer.status",
+            new=AsyncMock(return_value=initialized_status),
+        ):
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
+                response = client.post(
+                    "/api/v1/chat",
+                    json={"message": "summarize context"},
+                )
+
+                assert response.status_code == 200
+                payload = response.json()
+                assert payload["answer_source"] == "context"
+                assert payload["answer_confidence"] == 1.0
