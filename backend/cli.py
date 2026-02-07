@@ -25,7 +25,6 @@ os.environ.setdefault("GRPC_ENABLE_FORK_SUPPORT", "0")
 os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 os.environ.setdefault("GRPC_TRACE", "")
 os.environ.setdefault("GLOG_minloglevel", "3")
-os.environ.setdefault("LOG_LEVEL", "CRITICAL")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 import asyncio
