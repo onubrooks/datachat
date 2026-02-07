@@ -670,13 +670,20 @@ class ExecutorAgent(BaseAgent):
 
     def _extract_table_name_from_sql(self, sql: str) -> str | None:
         match = re.search(
-            r"\bfrom\s+([a-zA-Z0-9_.`\"]+)",
+            r'\bfrom\s+(`[^`]+`|(?:"[^"]+"(?:\."[^"]+")*)|[a-zA-Z0-9_.-]+)',
             sql,
             re.IGNORECASE,
         )
         if not match:
             return None
-        return match.group(1).strip().strip("`").strip('"')
+
+        identifier = match.group(1).strip()
+        if identifier.startswith("`") and identifier.endswith("`"):
+            return identifier[1:-1]
+        if '"' in identifier:
+            parts = [part.strip('"') for part in identifier.split(".")]
+            return ".".join(parts)
+        return identifier
 
     def _extract_information_schema_target_table(self, sql: str) -> str | None:
         match = re.search(

@@ -825,6 +825,105 @@ class TestIntentGate:
         assert result.get("fast_path") is True
         assert pipeline.sql.execute.called
 
+    @pytest.mark.asyncio
+    async def test_reply_after_clarification_continues_previous_goal(self, pipeline):
+        pipeline.sql.execute = AsyncMock(
+            return_value=SQLAgentOutput(
+                success=True,
+                generated_sql=GeneratedSQL(
+                    sql="SELECT * FROM public.petra_campuses LIMIT 2",
+                    explanation="Sample rows from selected replacement table.",
+                    confidence=0.95,
+                    used_datapoints=[],
+                    assumptions=[],
+                    clarifying_questions=[],
+                ),
+                metadata=AgentMetadata(agent_name="SQLAgent", llm_calls=0),
+            )
+        )
+        pipeline.validator.execute = AsyncMock(
+            return_value=ValidatorAgentOutput(
+                success=True,
+                validated_sql=ValidatedSQL(
+                    sql="SELECT * FROM public.petra_campuses LIMIT 2",
+                    is_valid=True,
+                    is_safe=True,
+                    errors=[],
+                    warnings=[],
+                    performance_score=0.9,
+                ),
+                metadata=AgentMetadata(agent_name="ValidatorAgent", llm_calls=0),
+            )
+        )
+        pipeline.executor.execute = AsyncMock(
+            return_value=ExecutorAgentOutput(
+                success=True,
+                executed_query=ExecutedQuery(
+                    query_result=QueryResult(
+                        rows=[{"id": 1, "location": "Abuja"}],
+                        row_count=1,
+                        columns=["id", "location"],
+                        execution_time_ms=3.0,
+                        was_truncated=False,
+                    ),
+                    natural_language_answer="Returned 1 sample row.",
+                    visualization_hint="table",
+                    key_insights=[],
+                    source_citations=[],
+                ),
+                metadata=AgentMetadata(agent_name="ExecutorAgent", llm_calls=0),
+            )
+        )
+
+        history = [
+            {"role": "user", "content": "show 2 rows in public.sales"},
+            {
+                "role": "assistant",
+                "content": (
+                    "I couldn't find public.sales in the connected database schema.\n"
+                    "Clarifying questions:\n"
+                    "- Which existing table should I use instead?"
+                ),
+            },
+        ]
+
+        result = await pipeline.run("petra_campuses", conversation_history=history)
+
+        assert result.get("intent_gate") == "data_query"
+        assert result.get("fast_path") is True
+        assert result.get("original_query") == "petra_campuses"
+        assert result.get("query") == "Show 2 rows from petra_campuses"
+        assert pipeline.sql.execute.called
+        sql_input = pipeline.sql.execute.call_args.args[0]
+        assert sql_input.query == "Show 2 rows from petra_campuses"
+        assert not pipeline.classifier.execute.called
+
+    @pytest.mark.asyncio
+    async def test_reply_after_clarification_can_switch_to_new_exit_intent(self, pipeline):
+        pipeline.sql.execute = AsyncMock()
+        history = [
+            {"role": "user", "content": "show 2 rows in public.sales"},
+            {
+                "role": "assistant",
+                "content": (
+                    "I couldn't find public.sales in the connected database schema.\n"
+                    "Clarifying questions:\n"
+                    "- Which existing table should I use instead?"
+                ),
+            },
+        ]
+
+        result = await pipeline.run(
+            "never mind, i'll ask later",
+            conversation_history=history,
+        )
+
+        assert result.get("intent_gate") == "exit"
+        assert result.get("answer_source") == "system"
+        assert "Ending the session" in result.get("natural_language_answer", "")
+        assert not pipeline.sql.execute.called
+        assert not pipeline.classifier.execute.called
+
     def test_short_command_like_message_not_treated_as_followup_hint(self, pipeline):
         assert pipeline._is_short_followup("show columns") is False
 
