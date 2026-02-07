@@ -17,10 +17,16 @@ Usage:
     datachat status                        # Show connection status
 """
 
+import os
+
+os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+os.environ.setdefault("GRPC_TRACE", "")
+os.environ.setdefault("GLOG_minloglevel", "3")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+
 import asyncio
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -44,25 +50,18 @@ from backend.knowledge.graph import KnowledgeGraph
 from backend.knowledge.retriever import Retriever
 from backend.knowledge.vectors import VectorStore
 from backend.pipeline.orchestrator import DataChatPipeline
+from backend.settings_store import apply_config_defaults
 from backend.tools import ToolExecutor, initialize_tools
 from backend.tools.base import ToolContext
-from backend.settings_store import apply_config_defaults
-
-os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
-os.environ.setdefault("GRPC_TRACE", "")
 
 console = Console()
 API_BASE_URL = os.getenv("DATA_CHAT_API_URL", "http://localhost:8000")
 
 
 def configure_cli_logging() -> None:
-    logging.basicConfig(level=logging.INFO)
-    info_filter = logging.Filter()
-    info_filter.filter = lambda record: record.levelno == logging.INFO  # type: ignore[method-assign]
-    for handler in logging.getLogger().handlers:
-        handler.addFilter(info_filter)
-    for logger_name in ("backend", "httpx", "openai", "asyncio"):
-        logging.getLogger(logger_name).setLevel(logging.INFO)
+    logging.basicConfig(level=logging.CRITICAL)
+    for logger_name in ("backend", "httpx", "openai", "asyncio", "google", "grpc"):
+        logging.getLogger(logger_name).setLevel(logging.CRITICAL)
 
 
 # ============================================================================
@@ -500,7 +499,14 @@ def chat(evidence: bool, pager: bool):
     default=False,
     help="Show the response in a scrollable pager.",
 )
-def ask(query: str, evidence: bool, pager: bool):
+@click.option(
+    "--max-clarifications",
+    default=3,
+    show_default=True,
+    type=int,
+    help="Maximum clarification prompts before stopping.",
+)
+def ask(query: str, evidence: bool, pager: bool, max_clarifications: int):
     """Ask a single question and exit."""
 
     async def run_query():
@@ -509,6 +515,7 @@ def ask(query: str, evidence: bool, pager: bool):
             conversation_history = []
             current_query = query
             clarification_attempts = 0
+            max_clarifications_limit = max(0, max_clarifications)
 
             while True:
                 # Show loading with progress
@@ -536,7 +543,7 @@ def ask(query: str, evidence: bool, pager: bool):
                 )
 
                 clarifying_questions = result.get("clarifying_questions") or []
-                if not clarifying_questions or clarification_attempts >= 2:
+                if not clarifying_questions or clarification_attempts >= max_clarifications_limit:
                     break
 
                 followup = console.input("[bold cyan]Clarification:[/bold cyan] ").strip()

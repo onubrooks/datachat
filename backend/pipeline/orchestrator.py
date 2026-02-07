@@ -1109,7 +1109,7 @@ class DataChatPipeline:
             synthesized = await self.response_synthesis.execute(
                 query=state.get("query", ""),
                 sql=state.get("validated_sql") or state.get("generated_sql") or "",
-                result_summary=json.dumps(result_summary),
+                result_summary=json.dumps(result_summary, default=str),
                 context_preface=state.get("context_preface"),
             )
             state["natural_language_answer"] = synthesized

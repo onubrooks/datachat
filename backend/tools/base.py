@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import inspect
 import logging
+from collections.abc import Callable
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 from pydantic import BaseModel, Field
-
 
 logger = logging.getLogger(__name__)
 

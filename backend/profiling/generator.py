@@ -10,8 +10,8 @@ from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
 from backend.models.datapoint import BusinessDataPoint, ColumnMetadata, SchemaDataPoint
 from backend.profiling.models import (
-    DatabaseProfile,
     ColumnProfile,
+    DatabaseProfile,
     GeneratedDataPoint,
     GeneratedDataPoints,
     TableProfile,
@@ -225,7 +225,7 @@ class DataPointGenerator:
         metrics = payload.get("metrics", []) if isinstance(payload, dict) else []
 
         generated: list[GeneratedDataPoint] = []
-        for metric_index, metric in enumerate(metrics, start=1):
+        for _metric_index, metric in enumerate(metrics, start=1):
             name = metric.get("name") or f"{table.name} metric"
             calculation = metric.get("calculation") or f"SUM({numeric_columns[0].name})"
             business_rules = self._normalize_list(metric.get("business_rules"))
@@ -310,7 +310,7 @@ class DataPointGenerator:
         metric_defs.append((f"Average {col}", f"AVG({col})", "AVG"))
 
         generated: list[GeneratedDataPoint] = []
-        for metric_index, (name, calculation, aggregation) in enumerate(
+        for _metric_index, (name, calculation, aggregation) in enumerate(
             metric_defs[:max_metrics_per_table], start=1
         ):
             display_name = f"{self._title_case(table.name)} {name}"
@@ -357,7 +357,7 @@ class DataPointGenerator:
         for batch_start in range(0, len(eligible_tables), batch_size):
             batch = eligible_tables[batch_start : batch_start + batch_size]
             payload = await self._generate_metrics_batch(batch, max_metrics_per_table)
-            for idx, table in enumerate(batch):
+            for _idx, table in enumerate(batch):
                 table_payload = payload.get(table.name) or payload.get(
                     f"{table.schema_name}.{table.name}", {}
                 )
@@ -369,7 +369,7 @@ class DataPointGenerator:
                 ]
                 if not numeric_cols:
                     continue
-                for metric_index, metric in enumerate(metrics, start=1):
+                for _metric_index, metric in enumerate(metrics, start=1):
                     name = metric.get("name") or f"{table.name} metric"
                     calculation = metric.get("calculation") or f"SUM({numeric_cols[0]})"
                     business_rules = self._normalize_list(metric.get("business_rules"))
@@ -528,7 +528,6 @@ class DataPointGenerator:
         return scored[0][1]
 
     def _derive_table_purpose(self, table: TableProfile) -> str:
-        base_name = self._title_case(table.name)
         column_names = [col.name for col in table.columns[:5]]
         hints = ""
         name_lower = table.name.lower()

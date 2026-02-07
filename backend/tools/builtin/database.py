@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import Any
-
 from urllib.parse import urlparse
 
 from backend.connectors.base import BaseConnector
