@@ -7,7 +7,7 @@ Supports tables, columns, metrics, and their connections.
 
 import json
 import logging
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,7 @@ from backend.models.datapoint import (
 logger = logging.getLogger(__name__)
 
 
-class NodeType(str, Enum):
+class NodeType(StrEnum):
     """Types of nodes in the knowledge graph."""
 
     TABLE = "table"
@@ -34,7 +34,7 @@ class NodeType(str, Enum):
     GLOSSARY = "glossary"
 
 
-class EdgeType(str, Enum):
+class EdgeType(StrEnum):
     """Types of edges in the knowledge graph."""
 
     BELONGS_TO = "belongs_to"  # Column -> Table

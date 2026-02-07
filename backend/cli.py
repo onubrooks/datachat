@@ -19,9 +19,13 @@ Usage:
 
 import os
 
+os.environ.setdefault("ABSL_LOGGING_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("ABSL_LOGGING_STDERR_THRESHOLD", "3")
+os.environ.setdefault("GRPC_ENABLE_FORK_SUPPORT", "0")
 os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 os.environ.setdefault("GRPC_TRACE", "")
 os.environ.setdefault("GLOG_minloglevel", "3")
+os.environ.setdefault("LOG_LEVEL", "CRITICAL")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 import asyncio
@@ -59,6 +63,7 @@ API_BASE_URL = os.getenv("DATA_CHAT_API_URL", "http://localhost:8000")
 
 
 def configure_cli_logging() -> None:
+    logging.disable(logging.CRITICAL)
     logging.basicConfig(level=logging.CRITICAL)
     for logger_name in ("backend", "httpx", "openai", "asyncio", "google", "grpc"):
         logging.getLogger(logger_name).setLevel(logging.CRITICAL)
@@ -148,12 +153,10 @@ async def create_pipeline_from_config() -> DataChatPipeline:
     settings = get_settings()
 
     # Initialize vector store
-    console.print("[cyan]Initializing vector store...[/cyan]")
     vector_store = VectorStore()
     await vector_store.initialize()
 
     # Initialize knowledge graph
-    console.print("[cyan]Initializing knowledge graph...[/cyan]")
     knowledge_graph = KnowledgeGraph()
 
     # Initialize retriever

@@ -6,7 +6,7 @@ Supports local (vector), global (graph), and hybrid retrieval modes.
 """
 
 import logging
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -17,7 +17,7 @@ from backend.knowledge.vectors import VectorStore
 logger = logging.getLogger(__name__)
 
 
-class RetrievalMode(str, Enum):
+class RetrievalMode(StrEnum):
     """Retrieval modes for context gathering."""
 
     LOCAL = "local"  # Vector search only (semantic similarity)
