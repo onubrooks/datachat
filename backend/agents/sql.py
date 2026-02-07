@@ -426,8 +426,11 @@ class SQLAgent(BaseAgent):
         issues: list[ValidationIssue] = []
         sql = generated_sql.sql.strip().upper()
         db_type = input.database_type or getattr(self.config.database, "db_type", "postgresql")
+        is_show_statement = db_type == "mysql" and sql.startswith("SHOW")
 
         # Basic syntax checks
+        if is_show_statement:
+            return issues
         if not sql.startswith("SELECT") and not sql.startswith("WITH"):
             issues.append(
                 ValidationIssue(

@@ -527,6 +527,22 @@ class TestValidation:
 
         assert len(issues) == 0
 
+    def test_accepts_mysql_show_tables(self, sql_agent, sample_sql_agent_input):
+        """Test accepts MySQL SHOW TABLES in validation."""
+        sql_input = sample_sql_agent_input.model_copy(update={"database_type": "mysql"})
+        catalog_sql = GeneratedSQL(
+            sql="SHOW TABLES",
+            explanation="MySQL catalog query",
+            used_datapoints=[],
+            confidence=0.8,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+
+        issues = sql_agent._validate_sql(catalog_sql, sql_input)
+
+        assert len(issues) == 0
+
 
 class TestPromptBuilding:
     """Test prompt construction logic."""
