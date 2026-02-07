@@ -36,6 +36,11 @@ async def profile_and_generate_datapoints(
     depth: str = "metrics_basic",
     batch_size: int = 10,
     max_tables: int | None = None,
+    sample_size: int = 100,
+    max_columns_per_table: int = 100,
+    query_timeout_seconds: int = 5,
+    per_table_timeout_seconds: int = 20,
+    total_timeout_seconds: int = 180,
     ctx: ToolContext | None = None,
 ) -> dict[str, Any]:
     if connection_id is None:
@@ -47,7 +52,15 @@ async def profile_and_generate_datapoints(
     await store.initialize()
     try:
         profiler = SchemaProfiler(manager)
-        profile = await profiler.profile_database(connection_id=connection_id)
+        profile = await profiler.profile_database(
+            connection_id=connection_id,
+            sample_size=sample_size,
+            max_tables=max_tables,
+            max_columns_per_table=max_columns_per_table,
+            query_timeout_seconds=query_timeout_seconds,
+            per_table_timeout_seconds=per_table_timeout_seconds,
+            total_timeout_seconds=total_timeout_seconds,
+        )
         await store.save_profile(profile)
 
         generator = DataPointGenerator()

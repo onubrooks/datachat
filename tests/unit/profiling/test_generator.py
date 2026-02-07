@@ -135,3 +135,32 @@ async def test_returns_confidence_scores():
     generated = await generator.generate_from_profile(profile, depth="metrics_full")
 
     assert generated.schema_datapoints[0].confidence == 0.9
+
+
+@pytest.mark.asyncio
+async def test_skips_failed_tables_in_partial_profiles():
+    profile = _sample_profile()
+    failed_table = TableProfile(
+        schema="public",
+        name="broken_table",
+        row_count=None,
+        columns=[],
+        relationships=[],
+        sample_size=2,
+        status="failed",
+        error="profiling timed out",
+    )
+    profile.tables.append(failed_table)
+
+    llm = FakeLLM(
+        [
+            '{"business_purpose": "Orders", "columns": {"order_id": "Order id", "total_amount": "Total", "created_at": "Date"}, "confidence": 0.9}',
+            '{"orders": {"metrics": []}}',
+        ]
+    )
+    generator = DataPointGenerator(llm_provider=llm)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
+
+    schema_table_names = [item.datapoint.get("table_name") for item in generated.schema_datapoints]
+    assert "public.orders" in schema_table_names
+    assert "public.broken_table" not in schema_table_names

@@ -59,6 +59,31 @@ Notes:
 - `POST /datapoints/pending/{id}/reject` - Reject a DataPoint.
 - `POST /datapoints/pending/bulk-approve` - Approve all pending DataPoints.
 
+Profiling request payload (bounded/safe by default):
+```json
+{
+  "sample_size": 100,
+  "max_tables": 50,
+  "max_columns_per_table": 100,
+  "query_timeout_seconds": 5,
+  "per_table_timeout_seconds": 20,
+  "total_timeout_seconds": 180,
+  "fail_fast": false,
+  "tables": ["orders", "customers"]
+}
+```
+
+Profiling progress now includes partial coverage metadata:
+- `total_tables`
+- `tables_completed`
+- `tables_failed`
+- `tables_skipped`
+
+Notes:
+- Profiling is resilient to per-table failures and timeouts; a job can complete with partial coverage.
+- Lightweight profiling snapshots are cached locally and used to enrich credentials-only SQL prompts.
+- Query templates are available for `postgresql`, `mysql`, `bigquery`, `clickhouse`, and `redshift`; runtime execution is currently PostgreSQL-only until additional connectors land.
+
 Approve payload supports optional edits:
 ```json
 {

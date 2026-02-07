@@ -284,10 +284,19 @@ class DataPointGenerator:
         requested: list[str] | None,
         max_tables: int | None,
     ) -> list[TableProfile]:
-        selection = tables
+        selection = [
+            table
+            for table in tables
+            if table.status != "failed" and table.columns
+        ]
         if requested:
             requested_set = {name.lower() for name in requested}
             selection = [table for table in tables if table.name.lower() in requested_set]
+            selection = [
+                table
+                for table in selection
+                if table.status != "failed" and table.columns
+            ]
         selection = sorted(selection, key=lambda t: t.row_count or 0, reverse=True)
         if max_tables is not None:
             return selection[:max_tables]

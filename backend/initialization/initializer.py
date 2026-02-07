@@ -213,11 +213,19 @@ class SystemInitializer:
                     async def run_profile_job() -> None:
                         profiler = SchemaProfiler(database_manager)
 
-                        async def progress_callback(total: int, completed: int) -> None:
+                        async def progress_callback(
+                            total: int,
+                            completed: int,
+                            failed: int = 0,
+                            skipped: int = 0,
+                        ) -> None:
                             await profiling_store.update_job(
                                 job.job_id,
                                 progress=ProfilingProgress(
-                                    total_tables=total, tables_completed=completed
+                                    total_tables=total,
+                                    tables_completed=completed,
+                                    tables_failed=failed,
+                                    tables_skipped=skipped,
                                 ),
                             )
 
@@ -226,6 +234,11 @@ class SystemInitializer:
                             profile = await profiler.profile_database(
                                 str(existing.connection_id),
                                 progress_callback=progress_callback,
+                                max_tables=50,
+                                max_columns_per_table=100,
+                                query_timeout_seconds=5,
+                                per_table_timeout_seconds=20,
+                                total_timeout_seconds=180,
                             )
                             await profiling_store.save_profile(profile)
                             await profiling_store.update_job(
@@ -233,8 +246,10 @@ class SystemInitializer:
                                 status="completed",
                                 profile_id=profile.profile_id,
                                 progress=ProfilingProgress(
-                                    total_tables=len(profile.tables),
-                                    tables_completed=len(profile.tables),
+                                    total_tables=profile.total_tables_discovered,
+                                    tables_completed=profile.tables_profiled,
+                                    tables_failed=profile.tables_failed,
+                                    tables_skipped=profile.tables_skipped,
                                 ),
                             )
                         except Exception as exc:

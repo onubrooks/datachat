@@ -21,6 +21,12 @@ router = APIRouter()
 
 class ProfilingRequest(BaseModel):
     sample_size: int = Field(default=100, gt=0, le=1000)
+    max_tables: int | None = Field(default=50, ge=1, le=500)
+    max_columns_per_table: int = Field(default=100, ge=1, le=500)
+    query_timeout_seconds: int = Field(default=5, ge=1, le=60)
+    per_table_timeout_seconds: int = Field(default=20, ge=1, le=300)
+    total_timeout_seconds: int = Field(default=180, ge=10, le=1800)
+    fail_fast: bool = False
     tables: list[str] | None = None
 
 
@@ -212,10 +218,20 @@ async def start_profiling_job(
     async def run_job() -> None:
         profiler = SchemaProfiler(manager)
 
-        async def progress_callback(total: int, completed: int) -> None:
+        async def progress_callback(
+            total: int,
+            completed: int,
+            failed: int = 0,
+            skipped: int = 0,
+        ) -> None:
             await store.update_job(
                 job.job_id,
-                progress=ProfilingProgress(total_tables=total, tables_completed=completed),
+                progress=ProfilingProgress(
+                    total_tables=total,
+                    tables_completed=completed,
+                    tables_failed=failed,
+                    tables_skipped=skipped,
+                ),
             )
 
         try:
@@ -225,6 +241,12 @@ async def start_profiling_job(
                 sample_size=payload.sample_size,
                 tables=payload.tables,
                 progress_callback=progress_callback,
+                max_tables=payload.max_tables,
+                max_columns_per_table=payload.max_columns_per_table,
+                query_timeout_seconds=payload.query_timeout_seconds,
+                per_table_timeout_seconds=payload.per_table_timeout_seconds,
+                total_timeout_seconds=payload.total_timeout_seconds,
+                fail_fast=payload.fail_fast,
             )
             await store.save_profile(profile)
             await store.update_job(
@@ -232,8 +254,10 @@ async def start_profiling_job(
                 status="completed",
                 profile_id=profile.profile_id,
                 progress=ProfilingProgress(
-                    total_tables=len(profile.tables),
-                    tables_completed=len(profile.tables),
+                    total_tables=profile.total_tables_discovered,
+                    tables_completed=profile.tables_profiled,
+                    tables_failed=profile.tables_failed,
+                    tables_skipped=profile.tables_skipped,
                 ),
             )
         except Exception as exc:

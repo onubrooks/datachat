@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from backend.database.manager import DatabaseConnectionManager
 from backend.models.database import DatabaseConnection
 from backend.profiling.profiler import SchemaProfiler
+from backend.profiling.query_templates import supported_profile_template_databases
 
 
 class TestSchemaProfiler:
@@ -39,7 +40,7 @@ class TestSchemaProfiler:
     def _build_connection(self):
         conn = AsyncMock()
 
-        async def fetch(query, *args):
+        async def fetch(query, *args, **kwargs):
             if "information_schema.tables" in query:
                 return [
                     {"table_schema": "public", "table_name": "orders"},
@@ -72,10 +73,12 @@ class TestSchemaProfiler:
                 return [{"value": "sample"}, {"value": "sample2"}]
             return []
 
-        async def fetchrow(query, *args):
+        async def fetchrow(query, *args, **kwargs):
+            if "scoped_tables" in query:
+                return {"total": 1}
             if "pg_class" in query:
                 return {"estimate": 1234}
-            if "COUNT" in query:
+            if "COUNT(*) FILTER" in query:
                 return {
                     "null_count": 1,
                     "distinct_count": 2,
@@ -94,11 +97,17 @@ class TestSchemaProfiler:
         mock_connection = self._build_connection()
 
         with patch("asyncpg.connect", new=AsyncMock(return_value=mock_connection)):
-            profile = await profiler.profile_database(str(uuid4()), sample_size=2)
+            profile = await profiler.profile_database(
+                str(uuid4()),
+                sample_size=2,
+                query_timeout_seconds=2,
+            )
 
         assert profile.tables[0].name == "orders"
         assert profile.tables[0].row_count == 1234
         assert len(profile.tables[0].columns) == 2
+        assert profile.tables_profiled == 1
+        assert profile.tables_failed == 0
 
     @pytest.mark.asyncio
     async def test_samples_data_with_correct_size(self, manager):
@@ -136,3 +145,163 @@ class TestSchemaProfiler:
         assert column.distinct_count == 2
         assert column.min_value == "1"
         assert column.max_value == "5"
+
+    @pytest.mark.asyncio
+    async def test_respects_max_tables_limit(self, manager):
+        profiler = SchemaProfiler(manager)
+        mock_connection = self._build_connection()
+
+        async def fetch_tables(query, *args, **kwargs):
+            if "information_schema.tables" in query:
+                rows = [
+                    {"table_schema": "public", "table_name": "orders"},
+                    {"table_schema": "public", "table_name": "customers"},
+                ]
+                if "LIMIT" in query and args:
+                    return rows[: int(args[0])]
+                return rows
+            return await self._build_connection().fetch(query, *args, **kwargs)
+
+        mock_connection.fetch.side_effect = fetch_tables
+
+        async def fetchrow(query, *args, **kwargs):
+            if "scoped_tables" in query:
+                return {"total": 2}
+            return await self._build_connection().fetchrow(query, *args, **kwargs)
+
+        mock_connection.fetchrow.side_effect = fetchrow
+
+        with patch("asyncpg.connect", new=AsyncMock(return_value=mock_connection)):
+            profile = await profiler.profile_database(
+                str(uuid4()),
+                sample_size=2,
+                max_tables=1,
+            )
+
+        assert len(profile.tables) == 1
+        assert profile.total_tables_discovered == 2
+        assert profile.tables_skipped == 1
+
+    @pytest.mark.asyncio
+    async def test_continues_on_table_failure_and_records_partial(self, manager):
+        profiler = SchemaProfiler(manager)
+        mock_connection = self._build_connection()
+
+        async def fetch(query, *args, **kwargs):
+            if "information_schema.tables" in query:
+                return [
+                    {"table_schema": "public", "table_name": "orders"},
+                    {"table_schema": "public", "table_name": "broken_table"},
+                ]
+            if "information_schema.columns" in query:
+                schema, table = args[0], args[1]
+                if table == "broken_table":
+                    raise RuntimeError("catalog read failed")
+                if schema == "public" and table == "orders":
+                    return [
+                        {
+                            "column_name": "order_id",
+                            "data_type": "integer",
+                            "is_nullable": "NO",
+                            "column_default": None,
+                        }
+                    ]
+            if "SELECT" in query and "LIMIT" in query:
+                return [{"value": "sample"}]
+            if "information_schema.table_constraints" in query:
+                return []
+            return []
+
+        async def fetchrow(query, *args, **kwargs):
+            if "scoped_tables" in query:
+                return {"total": 2}
+            if "pg_class" in query:
+                return {"estimate": 11}
+            if "COUNT(*) FILTER" in query:
+                return {
+                    "null_count": 0,
+                    "distinct_count": 1,
+                    "min_value": "1",
+                    "max_value": "1",
+                }
+            return None
+
+        mock_connection.fetch.side_effect = fetch
+        mock_connection.fetchrow.side_effect = fetchrow
+
+        with patch("asyncpg.connect", new=AsyncMock(return_value=mock_connection)):
+            profile = await profiler.profile_database(str(uuid4()), sample_size=2)
+
+        assert profile.tables_profiled == 1
+        assert profile.tables_failed == 1
+        assert any("broken_table" in message for message in profile.partial_failures)
+        failed_tables = [table for table in profile.tables if table.status == "failed"]
+        assert failed_tables
+
+    @pytest.mark.asyncio
+    async def test_fetch_tables_with_explicit_tables_handles_ordered_template(self, manager):
+        profiler = SchemaProfiler(manager)
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(
+            return_value=[{"table_schema": "public", "table_name": "orders"}]
+        )
+
+        base_query = (
+            "SELECT table_schema, table_name "
+            "FROM information_schema.tables "
+            "WHERE table_type = 'BASE TABLE' "
+            "ORDER BY table_schema, table_name"
+        )
+
+        rows, discovered = await profiler._fetch_tables(
+            conn,
+            tables=["orders"],
+            base_query=base_query,
+            max_tables=50,
+            query_timeout_seconds=2,
+        )
+
+        assert rows == [{"table_schema": "public", "table_name": "orders"}]
+        assert discovered == 1
+        executed_query = conn.fetch.await_args.args[0]
+        assert "FROM (" in executed_query
+        assert "WHERE table_name = ANY($1)" in executed_query
+        assert "ORDER BY table_schema, table_name AND" not in executed_query
+
+    @pytest.mark.asyncio
+    async def test_fetch_tables_with_max_tables_handles_ordered_template(self, manager):
+        profiler = SchemaProfiler(manager)
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(
+            return_value=[{"table_schema": "public", "table_name": "orders"}]
+        )
+        conn.fetchrow = AsyncMock(return_value={"total": 3})
+
+        base_query = (
+            "SELECT table_schema, table_name "
+            "FROM information_schema.tables "
+            "WHERE table_type = 'BASE TABLE' "
+            "ORDER BY table_schema, table_name"
+        )
+
+        rows, discovered = await profiler._fetch_tables(
+            conn,
+            tables=None,
+            base_query=base_query,
+            max_tables=1,
+            query_timeout_seconds=2,
+        )
+
+        assert rows == [{"table_schema": "public", "table_name": "orders"}]
+        assert discovered == 3
+        count_query = conn.fetchrow.await_args.args[0]
+        select_query = conn.fetch.await_args.args[0]
+        assert "FROM (" in count_query
+        assert "ORDER BY table_schema, table_name ORDER BY" not in select_query
+        assert "LIMIT $1" in select_query
+
+
+def test_templates_cover_popular_warehouses():
+    supported = supported_profile_template_databases()
+    for database in ("postgresql", "mysql", "bigquery", "clickhouse", "redshift"):
+        assert database in supported
