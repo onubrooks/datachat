@@ -238,6 +238,68 @@ class TestSchemaProfiler:
         failed_tables = [table for table in profile.tables if table.status == "failed"]
         assert failed_tables
 
+    @pytest.mark.asyncio
+    async def test_fetch_tables_with_explicit_tables_handles_ordered_template(self, manager):
+        profiler = SchemaProfiler(manager)
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(
+            return_value=[{"table_schema": "public", "table_name": "orders"}]
+        )
+
+        base_query = (
+            "SELECT table_schema, table_name "
+            "FROM information_schema.tables "
+            "WHERE table_type = 'BASE TABLE' "
+            "ORDER BY table_schema, table_name"
+        )
+
+        rows, discovered = await profiler._fetch_tables(
+            conn,
+            tables=["orders"],
+            base_query=base_query,
+            max_tables=50,
+            query_timeout_seconds=2,
+        )
+
+        assert rows == [{"table_schema": "public", "table_name": "orders"}]
+        assert discovered == 1
+        executed_query = conn.fetch.await_args.args[0]
+        assert "FROM (" in executed_query
+        assert "WHERE table_name = ANY($1)" in executed_query
+        assert "ORDER BY table_schema, table_name AND" not in executed_query
+
+    @pytest.mark.asyncio
+    async def test_fetch_tables_with_max_tables_handles_ordered_template(self, manager):
+        profiler = SchemaProfiler(manager)
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(
+            return_value=[{"table_schema": "public", "table_name": "orders"}]
+        )
+        conn.fetchrow = AsyncMock(return_value={"total": 3})
+
+        base_query = (
+            "SELECT table_schema, table_name "
+            "FROM information_schema.tables "
+            "WHERE table_type = 'BASE TABLE' "
+            "ORDER BY table_schema, table_name"
+        )
+
+        rows, discovered = await profiler._fetch_tables(
+            conn,
+            tables=None,
+            base_query=base_query,
+            max_tables=1,
+            query_timeout_seconds=2,
+        )
+
+        assert rows == [{"table_schema": "public", "table_name": "orders"}]
+        assert discovered == 3
+        count_query = conn.fetchrow.await_args.args[0]
+        select_query = conn.fetch.await_args.args[0]
+        assert "FROM (" in count_query
+        assert "ORDER BY table_schema, table_name ORDER BY" not in select_query
+        assert "LIMIT $1" in select_query
+
 
 def test_templates_cover_popular_warehouses():
     supported = supported_profile_template_databases()

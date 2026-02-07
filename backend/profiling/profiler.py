@@ -282,9 +282,14 @@ class SchemaProfiler:
         max_tables: int | None,
         query_timeout_seconds: int,
     ) -> tuple[list[asyncpg.Record], int]:
+        scoped_query = (
+            "SELECT table_schema, table_name "
+            f"FROM ({base_query}) AS scoped_tables"
+        )
+
         if tables:
             rows = await conn.fetch(
-                base_query + " AND table_name = ANY($1) ORDER BY table_schema, table_name",
+                scoped_query + " WHERE table_name = ANY($1) ORDER BY table_schema, table_name",
                 list(tables),
                 timeout=query_timeout_seconds,
             )
@@ -292,19 +297,17 @@ class SchemaProfiler:
 
         if max_tables is None:
             rows = await conn.fetch(
-                base_query + " ORDER BY table_schema, table_name",
+                scoped_query + " ORDER BY table_schema, table_name",
                 timeout=query_timeout_seconds,
             )
             return list(rows), len(rows)
 
         total_row = await conn.fetchrow(
-            "SELECT COUNT(*) AS total FROM ("
-            + base_query
-            + ") AS scoped_tables",
+            "SELECT COUNT(*) AS total FROM (" + scoped_query + ") AS scoped_tables_count",
             timeout=query_timeout_seconds,
         )
         rows = await conn.fetch(
-            base_query + " ORDER BY table_schema, table_name LIMIT $1",
+            scoped_query + " ORDER BY table_schema, table_name LIMIT $1",
             max_tables,
             timeout=query_timeout_seconds,
         )
