@@ -34,6 +34,8 @@ from backend.connectors.base import BaseConnector
 from backend.connectors.clickhouse import ClickHouseConnector
 from backend.connectors.postgres import PostgresConnector
 from backend.knowledge.retriever import Retriever
+from backend.llm.factory import LLMProviderFactory
+from backend.llm.models import LLMMessage, LLMRequest
 from backend.models import (
     ClassifierAgentInput,
     ContextAgentInput,
@@ -68,12 +70,19 @@ class PipelineState(TypedDict, total=False):
 
     # Input
     query: str
+    original_query: str | None
     conversation_history: list[Message]
     database_type: str
     database_url: str | None
     user_id: str | None
     correlation_id: str | None
     tool_approved: bool
+    intent_gate: str | None
+    intent_summary: dict[str, Any] | None
+    clarification_turn_count: int
+    clarification_limit: int
+    fast_path: bool
+    skip_response_synthesis: bool
 
     # Classifier output
     intent: str | None
@@ -185,6 +194,7 @@ class DataChatPipeline:
         self.retriever = retriever
         self.connector = connector
         self.max_retries = max_retries
+        self.max_clarifications = 3
         self.config = get_settings()
 
         # Initialize agents
@@ -197,6 +207,13 @@ class DataChatPipeline:
         self.response_synthesis = ResponseSynthesisAgent()
         self.tool_planner = ToolPlannerAgent()
         self.tool_executor = ToolExecutor()
+        try:
+            self.intent_llm = LLMProviderFactory.create_default_provider(
+                self.config.llm, model_type="mini"
+            )
+        except Exception as exc:
+            logger.warning(f"Intent LLM disabled: {exc}")
+            self.intent_llm = None
         self.tooling_enabled = self.config.tools.enabled
         self.tool_planner_enabled = self.config.tools.planner_enabled
         initialize_tools(self.config.tools.policy_path)
@@ -216,6 +233,7 @@ class DataChatPipeline:
         workflow = StateGraph(PipelineState)
 
         # Add nodes
+        workflow.add_node("intent_gate", self._run_intent_gate)
         workflow.add_node("tool_planner", self._run_tool_planner)
         workflow.add_node("tool_executor", self._run_tool_executor)
         workflow.add_node("classifier", self._run_classifier)
@@ -228,8 +246,17 @@ class DataChatPipeline:
         workflow.add_node("error_handler", self._handle_error)
 
         # Set entry point
-        workflow.set_entry_point(
-            "tool_planner" if self.tooling_enabled and self.tool_planner_enabled else "classifier"
+        workflow.set_entry_point("intent_gate")
+
+        workflow.add_conditional_edges(
+            "intent_gate",
+            self._should_continue_after_intent_gate,
+            {
+                "end": END,
+                "sql": "sql",
+                "tool_planner": "tool_planner",
+                "classifier": "classifier",
+            },
         )
 
         workflow.add_conditional_edges(
@@ -304,6 +331,133 @@ class DataChatPipeline:
     # Agent Execution Methods
     # ========================================================================
 
+    async def _run_intent_gate(self, state: PipelineState) -> PipelineState:
+        """Run a lightweight intent gate before the main pipeline."""
+        start_time = time.time()
+        state["current_agent"] = "IntentGate"
+        state["clarification_limit"] = self.max_clarifications
+        state["clarification_turn_count"] = max(
+            state.get("clarification_turn_count", 0),
+            self._current_clarification_count(state),
+        )
+        state.setdefault("fast_path", False)
+        state.setdefault("skip_response_synthesis", False)
+
+        query = state.get("query") or ""
+        summary = self._build_intent_summary(
+            query, state.get("conversation_history", [])
+        )
+        state["intent_summary"] = summary
+
+        resolved_query = summary.get("resolved_query")
+        if resolved_query and resolved_query != query:
+            state["original_query"] = query
+            state["query"] = resolved_query
+
+        fast_path = self._is_deterministic_sql_query(state.get("query") or "")
+        if fast_path:
+            state["intent"] = "data_query"
+            state["intent_gate"] = "data_query"
+            state["fast_path"] = True
+            state["skip_response_synthesis"] = True
+            elapsed = (time.time() - start_time) * 1000
+            state.setdefault("agent_timings", {})["intent_gate"] = elapsed
+            state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
+            return state
+
+        intent_gate = self._classify_intent_gate(state.get("query") or "")
+        if intent_gate == "clarify":
+            self._apply_clarification_response(
+                state,
+                ["What would you like to do with your data?"],
+                default_intro=(
+                    "I can help with questions about your connected data, but I need a bit more detail."
+                ),
+            )
+            state["intent_gate"] = "clarify"
+            elapsed = (time.time() - start_time) * 1000
+            state.setdefault("agent_timings", {})["intent_gate"] = elapsed
+            state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
+            return state
+
+        if intent_gate == "data_query" and self._should_call_intent_llm(state, summary):
+            llm_result, llm_calls = await self._llm_intent_gate(
+                state.get("query") or "", summary
+            )
+            if llm_calls:
+                state["llm_calls"] = state.get("llm_calls", 0) + llm_calls
+            if llm_result:
+                intent_gate = llm_result.get("intent", intent_gate)
+                confidence = llm_result.get("confidence", 0.0)
+                question = llm_result.get("clarifying_question")
+                if intent_gate == "clarify" or (
+                    intent_gate == "data_query"
+                    and confidence < 0.45
+                    and self._is_ambiguous_intent(state, summary)
+                ):
+                    question = question or "What would you like to do with your data?"
+                    self._apply_clarification_response(
+                        state,
+                        [question],
+                        default_intro=(
+                            "I can help with questions about your connected data, but I need a bit more detail."
+                        ),
+                    )
+                    state["intent_gate"] = "clarify"
+                    elapsed = (time.time() - start_time) * 1000
+                    state.setdefault("agent_timings", {})["intent_gate"] = elapsed
+                    state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
+                    return state
+                if (
+                    intent_gate == "data_query"
+                    and self._is_non_actionable_utterance(state.get("query") or "")
+                ):
+                    self._apply_clarification_response(
+                        state,
+                        ["What would you like to do with your data?"],
+                        default_intro=(
+                            "I can help with questions about your connected data, but I need a bit more detail."
+                        ),
+                    )
+                    state["intent_gate"] = "clarify"
+                    elapsed = (time.time() - start_time) * 1000
+                    state.setdefault("agent_timings", {})["intent_gate"] = elapsed
+                    state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
+                    return state
+
+        if intent_gate == "data_query" and self._is_ambiguous_intent(state, summary):
+            questions = summary.get("last_clarifying_questions") or []
+            question = questions[0] if questions else "What would you like to do with your data?"
+            self._apply_clarification_response(
+                state,
+                [question],
+                default_intro=(
+                    "I can help with questions about your connected data, but I need a bit more detail."
+                ),
+            )
+            state["intent_gate"] = "clarify"
+            elapsed = (time.time() - start_time) * 1000
+            state.setdefault("agent_timings", {})["intent_gate"] = elapsed
+            state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
+            return state
+        state["intent_gate"] = intent_gate
+
+        if intent_gate in {"exit", "out_of_scope", "small_talk", "setup_help"}:
+            state["intent"] = intent_gate
+            state["answer_source"] = "system"
+            state["answer_confidence"] = 0.8
+            state["natural_language_answer"] = self._build_intent_gate_response(
+                intent_gate
+            )
+            state["clarification_needed"] = False
+            state["clarifying_questions"] = []
+
+        elapsed = (time.time() - start_time) * 1000
+        state.setdefault("agent_timings", {})["intent_gate"] = elapsed
+        state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
+
+        return state
+
     async def _run_tool_planner(self, state: PipelineState) -> PipelineState:
         """Run ToolPlannerAgent."""
         start_time = time.time()
@@ -322,7 +476,7 @@ class DataChatPipeline:
             output = await self.tool_planner.execute(
                 ToolPlannerAgentInput(
                     query=state["query"],
-                    conversation_history=state.get("conversation_history", []),
+                    conversation_history=self._augment_history_with_summary(state),
                     available_tools=tools,
                 )
             )
@@ -410,7 +564,7 @@ class DataChatPipeline:
         try:
             input_data = ClassifierAgentInput(
                 query=state["query"],
-                conversation_history=state.get("conversation_history", []),
+                conversation_history=self._augment_history_with_summary(state),
             )
 
             output = await self.classifier.execute(input_data)
@@ -459,7 +613,7 @@ class DataChatPipeline:
 
             input_data = ContextAgentInput(
                 query=state["query"],
-                conversation_history=state.get("conversation_history", []),
+                conversation_history=self._augment_history_with_summary(state),
                 entities=entities,
                 retrieval_mode="hybrid",
                 max_datapoints=10,
@@ -521,6 +675,7 @@ class DataChatPipeline:
         try:
             from backend.models import InvestigationMemory, RetrievedDataPoint
 
+            investigation_memory_state = state.get("investigation_memory") or {}
             datapoints = [
                 RetrievedDataPoint(
                     datapoint_id=dp["datapoint_id"],
@@ -536,18 +691,18 @@ class DataChatPipeline:
             investigation_memory = InvestigationMemory(
                 query=state["query"],
                 datapoints=datapoints,
-                total_retrieved=state.get("investigation_memory", {}).get(
+                total_retrieved=investigation_memory_state.get(
                     "total_retrieved", len(datapoints)
                 ),
-                retrieval_mode=state.get("investigation_memory", {}).get(
+                retrieval_mode=investigation_memory_state.get(
                     "retrieval_mode", "hybrid"
                 ),
-                sources_used=state.get("investigation_memory", {}).get("sources_used", []),
+                sources_used=investigation_memory_state.get("sources_used", []),
             )
 
             input_data = ContextAnswerAgentInput(
                 query=state["query"],
-                conversation_history=state.get("conversation_history", []),
+                conversation_history=self._augment_history_with_summary(state),
                 investigation_memory=investigation_memory,
                 intent=state.get("intent"),
                 context_confidence=state.get("context_confidence"),
@@ -573,8 +728,15 @@ class DataChatPipeline:
                     evidence.model_dump()
                     for evidence in output.context_answer.evidence
                 ]
-            state["clarification_needed"] = bool(output.context_answer.clarifying_questions)
-            state["clarifying_questions"] = output.context_answer.clarifying_questions
+            if output.context_answer.clarifying_questions:
+                self._apply_clarification_response(
+                    state,
+                    output.context_answer.clarifying_questions,
+                    default_intro="I need a bit more detail before I can continue.",
+                )
+            else:
+                state["clarification_needed"] = False
+                state["clarifying_questions"] = []
 
             elapsed = (time.time() - start_time) * 1000
             state["agent_timings"]["context_answer"] = elapsed
@@ -771,6 +933,7 @@ class DataChatPipeline:
             # Reconstruct InvestigationMemory from state
             from backend.models import InvestigationMemory, RetrievedDataPoint
 
+            investigation_memory_state = state.get("investigation_memory") or {}
             datapoints = [
                 RetrievedDataPoint(
                     datapoint_id=dp["datapoint_id"],
@@ -786,21 +949,26 @@ class DataChatPipeline:
             investigation_memory = InvestigationMemory(
                 query=state["query"],
                 datapoints=datapoints,
-                total_retrieved=state.get("investigation_memory", {}).get(
+                total_retrieved=investigation_memory_state.get(
                     "total_retrieved", len(datapoints)
                 ),
-                retrieval_mode=state.get("investigation_memory", {}).get(
+                retrieval_mode=investigation_memory_state.get(
                     "retrieval_mode", "hybrid"
                 ),
-                sources_used=state.get("investigation_memory", {}).get(
+                sources_used=investigation_memory_state.get(
                     "sources_used",
                     list({dp["source"] for dp in state.get("retrieved_datapoints", [])}),
                 ),
             )
 
+            resolved_query = await self._maybe_apply_any_table_hint(state)
+            if resolved_query != state.get("query"):
+                state["original_query"] = state.get("original_query") or state.get("query")
+                state["query"] = resolved_query
+
             input_data = SQLAgentInput(
                 query=state["query"],
-                conversation_history=state.get("conversation_history", []),
+                conversation_history=self._augment_history_with_summary(state),
                 investigation_memory=investigation_memory,
                 database_type=state.get("database_type", "postgresql"),
                 database_url=state.get("database_url"),
@@ -810,14 +978,14 @@ class DataChatPipeline:
 
             if output.needs_clarification:
                 questions = output.generated_sql.clarifying_questions or []
-                state["clarification_needed"] = True
-                state["clarifying_questions"] = questions
-                state["answer_source"] = "clarification"
-                state["answer_confidence"] = 0.2
-                state["natural_language_answer"] = self._format_clarifying_response(
-                    state["query"], questions
-                )
+                if not questions:
+                    questions = ["Which table should I use to answer this?"]
+                self._apply_clarification_response(state, questions)
                 return state
+
+            # Clear any stale clarification flags from earlier agents.
+            state["clarification_needed"] = False
+            state["clarifying_questions"] = []
 
             # Update state
             state["generated_sql"] = output.generated_sql.sql
@@ -870,7 +1038,7 @@ class DataChatPipeline:
 
             input_data = ValidatorAgentInput(
                 query=state["query"],
-                conversation_history=state.get("conversation_history", []),
+                conversation_history=self._augment_history_with_summary(state),
                 generated_sql=generated_sql,
                 target_database=state.get("database_type", "postgresql"),
                 strict_mode=False,  # Allow warnings
@@ -972,7 +1140,7 @@ class DataChatPipeline:
 
             input_data = ExecutorAgentInput(
                 query=state["query"],
-                conversation_history=state.get("conversation_history", []),
+                conversation_history=self._augment_history_with_summary(state),
                 validated_sql=validated_sql,
                 database_type=state.get("database_type", "postgresql"),
                 database_url=state.get("database_url"),
@@ -1139,6 +1307,16 @@ class DataChatPipeline:
     # ========================================================================
     # Conditional Edge Logic
     # ========================================================================
+
+    def _should_continue_after_intent_gate(self, state: PipelineState) -> str:
+        intent_gate = state.get("intent_gate")
+        if intent_gate in {"exit", "out_of_scope", "small_talk", "setup_help", "clarify"}:
+            return "end"
+        if state.get("fast_path"):
+            return "sql"
+        if self.tooling_enabled and self.tool_planner_enabled:
+            return "tool_planner"
+        return "classifier"
 
     def _should_validate_sql(self, state: PipelineState) -> str:
         if state.get("clarification_needed"):
@@ -1312,6 +1490,8 @@ class DataChatPipeline:
     def _should_synthesize_response(self, state: PipelineState) -> str:
         if state.get("error"):
             return "end"
+        if state.get("skip_response_synthesis"):
+            return "end"
         if state.get("validated_sql") and state.get("query_result"):
             return "synthesize"
         return "end"
@@ -1324,6 +1504,663 @@ class DataChatPipeline:
         prompt = "I need a bit more detail to generate SQL:"
         formatted = "\n".join(f"- {question}" for question in questions)
         return f"{prompt}\n{formatted}"
+
+    def _current_clarification_count(self, state: PipelineState) -> int:
+        summary = state.get("intent_summary") or {}
+        from_summary = int(summary.get("clarification_count", 0) or 0)
+        from_state = int(state.get("clarification_turn_count", 0) or 0)
+        return max(from_summary, from_state)
+
+    def _apply_clarification_response(
+        self,
+        state: PipelineState,
+        questions: list[str],
+        default_intro: str | None = None,
+    ) -> None:
+        limit = int(state.get("clarification_limit", self.max_clarifications) or 0)
+        current_count = self._current_clarification_count(state)
+        state["clarification_turn_count"] = current_count
+
+        if current_count >= max(limit, 0):
+            fallback = self._format_clarification_limit_message(state)
+            state["clarification_needed"] = False
+            state["clarifying_questions"] = []
+            state["answer_source"] = "system"
+            state["answer_confidence"] = 0.5
+            state["natural_language_answer"] = fallback
+            state["intent"] = "meta"
+            return
+
+        if not questions:
+            questions = ["Which table should I use to answer this?"]
+
+        state["clarification_turn_count"] = current_count + 1
+        state["clarification_needed"] = True
+        state["clarifying_questions"] = questions
+        state["answer_source"] = "clarification"
+        state["answer_confidence"] = 0.2
+        intro = default_intro or "I need a bit more detail to generate SQL:"
+        formatted = "\n".join(f"- {question}" for question in questions)
+        state["natural_language_answer"] = f"{intro}\n{formatted}"
+        state["intent"] = "clarify"
+
+    def _format_clarification_limit_message(self, state: PipelineState) -> str:
+        candidates = self._collect_table_candidates(state)
+        options: list[str] = []
+        if candidates:
+            options.append(
+                f"1. Pick one table to continue: {', '.join(candidates[:5])}."
+            )
+        options.append("2. Ask me to list available tables.")
+        options.append("3. Ask a fully specified question with table + metric.")
+        options.append("4. Type `exit` to end the session.")
+        return (
+            "I still cannot answer confidently after several clarifications.\n"
+            + "\n".join(options)
+        )
+
+    def _build_intent_summary(
+        self, query: str, history: list[Message]
+    ) -> dict[str, Any]:
+        summary: dict[str, Any] = {
+            "last_goal": query.strip() if query else None,
+            "last_clarifying_question": None,
+            "last_clarifying_questions": [],
+            "table_hints": [],
+            "column_hints": [],
+            "clarification_count": 0,
+            "resolved_query": None,
+            "any_table": False,
+            "slots": {
+                "table": None,
+                "metric": None,
+                "time_range": None,
+            },
+        }
+
+        if not history:
+            return summary
+
+        last_clarifying_questions: list[str] = []
+        last_clarifying_index = None
+        clarification_count = 0
+
+        for msg in history:
+            role, content = self._message_role_content(msg)
+            if role == "assistant" and self._is_clarification_prompt(content):
+                clarification_count += 1
+
+        for idx in range(len(history) - 1, -1, -1):
+            role, content = self._message_role_content(history[idx])
+            if role == "assistant" and self._is_clarification_prompt(content):
+                last_clarifying_questions = self._extract_clarifying_questions(content)
+                last_clarifying_index = idx
+                break
+
+        summary["clarification_count"] = clarification_count
+        summary["last_clarifying_questions"] = last_clarifying_questions
+        summary["last_clarifying_question"] = (
+            last_clarifying_questions[0] if last_clarifying_questions else None
+        )
+
+        previous_user_text = None
+        if last_clarifying_index is not None:
+            for idx in range(last_clarifying_index - 1, -1, -1):
+                role, content = self._message_role_content(history[idx])
+                if role == "user" and content:
+                    previous_user_text = content
+                    break
+
+        if previous_user_text:
+            summary["last_goal"] = previous_user_text
+
+        if last_clarifying_questions and self._is_short_followup(query):
+            cleaned_hint = self._clean_hint(query)
+            if self._is_any_table_request(query):
+                summary["any_table"] = True
+                if previous_user_text:
+                    summary["resolved_query"] = f"{previous_user_text} Use any table."
+                return summary
+
+            if cleaned_hint:
+                combined_questions = " ".join(last_clarifying_questions).lower()
+                if "table" in combined_questions:
+                    summary["table_hints"] = [cleaned_hint]
+                    summary["slots"]["table"] = cleaned_hint
+                    if previous_user_text:
+                        summary["resolved_query"] = (
+                            f"{previous_user_text} Use table {cleaned_hint}."
+                        )
+                elif "column" in combined_questions or "field" in combined_questions:
+                    summary["column_hints"] = [cleaned_hint]
+                    summary["slots"]["metric"] = cleaned_hint
+                    if previous_user_text:
+                        summary["resolved_query"] = (
+                            f"{previous_user_text} Use column {cleaned_hint}."
+                        )
+                elif "date" in combined_questions or "time" in combined_questions:
+                    summary["slots"]["time_range"] = cleaned_hint
+
+        return summary
+
+    def _augment_history_with_summary(self, state: PipelineState) -> list[Message]:
+        history = state.get("conversation_history") or []
+        summary = state.get("intent_summary") or {}
+        summary_text = self._format_intent_summary(summary)
+        if not summary_text:
+            return history
+        return [*history, {"role": "system", "content": summary_text}]
+
+    def _format_intent_summary(self, summary: dict[str, Any]) -> str | None:
+        if not summary:
+            return None
+        parts = []
+        if summary.get("last_goal"):
+            parts.append(f"last_goal={summary['last_goal']}")
+        if summary.get("table_hints"):
+            parts.append(f"table_hints={', '.join(summary['table_hints'])}")
+        if summary.get("column_hints"):
+            parts.append(f"column_hints={', '.join(summary['column_hints'])}")
+        slots = summary.get("slots") or {}
+        slot_parts = [f"{k}:{v}" for k, v in slots.items() if v]
+        if slot_parts:
+            parts.append(f"slots={', '.join(slot_parts)}")
+        if summary.get("clarification_count"):
+            parts.append(f"clarifications={summary['clarification_count']}")
+        questions = summary.get("last_clarifying_questions") or []
+        if questions:
+            parts.append(f"last_questions={'; '.join(questions[:2])}")
+        if not parts:
+            return None
+        return "Intent summary: " + " | ".join(parts)
+
+    async def _maybe_apply_any_table_hint(self, state: PipelineState) -> str:
+        query = state.get("query") or ""
+        if not self._is_any_table_request(query):
+            return query
+
+        candidates = self._collect_table_candidates(state)
+        if not candidates:
+            live_tables = await self._get_live_table_catalog(
+                database_type=state.get("database_type"),
+                database_url=state.get("database_url"),
+            )
+            if live_tables:
+                candidates = sorted(live_tables)
+
+        if not candidates:
+            return query
+
+        ranked = self._rank_table_candidates(query, candidates, limit=1)
+        if not ranked:
+            return query
+
+        selected = ranked[0]
+        if "use table" in query.lower():
+            return query
+
+        summary = state.get("intent_summary") or {}
+        if selected not in summary.get("table_hints", []):
+            summary.setdefault("table_hints", []).append(selected)
+            state["intent_summary"] = summary
+
+        return f"{query.rstrip('. ')} Use table {selected}."
+
+    async def _build_clarification_fallback(
+        self, state: PipelineState
+    ) -> dict[str, Any] | None:
+        candidates = self._collect_table_candidates(state)
+        if not candidates:
+            live_tables = await self._get_live_table_catalog(
+                database_type=state.get("database_type"),
+                database_url=state.get("database_url"),
+            )
+            if live_tables:
+                candidates = sorted(live_tables)
+
+        if not candidates:
+            return None
+
+        ranked = self._rank_table_candidates(state.get("query") or "", candidates, limit=5)
+        if not ranked:
+            return None
+
+        table_list = ", ".join(ranked)
+        answer = (
+            "I still need a bit more detail to generate SQL. "
+            f"Here are a few tables that look relevant: {table_list}. "
+            "Which table should I use?"
+        )
+        return {"answer": answer, "questions": ["Which table should I use?"]}
+
+    def _collect_table_candidates(self, state: PipelineState) -> list[str]:
+        candidates: list[str] = []
+        for dp in state.get("retrieved_datapoints", []) or []:
+            if not isinstance(dp, dict):
+                continue
+            if dp.get("datapoint_type") != "Schema":
+                continue
+            metadata = dp.get("metadata") or {}
+            table_name = metadata.get("table_name") or metadata.get("table")
+            if table_name:
+                candidates.append(str(table_name))
+        return list(dict.fromkeys(candidates))
+
+    def _rank_table_candidates(
+        self, query: str, candidates: list[str], limit: int = 5
+    ) -> list[str]:
+        tokens = set(re.findall(r"[a-z0-9]+", query.lower()))
+        stopwords = {
+            "show",
+            "me",
+            "the",
+            "a",
+            "an",
+            "first",
+            "rows",
+            "row",
+            "count",
+            "total",
+            "sum",
+            "average",
+            "avg",
+            "use",
+            "table",
+            "any",
+            "from",
+            "of",
+            "in",
+            "for",
+            "with",
+            "please",
+            "pick",
+            "select",
+            "list",
+        }
+        tokens = {token for token in tokens if token not in stopwords}
+
+        scored = []
+        for name in candidates:
+            name_tokens = set(re.findall(r"[a-z0-9]+", name.lower()))
+            score = len(tokens & name_tokens)
+            scored.append((score, name))
+        scored.sort(key=lambda item: (-item[0], item[1]))
+
+        if scored and scored[0][0] == 0:
+            return [name for _, name in scored[:limit]]
+
+        return [name for score, name in scored if score > 0][:limit]
+
+    def _classify_intent_gate(self, query: str) -> str:
+        text = query.strip().lower()
+        if not text:
+            return "data_query"
+        if self._is_exit_intent(text):
+            return "exit"
+        if self._is_setup_help_intent(text):
+            return "setup_help"
+        if self._is_small_talk(text):
+            return "small_talk"
+        if self._is_out_of_scope(text):
+            return "out_of_scope"
+        if self._is_non_actionable_utterance(text):
+            return "clarify"
+        return "data_query"
+
+    def _build_intent_gate_response(self, intent: str) -> str:
+        if intent == "exit":
+            return "Got it. Ending the session. If you need more, just start a new chat."
+        if intent == "setup_help":
+            return (
+                "To connect a database, open Settings -> Database Manager in the web app "
+                "or run `datachat setup` / `datachat connect` in the CLI. "
+                "Then ask questions like: list tables, show first 5 rows of a table, "
+                "or total sales last month."
+            )
+        if intent == "small_talk":
+            return (
+                "Hi! I can help you explore your connected data. Try: "
+                "list tables, show first 5 rows of a table, or total sales last month."
+            )
+        return (
+            "I can help with questions about your connected data. Try: "
+            "list tables, show first 5 rows of a table, or total sales last month."
+        )
+
+    def _format_intent_clarification(self, question: str) -> str:
+        return (
+            "I can help with questions about your connected data, but I need a bit more detail.\n"
+            f"- {question}"
+        )
+
+    def _is_exit_intent(self, text: str) -> bool:
+        if text in {"exit", "quit", "bye", "goodbye", "stop", "end"}:
+            return True
+        if re.search(r"\b(i'?m|im|we'?re|were)\s+done\b", text):
+            return True
+        if re.search(r"\b(done for now|done here|that'?s all|all set)\b", text):
+            return True
+        if re.search(r"\b(let'?s\s+)?talk\s+later\b", text):
+            return True
+        if re.search(r"\b(talk|see)\s+you\s+later\b", text):
+            return True
+        if re.search(r"\b(no\s+more|no\s+further)\s+questions\b", text):
+            return True
+        if re.search(r"\b(end|stop|quit|exit)\b.*\b(chat|conversation|session)\b", text):
+            return True
+        return False
+
+    def _is_setup_help_intent(self, text: str) -> bool:
+        patterns = [
+            r"\bsetup\b",
+            r"\bconnect\b",
+            r"\bconfigure\b",
+            r"\bconfiguration\b",
+            r"\binstall\b",
+            r"\bapi key\b",
+            r"\bcredentials?\b",
+            r"\bdatabase url\b",
+            r"\bhow do i\b.*\bconnect\b",
+            r"\bwhat can you do\b",
+        ]
+        return any(re.search(pattern, text) for pattern in patterns)
+
+    def _is_small_talk(self, text: str) -> bool:
+        greetings = [
+            r"\bhi\b",
+            r"\bhello\b",
+            r"\bhey\b",
+            r"\bhow are you\b",
+            r"\bwhat'?s up\b",
+            r"\bgood morning\b",
+            r"\bgood afternoon\b",
+            r"\bgood evening\b",
+        ]
+        return any(re.search(pattern, text) for pattern in greetings)
+
+    def _is_out_of_scope(self, text: str) -> bool:
+        if self._contains_data_keywords(text):
+            return False
+        out_of_scope = [
+            r"\bjoke\b",
+            r"\bweather\b",
+            r"\bnews\b",
+            r"\bsports\b",
+            r"\bmovie\b",
+            r"\bmusic\b",
+            r"\bstock\b",
+            r"\brecipe\b",
+            r"\btranslate\b",
+            r"\bwrite\b.*\bemail\b",
+            r"\bcompose\b.*\bmessage\b",
+            r"\bpoem\b",
+            r"\bstory\b",
+        ]
+        return any(re.search(pattern, text) for pattern in out_of_scope)
+
+    def _contains_data_keywords(self, text: str) -> bool:
+        keywords = {
+            "table",
+            "tables",
+            "column",
+            "columns",
+            "row",
+            "rows",
+            "schema",
+            "database",
+            "sql",
+            "query",
+            "count",
+            "sum",
+            "average",
+            "avg",
+            "min",
+            "max",
+            "join",
+            "group",
+            "order",
+            "select",
+            "from",
+            "data",
+            "dataset",
+            "warehouse",
+        }
+        return any(word in text for word in keywords)
+
+    def _is_non_actionable_utterance(self, text: str) -> bool:
+        normalized = text.strip().lower()
+        if not normalized:
+            return True
+        canned = {
+            "ok",
+            "okay",
+            "k",
+            "kk",
+            "sure",
+            "yes",
+            "no",
+            "cool",
+            "fine",
+            "great",
+            "thanks",
+            "thank you",
+            "alright",
+            "continue",
+            "next",
+            "go on",
+        }
+        if normalized in canned:
+            return True
+        if re.fullmatch(r"(ok|okay|sure|yes|no|thanks|thank you)[.!]*", normalized):
+            return True
+        return False
+
+    def _is_deterministic_sql_query(self, query: str) -> bool:
+        text = query.strip().lower()
+        if not text:
+            return False
+        if self._query_is_table_list(text):
+            return True
+
+        table_ref = self._extract_table_reference(text)
+        if not table_ref:
+            return False
+
+        sample_patterns = [
+            r"\bshow\b.*\brows\b",
+            r"\bfirst\s+\d+\b",
+            r"\btop\s+\d+\b",
+            r"\blimit\s+\d+\b",
+            r"\bpreview\b",
+            r"\bsample\b",
+        ]
+        if any(re.search(pattern, text) for pattern in sample_patterns):
+            return True
+
+        count_patterns = [
+            r"\bhow\s+many\s+rows?\b",
+            r"\brow\s+count\b",
+            r"\bcount\s+of\s+rows?\b",
+            r"\bhow\s+many\s+records?\b",
+            r"\brecord\s+count\b",
+        ]
+        if any(re.search(pattern, text) for pattern in count_patterns):
+            return True
+
+        return False
+
+    def _extract_table_reference(self, query: str) -> str | None:
+        patterns = [
+            r"\b(?:from|in|of)\s+([a-zA-Z0-9_.]+)",
+            r"\btable\s+([a-zA-Z0-9_.]+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, query)
+            if not match:
+                continue
+            table = match.group(1).strip().rstrip(".,;:?)")
+            if table and table not in {"table", "tables", "rows", "row"}:
+                return table
+        return None
+
+    def _is_any_table_request(self, text: str) -> bool:
+        patterns = [
+            r"\bany\s+table\b",
+            r"\bpick\s+any\s+table\b",
+            r"\bany\s+table\s+from\b",
+            r"\bwhatever\s+table\b",
+        ]
+        return any(re.search(pattern, text.lower()) for pattern in patterns)
+
+    def _should_call_intent_llm(
+        self, state: PipelineState, summary: dict[str, Any]
+    ) -> bool:
+        query = (state.get("query") or "").strip().lower()
+        if not query:
+            return False
+        if not self.intent_llm:
+            return False
+        if self._is_ambiguous_intent(state, summary):
+            return True
+        generic_responses = {
+            "ok",
+            "okay",
+            "sure",
+            "yes",
+            "no",
+            "maybe",
+            "help",
+            "next",
+            "continue",
+            "go on",
+            "not sure",
+        }
+        if query in generic_responses:
+            return True
+        if re.fullmatch(r"[a-z]+", query) and len(query.split()) <= 2:
+            return True
+        return False
+
+    def _is_ambiguous_intent(self, state: PipelineState, summary: dict[str, Any]) -> bool:
+        query = (state.get("query") or "").strip().lower()
+        if not query:
+            return False
+        if self._contains_data_keywords(query):
+            return False
+        if self._is_any_table_request(query):
+            return False
+        if summary.get("last_clarifying_questions") and self._is_short_followup(query):
+            return True
+        return len(query.split()) <= 3
+
+    async def _llm_intent_gate(
+        self, query: str, summary: dict[str, Any]
+    ) -> tuple[dict[str, Any] | None, int]:
+        summary_text = self._format_intent_summary(summary) or "None"
+        system_prompt = (
+            "You are a fast intent router for a data assistant. "
+            "Classify the user's message into one of: "
+            "data_query, exit, out_of_scope, small_talk, setup_help, clarify. "
+            "Return JSON with keys: intent, confidence (0-1), "
+            "clarifying_question (optional, only if intent=clarify)."
+        )
+        user_prompt = (
+            f"User message: {query}\n"
+            f"Intent summary: {summary_text}\n"
+            "Return JSON only."
+        )
+        request = LLMRequest(
+            messages=[
+                LLMMessage(role="system", content=system_prompt),
+                LLMMessage(role="user", content=user_prompt),
+            ],
+            temperature=0.0,
+            max_tokens=200,
+        )
+        try:
+            response = await self.intent_llm.generate(request)
+            return self._parse_intent_llm_response(response.content), 1
+        except Exception as exc:
+            logger.warning(f"Intent LLM fallback failed: {exc}")
+            return None, 0
+
+    def _parse_intent_llm_response(self, content: str) -> dict[str, Any] | None:
+        json_match = re.search(r"\{.*\}", content, re.DOTALL)
+        if not json_match:
+            return None
+        try:
+            data = json.loads(json_match.group(0))
+        except json.JSONDecodeError:
+            return None
+        intent = str(data.get("intent", "")).strip()
+        allowed = {"data_query", "exit", "out_of_scope", "small_talk", "setup_help", "clarify"}
+        if intent not in allowed:
+            return None
+        return {
+            "intent": intent,
+            "confidence": float(data.get("confidence", 0.0) or 0.0),
+            "clarifying_question": data.get("clarifying_question"),
+        }
+
+    def _is_short_followup(self, text: str) -> bool:
+        tokens = text.strip().split()
+        return 0 < len(tokens) <= 5
+
+    def _extract_clarifying_questions(self, text: str) -> list[str]:
+        questions: list[str] = []
+        for line in text.splitlines():
+            candidate = line.strip()
+            if not candidate:
+                continue
+            candidate = re.sub(r"^[\-\*\u2022]\s*", "", candidate).strip()
+            if not candidate:
+                continue
+            if "?" in candidate:
+                questions.append(candidate.rstrip())
+        if not questions and "?" in text:
+            chunks = [chunk.strip() for chunk in text.split("?") if chunk.strip()]
+            for chunk in chunks[:3]:
+                questions.append(f"{chunk}?")
+        return questions[:3]
+
+    def _is_clarification_prompt(self, text: str) -> bool:
+        lower = text.lower()
+        triggers = [
+            "clarifying question",
+            "clarifying questions",
+            "need a bit more detail",
+            "which table",
+            "which column",
+            "what information are you trying",
+            "is there a specific",
+            "do you want to see",
+            "are you looking for",
+        ]
+        return any(trigger in lower for trigger in triggers)
+
+    def _clean_hint(self, text: str) -> str | None:
+        cleaned = re.sub(r"[^\w.]+", " ", text.lower()).strip()
+        if not cleaned:
+            return None
+        tokens = [
+            token
+            for token in cleaned.split()
+            if token
+            and token
+            not in {"table", "column", "field", "use", "the", "a", "an", "any"}
+        ]
+        if not tokens:
+            return None
+        return tokens[0] if len(tokens) == 1 else "_".join(tokens)
+
+    def _message_role_content(self, msg: Message) -> tuple[str, str]:
+        if isinstance(msg, dict):
+            role = str(msg.get("role", "user"))
+            content = str(msg.get("content", ""))
+        else:
+            role = str(getattr(msg, "role", "user"))
+            content = str(getattr(msg, "content", ""))
+        return role, content.strip()
 
     # ========================================================================
     # Public API
@@ -1350,12 +2187,19 @@ class DataChatPipeline:
         """
         initial_state: PipelineState = {
             "query": query,
+            "original_query": None,
             "conversation_history": conversation_history or [],
             "database_type": database_type,
             "database_url": database_url,
             "user_id": "anonymous",
             "correlation_id": f"local-{int(time.time() * 1000)}",
             "tool_approved": False,
+            "intent_gate": None,
+            "intent_summary": None,
+            "clarification_turn_count": 0,
+            "clarification_limit": self.max_clarifications,
+            "fast_path": False,
+            "skip_response_synthesis": False,
             "current_agent": None,
             "error": None,
             "total_cost": 0.0,
@@ -1428,12 +2272,19 @@ class DataChatPipeline:
         """
         initial_state: PipelineState = {
             "query": query,
+            "original_query": None,
             "conversation_history": conversation_history or [],
             "database_type": database_type,
             "database_url": database_url,
             "user_id": "anonymous",
             "correlation_id": f"stream-{int(time.time() * 1000)}",
             "tool_approved": False,
+            "intent_gate": None,
+            "intent_summary": None,
+            "clarification_turn_count": 0,
+            "clarification_limit": self.max_clarifications,
+            "fast_path": False,
+            "skip_response_synthesis": False,
             "current_agent": None,
             "error": None,
             "total_cost": 0.0,
@@ -1516,12 +2367,19 @@ class DataChatPipeline:
 
         initial_state: PipelineState = {
             "query": query,
+            "original_query": None,
             "conversation_history": conversation_history or [],
             "database_type": database_type,
             "database_url": database_url,
             "user_id": "anonymous",
             "correlation_id": f"stream-{int(time.time() * 1000)}",
             "tool_approved": False,
+            "intent_gate": None,
+            "intent_summary": None,
+            "clarification_turn_count": 0,
+            "clarification_limit": self.max_clarifications,
+            "fast_path": False,
+            "skip_response_synthesis": False,
             "current_agent": None,
             "error": None,
             "total_cost": 0.0,

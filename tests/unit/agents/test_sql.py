@@ -611,11 +611,24 @@ class TestDatabaseContext:
             "what tables are available?",
             database_type="clickhouse",
         )
+        bigquery_query = sql_agent._build_introspection_query(
+            "list tables",
+            database_type="bigquery",
+        )
+        redshift_query = sql_agent._build_introspection_query(
+            "list tables",
+            database_type="redshift",
+        )
         assert postgres_query is not None
         assert "information_schema.tables" in postgres_query
-        assert mysql_query == "SHOW TABLES"
+        assert mysql_query is not None
+        assert "information_schema.tables" in mysql_query
         assert clickhouse_query is not None
         assert "system.tables" in clickhouse_query
+        assert bigquery_query is not None
+        assert "information_schema.tables" in bigquery_query.lower()
+        assert redshift_query is not None
+        assert "pg_table_def" in redshift_query.lower()
 
     def test_row_count_fallback_uses_explicit_table(self, sql_agent):
         memory = InvestigationMemory(
@@ -646,6 +659,21 @@ class TestDatabaseContext:
         )
         sql = sql_agent._build_row_count_fallback(sql_input)
         assert sql == "SELECT COUNT(*) FROM information_schema.tables"
+
+    def test_sample_rows_fallback_uses_explicit_table(self, sql_agent):
+        memory = InvestigationMemory(
+            query="Show me the first 2 rows from public.orders",
+            datapoints=[],
+            total_retrieved=0,
+            retrieval_mode="hybrid",
+            sources_used=[],
+        )
+        sql_input = SQLAgentInput(
+            query="Show me the first 2 rows from public.orders",
+            investigation_memory=memory,
+        )
+        sql = sql_agent._build_sample_rows_fallback(sql_input)
+        assert sql == "SELECT * FROM public.orders LIMIT 2"
 
     @pytest.mark.asyncio
     async def test_build_prompt_uses_input_database_context(
@@ -767,6 +795,36 @@ class TestErrorHandling:
         output = await sql_agent(sample_sql_agent_input)
         assert output.needs_clarification is True
         assert output.generated_sql.clarifying_questions
+
+    @pytest.mark.asyncio
+    async def test_parses_sql_from_markdown_block_when_json_missing(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        llm_response = LLMResponse(
+            content=(
+                "I can run this query:\n\n"
+                "```sql\nSELECT SUM(amount) FROM analytics.fact_sales;\n```"
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=400, completion_tokens=60, total_tokens=460),
+            finish_reason="stop",
+            provider="openai",
+        )
+        sql_agent.llm.generate.return_value = llm_response
+
+        output = await sql_agent(sample_sql_agent_input)
+
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert output.generated_sql.sql == "SELECT SUM(amount) FROM analytics.fact_sales"
+
+    def test_does_not_treat_natural_language_show_phrase_as_sql(self, sql_agent):
+        text = (
+            '{"explanation": "I can show you the first 5 rows if you provide a table.", '
+            '"clarifying_questions": ["Which table?"]}'
+        )
+        extracted = sql_agent._extract_sql_statement(text)
+        assert extracted is None
 
 
 class TestInputValidation:

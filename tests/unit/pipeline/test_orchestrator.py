@@ -263,6 +263,31 @@ class TestPipelineExecution:
         assert result["visualization_hint"] == "table"
 
     @pytest.mark.asyncio
+    async def test_sql_success_clears_stale_classifier_clarification(self, mock_agents):
+        """Ensure classifier clarification flags do not block SQL success path."""
+        mock_agents.classifier.execute = AsyncMock(
+            return_value=ClassifierAgentOutput(
+                success=True,
+                classification=QueryClassification(
+                    intent="data_query",
+                    entities=[],
+                    complexity="simple",
+                    clarification_needed=True,
+                    clarifying_questions=["Which table should I use?"],
+                    confidence=0.7,
+                ),
+                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=1),
+            )
+        )
+
+        result = await mock_agents.run("show me the first 5 rows from sales")
+
+        assert result["validation_passed"] is True
+        assert result["answer_source"] == "sql"
+        assert result["clarification_needed"] is False
+        assert result["clarifying_questions"] == []
+
+    @pytest.mark.asyncio
     async def test_pipeline_passes_database_context_to_sql_agent(self, mock_agents):
         """Ensure per-request database type/url reach SQLAgentInput."""
         await mock_agents.run(
@@ -660,6 +685,137 @@ class TestRetryLogic:
         assert result["retry_count"] == 3
         assert result.get("error") is not None
         assert "after 3 attempts" in result["error"]
+
+
+class TestIntentGate:
+    """Test intent gate behavior."""
+
+    @pytest.fixture
+    def mock_retriever(self):
+        return AsyncMock()
+
+    @pytest.fixture
+    def mock_connector(self):
+        connector = AsyncMock()
+        connector.connect = AsyncMock()
+        connector.close = AsyncMock()
+        connector.is_connected = True
+        connector.get_schema = AsyncMock(return_value=[])
+        return connector
+
+    @pytest.fixture
+    def pipeline(self, mock_retriever, mock_connector, mock_openai_api_key):
+        pipeline = DataChatPipeline(
+            retriever=mock_retriever,
+            connector=mock_connector,
+            max_retries=3,
+        )
+        pipeline.tool_planner.execute = AsyncMock(
+            return_value=ToolPlannerAgentOutput(
+                success=True,
+                plan=ToolPlan(tool_calls=[], rationale="No tools needed.", fallback="pipeline"),
+                metadata=AgentMetadata(agent_name="ToolPlannerAgent", llm_calls=0),
+            )
+        )
+        pipeline.response_synthesis.execute = AsyncMock(return_value="Result is 1")
+        pipeline.classifier.execute = AsyncMock()
+        return pipeline
+
+    @pytest.mark.asyncio
+    async def test_intent_gate_exit_short_circuits(self, pipeline):
+        result = await pipeline.run("Ok I'm done for now")
+        assert result.get("intent_gate") == "exit"
+        assert result.get("answer_source") == "system"
+        assert "Ending the session" in result.get("natural_language_answer", "")
+        assert not pipeline.classifier.execute.called
+
+    @pytest.mark.asyncio
+    async def test_intent_gate_exit_detects_talk_later(self, pipeline):
+        result = await pipeline.run("let's talk later")
+        assert result.get("intent_gate") == "exit"
+        assert result.get("answer_source") == "system"
+        assert "Ending the session" in result.get("natural_language_answer", "")
+        assert not pipeline.classifier.execute.called
+
+    @pytest.mark.asyncio
+    async def test_intent_gate_ambiguous_prompts_clarification(self, pipeline):
+        pipeline.intent_llm = None
+        result = await pipeline.run("ok")
+        assert result.get("intent_gate") == "clarify"
+        assert result.get("answer_source") == "clarification"
+        assert result.get("clarifying_questions")
+        assert "data" in result.get("natural_language_answer", "").lower()
+        assert not pipeline.classifier.execute.called
+
+    @pytest.mark.asyncio
+    async def test_intent_gate_out_of_scope_short_circuits(self, pipeline):
+        result = await pipeline.run("Tell me a joke")
+        assert result.get("intent_gate") == "out_of_scope"
+        assert result.get("answer_source") == "system"
+        assert "connected data" in result.get("natural_language_answer", "").lower()
+        assert not pipeline.classifier.execute.called
+
+    @pytest.mark.asyncio
+    async def test_intent_gate_fast_path_list_tables_handles_empty_investigation_memory(
+        self, pipeline
+    ):
+        pipeline.sql.execute = AsyncMock(
+            return_value=SQLAgentOutput(
+                success=True,
+                generated_sql=GeneratedSQL(
+                    sql=(
+                        "SELECT table_schema, table_name FROM information_schema.tables "
+                        "WHERE table_schema NOT IN ('pg_catalog', 'information_schema')"
+                    ),
+                    explanation="Catalog table listing query.",
+                    confidence=0.95,
+                    used_datapoints=[],
+                    assumptions=[],
+                    clarifying_questions=[],
+                ),
+                metadata=AgentMetadata(agent_name="SQLAgent", llm_calls=0),
+            )
+        )
+        pipeline.validator.execute = AsyncMock(
+            return_value=ValidatorAgentOutput(
+                success=True,
+                validated_sql=ValidatedSQL(
+                    sql="SELECT table_schema, table_name FROM information_schema.tables",
+                    is_valid=True,
+                    is_safe=True,
+                    errors=[],
+                    warnings=[],
+                    performance_score=0.9,
+                ),
+                metadata=AgentMetadata(agent_name="ValidatorAgent", llm_calls=0),
+            )
+        )
+        pipeline.executor.execute = AsyncMock(
+            return_value=ExecutorAgentOutput(
+                success=True,
+                executed_query=ExecutedQuery(
+                    query_result=QueryResult(
+                        rows=[{"table_schema": "public", "table_name": "sales"}],
+                        row_count=1,
+                        columns=["table_schema", "table_name"],
+                        execution_time_ms=5.0,
+                        was_truncated=False,
+                    ),
+                    natural_language_answer="Found 1 table.",
+                    visualization_hint="table",
+                    key_insights=[],
+                    source_citations=[],
+                ),
+                metadata=AgentMetadata(agent_name="ExecutorAgent", llm_calls=0),
+            )
+        )
+
+        result = await pipeline.run("list tables")
+
+        assert result.get("error") is None
+        assert result.get("intent_gate") == "data_query"
+        assert result.get("fast_path") is True
+        assert pipeline.sql.execute.called
 
 
 class TestStreaming:

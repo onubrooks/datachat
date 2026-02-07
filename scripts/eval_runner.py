@@ -5,6 +5,7 @@ Minimal evaluation runner for DataChat RAG checks.
 Usage:
   python scripts/eval_runner.py --mode retrieval --dataset eval/retrieval.json
   python scripts/eval_runner.py --mode qa --dataset eval/qa.json
+  python scripts/eval_runner.py --mode intent --dataset eval/intent_credentials.json
 """
 
 from __future__ import annotations
@@ -17,10 +18,24 @@ from typing import Any
 import httpx
 
 
-def _post_chat(api_base: str, message: str) -> dict[str, Any]:
+def _post_chat(
+    api_base: str,
+    message: str,
+    conversation_id: str = "eval_run",
+    conversation_history: list[dict[str, str]] | None = None,
+    target_database: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "message": message,
+        "conversation_id": conversation_id,
+        "conversation_history": conversation_history or [],
+    }
+    if target_database:
+        payload["target_database"] = target_database
+
     response = httpx.post(
         f"{api_base}/api/v1/chat",
-        json={"message": message, "conversation_id": "eval_run"},
+        json=payload,
         timeout=120.0,
     )
     response.raise_for_status()
@@ -105,9 +120,83 @@ def run_qa(api_base: str, dataset: list[dict[str, Any]]) -> int:
     return 0
 
 
+def run_intent(api_base: str, dataset: list[dict[str, Any]]) -> int:
+    total = len(dataset)
+    source_matches = 0
+    sql_matches = 0
+    clarification_matches = 0
+    total_latency = 0.0
+    total_llm_calls = 0
+
+    for idx, item in enumerate(dataset):
+        query = item["query"]
+        expected_source = item.get("expected_answer_source")
+        expected_sql_contains = [token.lower() for token in item.get("expected_sql_contains", [])]
+        expect_clarification = item.get("expect_clarification")
+        history = item.get("conversation_history") or []
+
+        response = _post_chat(
+            api_base=api_base,
+            message=query,
+            conversation_id=f"intent_eval_{idx}",
+            conversation_history=history,
+            target_database=item.get("target_database"),
+        )
+
+        source = response.get("answer_source")
+        sql = (response.get("sql") or "").lower()
+        clarifying_questions = response.get("clarifying_questions") or []
+        is_clarification = source == "clarification" or bool(clarifying_questions)
+        metrics = response.get("metrics") or {}
+        latency = float(metrics.get("total_latency_ms") or 0.0)
+        llm_calls = int(metrics.get("llm_calls") or 0)
+        total_latency += latency
+        total_llm_calls += llm_calls
+
+        source_ok = expected_source is None or source == expected_source
+        if source_ok:
+            source_matches += 1
+
+        sql_ok = True
+        if expected_sql_contains:
+            sql_ok = all(token in sql for token in expected_sql_contains)
+            if sql_ok:
+                sql_matches += 1
+
+        clarification_ok = True
+        if expect_clarification is not None:
+            clarification_ok = is_clarification == bool(expect_clarification)
+            if clarification_ok:
+                clarification_matches += 1
+
+        print(f"- {query}")
+        print(f"  source={source} expected_source={expected_source} source_ok={source_ok}")
+        print(
+            f"  clarification={is_clarification} "
+            f"expected={expect_clarification} clarification_ok={clarification_ok}"
+        )
+        if expected_sql_contains:
+            print(f"  sql_ok={sql_ok}")
+        print(f"  latency_ms={latency:.1f} llm_calls={llm_calls}")
+
+    print("\nIntent/Credentials Summary")
+    print(f"Source accuracy: {source_matches}/{total}")
+    if any(item.get("expected_sql_contains") for item in dataset):
+        expected_sql_cases = sum(1 for item in dataset if item.get("expected_sql_contains"))
+        print(f"SQL pattern match: {sql_matches}/{expected_sql_cases}")
+    if any(item.get("expect_clarification") is not None for item in dataset):
+        clarification_cases = sum(
+            1 for item in dataset if item.get("expect_clarification") is not None
+        )
+        print(f"Clarification expectation match: {clarification_matches}/{clarification_cases}")
+    print(f"Avg latency: {(total_latency / total):.1f}ms")
+    print(f"Avg LLM calls: {(total_llm_calls / total):.2f}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="DataChat eval runner")
-    parser.add_argument("--mode", choices=["retrieval", "qa"], required=True)
+    parser.add_argument("--mode", choices=["retrieval", "qa", "intent"], required=True)
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--api-base", default="http://localhost:8000")
     args = parser.parse_args()
@@ -123,6 +212,8 @@ def main() -> int:
         return run_retrieval(args.api_base, dataset)
     if args.mode == "qa":
         return run_qa(args.api_base, dataset)
+    if args.mode == "intent":
+        return run_intent(args.api_base, dataset)
     return 1
 
 

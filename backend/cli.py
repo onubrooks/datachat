@@ -62,6 +62,9 @@ API_BASE_URL = os.getenv("DATA_CHAT_API_URL", "http://localhost:8000")
 
 
 def configure_cli_logging() -> None:
+    os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+    os.environ.setdefault("GLOG_minloglevel", "2")
+    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
     logging.disable(logging.CRITICAL)
     logging.basicConfig(level=logging.CRITICAL)
     for logger_name in ("backend", "httpx", "openai", "asyncio", "google", "grpc"):
@@ -165,17 +168,19 @@ async def create_pipeline_from_config() -> DataChatPipeline:
     )
 
     # Initialize connector
-    connection_string = state.get_connection_string()
+    # Prefer .env / settings over persisted CLI state so local project config wins.
+    connection_string = (
+        str(settings.database.url)
+        if settings.database.url
+        else state.get_connection_string()
+    )
     if not connection_string:
-        if settings.database.url:
-            connection_string = str(settings.database.url)
-        else:
-            console.print("[red]No target database configured.[/red]")
-            console.print(
-                "[yellow]Hint: Use 'datachat connect' or run 'datachat setup' to "
-                "set a target DATABASE_URL.[/yellow]"
-            )
-            raise click.ClickException("Missing target database")
+        console.print("[red]No target database configured.[/red]")
+        console.print(
+            "[yellow]Hint: Set DATABASE_URL in .env, use 'datachat connect', "
+            "or run 'datachat setup'.[/yellow]"
+        )
+        raise click.ClickException("Missing target database")
 
     # Parse connection string
     from urllib.parse import urlparse
@@ -345,6 +350,7 @@ def _emit_query_output(
         console.print("[bold]Clarifying questions:[/bold]")
         for question in clarifying_questions:
             console.print(f"- {question}")
+        console.print("[dim]Reply with your answer, or type 'exit' to quit.[/dim]")
         console.print()
 
     if evidence:
@@ -368,6 +374,20 @@ def _print_query_output(
         _emit_query_output(answer, sql, data, result, evidence, show_metrics)
 
 
+def _compose_clarification_answer(questions: list[str]) -> str:
+    if not questions:
+        return "I need a bit more detail to continue."
+    bullets = "\n".join(f"- {q}" for q in questions)
+    return f"I need a bit more detail to continue:\n{bullets}"
+
+
+def _clarification_limit_message(limit: int) -> str:
+    return (
+        f"I reached the clarification limit ({limit}). "
+        "Please ask a fully specified question with table and metric, or type `exit`."
+    )
+
+
 def _should_exit_chat(query: str) -> bool:
     text = query.strip().lower()
     if not text:
@@ -379,6 +399,19 @@ def _should_exit_chat(query: str) -> bool:
         "bye",
         "goodbye",
         "stop",
+        "done",
+        "done for now",
+        "im done",
+        "i'm done",
+        "im done for now",
+        "i'm done for now",
+        "lets talk later",
+        "let's talk later",
+        "talk later",
+        "see you later",
+        "no further questions",
+        "no more questions",
+        "nothing else",
         "end chat",
         "end the chat",
         "close chat",
@@ -387,9 +420,90 @@ def _should_exit_chat(query: str) -> bool:
     }
     if text in exit_phrases:
         return True
+    if re.search(r"\b(i'?m|im|we'?re|were)\s+done\b", text):
+        return True
+    if re.search(r"\b(done for now|done here|that'?s all|all set)\b", text):
+        return True
+    if re.search(r"\b(let'?s\s+)?talk\s+later\b", text):
+        return True
+    if re.search(r"\b(talk|see)\s+you\s+later\b", text):
+        return True
+    if re.search(r"\b(no\s+more|no\s+further)\s+questions\b", text):
+        return True
     if re.search(r"\b(end|stop|quit|exit)\b.*\b(chat|conversation)\b", text):
         return True
     return False
+
+
+def _contains_data_keywords(text: str) -> bool:
+    keywords = {
+        "table",
+        "tables",
+        "column",
+        "columns",
+        "row",
+        "rows",
+        "schema",
+        "database",
+        "sql",
+        "query",
+        "count",
+        "sum",
+        "average",
+        "avg",
+        "min",
+        "max",
+        "join",
+        "group",
+        "order",
+        "select",
+        "from",
+        "data",
+        "dataset",
+        "warehouse",
+    }
+    return any(word in text for word in keywords)
+
+
+def _maybe_local_intent_response(query: str) -> tuple[str, str, float] | None:
+    """Return a non-DB response for obvious non-query intents."""
+    text = query.strip().lower()
+    if not text:
+        return None
+    if _should_exit_chat(text):
+        return (
+            "Got it. Ending the session. If you need more, just start a new chat.",
+            "system",
+            0.9,
+        )
+    if text in {"help", "what can you do", "what can you do?"}:
+        return (
+            "I can help you explore your connected data. Try: list tables, show first 5 rows "
+            "from a table, or ask for totals and trends.",
+            "system",
+            0.8,
+        )
+    if not _contains_data_keywords(text) and any(
+        re.search(pattern, text)
+        for pattern in (
+            r"\bjoke\b",
+            r"\bweather\b",
+            r"\bnews\b",
+            r"\bsports\b",
+            r"\bmovie\b",
+            r"\bmusic\b",
+            r"\brecipe\b",
+            r"\bpoem\b",
+            r"\bstory\b",
+        )
+    ):
+        return (
+            "I can help with questions about your connected data. Try: list tables, "
+            "show first 5 rows from a table, or total sales last month.",
+            "system",
+            0.8,
+        )
+    return None
 
 
 # ============================================================================
@@ -412,7 +526,14 @@ def cli():
     default=False,
     help="Show each response in a scrollable pager.",
 )
-def chat(evidence: bool, pager: bool):
+@click.option(
+    "--max-clarifications",
+    default=3,
+    show_default=True,
+    type=int,
+    help="Maximum clarification prompts before stopping.",
+)
+def chat(evidence: bool, pager: bool, max_clarifications: int):
     """Interactive REPL mode for conversations."""
     console.print(
         Panel.fit(
@@ -427,11 +548,11 @@ def chat(evidence: bool, pager: bool):
 
     async def run_chat():
         nonlocal conversation_id
+        clarification_attempts = 0
+        max_clarifications_limit = max(0, max_clarifications)
 
+        pipeline = None
         try:
-            pipeline = await create_pipeline_from_config()
-            console.print("[green]✓ Pipeline initialized[/green]\n")
-
             while True:
                 try:
                     # Get user input
@@ -444,6 +565,11 @@ def chat(evidence: bool, pager: bool):
                         console.print("\n[yellow]Goodbye![/yellow]")
                         break
 
+                    if pipeline is None:
+                        pipeline = await create_pipeline_from_config()
+                        pipeline.max_clarifications = max(0, max_clarifications)
+                        console.print("[green]✓ Pipeline initialized[/green]\n")
+
                     # Show loading indicator
                     with console.status("[cyan]Processing...[/cyan]", spinner="dots"):
                         result = await pipeline.run(
@@ -452,10 +578,31 @@ def chat(evidence: bool, pager: bool):
                         )
 
                     # Extract results
-                    answer = result.get("natural_language_answer", "No answer generated")
+                    clarifying_questions = result.get("clarifying_questions") or []
+                    answer = result.get("natural_language_answer") or ""
+                    if not answer and clarifying_questions:
+                        answer = _compose_clarification_answer(clarifying_questions)
+                    if not answer:
+                        answer = "No answer generated"
                     sql = result.get("validated_sql") or result.get("generated_sql")
                     query_result = result.get("query_result")
                     data = _build_columnar_data(query_result)
+
+                    if clarifying_questions and clarification_attempts >= max_clarifications_limit:
+                        result = {
+                            **result,
+                            "answer_source": "system",
+                            "answer_confidence": 0.5,
+                            "clarifying_questions": [],
+                        }
+                        answer = _clarification_limit_message(max_clarifications_limit)
+                        sql = None
+                        data = None
+                        clarifying_questions = []
+                    elif clarifying_questions:
+                        clarification_attempts += 1
+                    else:
+                        clarification_attempts = 0
 
                     # Display results
                     _print_query_output(
@@ -484,7 +631,7 @@ def chat(evidence: bool, pager: bool):
             sys.exit(1)
         finally:
             # Cleanup
-            if "pipeline" in locals():
+            if pipeline is not None:
                 try:
                     await pipeline.connector.close()
                 except Exception:
@@ -512,8 +659,27 @@ def ask(query: str, evidence: bool, pager: bool, max_clarifications: int):
     """Ask a single question and exit."""
 
     async def run_query():
+        local_response = _maybe_local_intent_response(query)
+        if local_response:
+            answer, source, confidence = local_response
+            _print_query_output(
+                answer=answer,
+                sql=None,
+                data=None,
+                result={
+                    "answer_source": source,
+                    "answer_confidence": confidence,
+                    "clarifying_questions": [],
+                },
+                evidence=evidence,
+                show_metrics=False,
+                pager=pager or evidence,
+            )
+            return
+
         try:
             pipeline = await create_pipeline_from_config()
+            pipeline.max_clarifications = max(0, max_clarifications)
             conversation_history = []
             current_query = query
             clarification_attempts = 0
@@ -528,10 +694,27 @@ def ask(query: str, evidence: bool, pager: bool, max_clarifications: int):
                     )
 
                 # Extract results
-                answer = result.get("natural_language_answer", "No answer generated")
+                clarifying_questions = result.get("clarifying_questions") or []
+                answer = result.get("natural_language_answer") or ""
+                if not answer and clarifying_questions:
+                    answer = _compose_clarification_answer(clarifying_questions)
+                if not answer:
+                    answer = "No answer generated"
                 sql = result.get("validated_sql") or result.get("generated_sql")
                 query_result = result.get("query_result")
                 data = _build_columnar_data(query_result)
+
+                if clarifying_questions and clarification_attempts >= max_clarifications_limit:
+                    result = {
+                        **result,
+                        "answer_source": "system",
+                        "answer_confidence": 0.5,
+                        "clarifying_questions": [],
+                    }
+                    answer = _clarification_limit_message(max_clarifications_limit)
+                    sql = None
+                    data = None
+                    clarifying_questions = []
 
                 # Display results
                 _print_query_output(
@@ -544,12 +727,14 @@ def ask(query: str, evidence: bool, pager: bool, max_clarifications: int):
                     pager=pager or evidence,
                 )
 
-                clarifying_questions = result.get("clarifying_questions") or []
                 if not clarifying_questions or clarification_attempts >= max_clarifications_limit:
                     break
 
                 followup = console.input("[bold cyan]Clarification:[/bold cyan] ").strip()
                 if not followup:
+                    break
+                if _should_exit_chat(followup):
+                    console.print("[yellow]Goodbye![/yellow]")
                     break
 
                 conversation_history.extend(

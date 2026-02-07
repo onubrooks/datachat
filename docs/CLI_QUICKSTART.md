@@ -92,7 +92,7 @@ datachat ask --pager "Describe the public.events table"
 Start an interactive session:
 
 ```bash
-datachat chat --pager
+datachat chat --pager --max-clarifications 3
 ```
 
 ## 5) Troubleshooting
@@ -101,3 +101,50 @@ datachat chat --pager
   - Ensure `SYSTEM_DATABASE_URL` and `DATABASE_CREDENTIALS_KEY` are set.
 - **No DataPoints loaded**
   - Run `datachat dp sync --datapoints-dir datapoints/managed` after adding files.
+
+## 6) Manual Validation Checklist
+
+Use this checklist after backend changes to intent routing or credentials-only mode.
+
+1. Intent gate (exit + non-data intent):
+
+```bash
+datachat ask "let's talk later"
+datachat ask "tell me a joke"
+```
+
+Expected:
+- No SQL is generated.
+- Response source is system/intent, not clarification/sql.
+
+2. Clarification flow in `ask`:
+
+```bash
+datachat ask --max-clarifications 3 "Show me the first 5 rows"
+```
+
+When prompted:
+- Reply with a table name (for example `public.orders`).
+- Confirm the next answer returns SQL and rows.
+
+3. Credentials-only deterministic fallbacks:
+
+```bash
+datachat ask "list tables"
+datachat ask "How many rows are in information_schema.tables?"
+datachat ask "Show me the first 2 rows from information_schema.tables"
+```
+
+Expected:
+- Deterministic SQL should be produced without clarification loops.
+- Results should execute successfully on a connected Postgres target.
+
+4. Chat-mode guardrails:
+
+```bash
+datachat chat --max-clarifications 3
+```
+
+Inside chat:
+- `ok` should ask for clarification (not run full SQL pipeline).
+- `exit`, `no further questions`, or `talk later` should end the session cleanly.
