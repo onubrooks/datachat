@@ -11,6 +11,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
+from fastapi.encoders import jsonable_encoder
 
 from backend.initialization.initializer import SystemInitializer
 
@@ -207,20 +208,25 @@ async def websocket_chat(websocket: WebSocket) -> None:
         }
 
         # Send final complete event
-        await websocket.send_json(
-            {
-                "event": "complete",
-                "answer": answer,
-                "sql": sql_query,
-                "data": data_result,
-                "visualization_hint": visualization_hint,
-                "sources": sources,
-                "validation_errors": result.get("validation_errors", []),
-                "validation_warnings": result.get("validation_warnings", []),
-                "metrics": metrics,
-                "conversation_id": conversation_id,
-            }
-        )
+        payload = {
+            "event": "complete",
+            "answer": answer,
+            "sql": sql_query,
+            "data": data_result,
+            "visualization_hint": visualization_hint,
+            "sources": sources,
+            "answer_source": result.get("answer_source"),
+            "answer_confidence": result.get("answer_confidence"),
+            "evidence": result.get("evidence", []),
+            "validation_errors": result.get("validation_errors", []),
+            "validation_warnings": result.get("validation_warnings", []),
+            "tool_approval_required": bool(result.get("tool_approval_required")),
+            "tool_approval_message": result.get("tool_approval_message"),
+            "tool_approval_calls": result.get("tool_approval_calls", []),
+            "metrics": metrics,
+            "conversation_id": conversation_id,
+        }
+        await websocket.send_json(jsonable_encoder(payload))
 
         logger.info(
             "WebSocket request completed successfully",

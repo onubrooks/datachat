@@ -494,3 +494,15 @@ Insights:
         # In real implementation, mysql might be supported
         with pytest.raises((ValueError, Exception)):
             await executor_agent.execute(sample_input)
+
+    def test_parses_json_correction_from_code_fence(self, executor_agent):
+        """Parse SQL from fenced JSON correction payloads."""
+        content = (
+            "```json\n"
+            '{ "sql": "SELECT COUNT(*) FROM public.orders", "confidence": 0.8 }\n'
+            "```"
+        )
+
+        parsed = executor_agent._parse_correction_response(content)
+
+        assert parsed == "SELECT COUNT(*) FROM public.orders"

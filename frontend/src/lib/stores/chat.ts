@@ -19,6 +19,21 @@ export interface Message extends ChatMessage {
     name: string;
     relevance_score: number;
   }>;
+  answer_source?: string | null;
+  answer_confidence?: number | null;
+  evidence?: Array<{
+    datapoint_id: string;
+    name?: string | null;
+    type?: string | null;
+    reason?: string | null;
+  }>;
+  tool_approval_required?: boolean;
+  tool_approval_message?: string | null;
+  tool_approval_calls?: Array<{
+    name: string;
+    arguments?: Record<string, unknown>;
+  }>;
+  tool_approval_required?: boolean;
   metrics?: {
     total_latency_ms: number;
     agent_timings: Record<string, number>;
@@ -151,7 +166,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         data: response.data,
         visualization_hint: response.visualization_hint,
         sources: response.sources,
+        answer_source: response.answer_source,
+        answer_confidence: response.answer_confidence,
+        evidence: response.evidence,
         metrics: response.metrics,
+        tool_approval_required: response.tool_approval_required,
+        tool_approval_message: response.tool_approval_message,
+        tool_approval_calls: response.tool_approval_calls,
       };
 
       return {

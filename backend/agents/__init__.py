@@ -26,7 +26,10 @@ Usage:
 from backend.agents.base import BaseAgent
 from backend.agents.classifier import ClassifierAgent
 from backend.agents.context import ContextAgent
+from backend.agents.context_answer import ContextAnswerAgent
 from backend.agents.executor import ExecutorAgent
+from backend.agents.tool_planner import ToolPlannerAgent
+from backend.agents.response_synthesis import ResponseSynthesisAgent
 from backend.agents.sql import SQLAgent
 from backend.agents.validator import ValidatorAgent
 
@@ -34,7 +37,10 @@ __all__ = [
     "BaseAgent",
     "ClassifierAgent",
     "ContextAgent",
+    "ContextAnswerAgent",
     "ExecutorAgent",
+    "ToolPlannerAgent",
+    "ResponseSynthesisAgent",
     "SQLAgent",
     "ValidatorAgent",
 ]

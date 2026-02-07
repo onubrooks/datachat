@@ -11,6 +11,7 @@ from backend.llm.models import LLMMessage, LLMRequest
 from backend.models.datapoint import BusinessDataPoint, ColumnMetadata, SchemaDataPoint
 from backend.profiling.models import (
     DatabaseProfile,
+    ColumnProfile,
     GeneratedDataPoint,
     GeneratedDataPoints,
     TableProfile,
@@ -55,10 +56,12 @@ class DataPointGenerator:
 
         business_points: list[GeneratedDataPoint] = []
         if depth == "schema_only":
-            return GeneratedDataPoints(
+            return self._dedupe_generated(
+                GeneratedDataPoints(
                 profile_id=profile.profile_id,
                 schema_datapoints=schema_points,
                 business_datapoints=business_points,
+                )
             )
 
         if depth == "metrics_basic":
@@ -76,10 +79,12 @@ class DataPointGenerator:
                 progress_callback=progress_callback,
             )
 
-        return GeneratedDataPoints(
+        return self._dedupe_generated(
+            GeneratedDataPoints(
             profile_id=profile.profile_id,
             schema_datapoints=schema_points,
             business_datapoints=business_points,
+            )
         )
 
     async def _generate_schema_datapoint(
@@ -131,7 +136,7 @@ class DataPointGenerator:
 
         row_count = table.row_count if table.row_count is not None and table.row_count >= 0 else None
         schema_datapoint = SchemaDataPoint(
-            datapoint_id=self._make_datapoint_id("table", table.name, index),
+            datapoint_id=self._make_table_id(table.schema_name, table.name),
             name=self._title_case(table.name),
             table_name=f"{table.schema_name}.{table.name}",
             schema=table.schema_name,
@@ -146,7 +151,7 @@ class DataPointGenerator:
             row_count=row_count,
             owner=_DEFAULT_OWNER,
             tags=["auto-profiled"],
-            metadata={"source": "auto-profiler-llm"},
+            metadata={"source": "auto-profiler-llm", "table_key": f"{table.schema_name}.{table.name}"},
         )
 
         return GeneratedDataPoint(
@@ -173,11 +178,11 @@ class DataPointGenerator:
             for col in table.columns
         ]
         schema_datapoint = SchemaDataPoint(
-            datapoint_id=self._make_datapoint_id("table", table.name, index),
+            datapoint_id=self._make_table_id(table.schema_name, table.name),
             name=self._title_case(table.name),
             table_name=f"{table.schema_name}.{table.name}",
             schema=table.schema_name,
-            business_purpose=f"Auto-profiled table {table.schema_name}.{table.name}.",
+            business_purpose=self._derive_table_purpose(table),
             key_columns=key_columns,
             relationships=[
                 self._relationship_to_model(rel) for rel in table.relationships
@@ -188,7 +193,7 @@ class DataPointGenerator:
             row_count=table.row_count if table.row_count is not None else None,
             owner=_DEFAULT_OWNER,
             tags=["auto-profiled"],
-            metadata={"source": "auto-profiler-basic"},
+            metadata={"source": "auto-profiler-basic", "table_key": f"{table.schema_name}.{table.name}"},
         )
         return GeneratedDataPoint(
             datapoint=schema_datapoint.model_dump(mode="json", by_alias=True),
@@ -227,7 +232,7 @@ class DataPointGenerator:
             synonyms = self._normalize_list(metric.get("synonyms"))
 
             business_datapoint = BusinessDataPoint(
-                datapoint_id=self._make_datapoint_id("metric", name, index + metric_index),
+                datapoint_id=self._make_metric_id(f"{table.schema_name}.{table.name}", name),
                 name=name,
                 calculation=calculation,
                 synonyms=synonyms,
@@ -237,7 +242,10 @@ class DataPointGenerator:
                 aggregation=self._normalize_aggregation(metric.get("aggregation")),
                 owner=_DEFAULT_OWNER,
                 tags=["auto-profiled"],
-                metadata={"source": "auto-profiler-basic"},
+                metadata={
+                    "source": "auto-profiler-llm",
+                    "table_key": f"{table.schema_name}.{table.name}",
+                },
             )
             generated.append(
                 GeneratedDataPoint(
@@ -297,7 +305,7 @@ class DataPointGenerator:
         metric_defs: list[tuple[str, str, str | None]] = [
             ("Row Count", "COUNT(*)", "COUNT"),
         ]
-        col = numeric_columns[0].name
+        col = self._select_primary_numeric_column(numeric_columns)
         metric_defs.append((f"Total {col}", f"SUM({col})", "SUM"))
         metric_defs.append((f"Average {col}", f"AVG({col})", "AVG"))
 
@@ -305,11 +313,10 @@ class DataPointGenerator:
         for metric_index, (name, calculation, aggregation) in enumerate(
             metric_defs[:max_metrics_per_table], start=1
         ):
+            display_name = f"{self._title_case(table.name)} {name}"
             business_datapoint = BusinessDataPoint(
-                datapoint_id=self._make_datapoint_id(
-                    "metric", f"{table.name}_{name}", index + metric_index
-                ),
-                name=f"{table.name} {name}",
+                datapoint_id=self._make_metric_id(f"{table.schema_name}.{table.name}", name),
+                name=display_name,
                 calculation=calculation,
                 synonyms=[],
                 business_rules=[],
@@ -318,7 +325,10 @@ class DataPointGenerator:
                 aggregation=aggregation,
                 owner=_DEFAULT_OWNER,
                 tags=["auto-profiled", "basic"],
-                metadata={"source": "auto-profiler-basic"},
+                metadata={
+                    "source": "auto-profiler-basic",
+                    "table_key": f"{table.schema_name}.{table.name}",
+                },
             )
             generated.append(
                 GeneratedDataPoint(
@@ -365,8 +375,8 @@ class DataPointGenerator:
                     business_rules = self._normalize_list(metric.get("business_rules"))
                     synonyms = self._normalize_list(metric.get("synonyms"))
                     business_datapoint = BusinessDataPoint(
-                        datapoint_id=self._make_datapoint_id(
-                            "metric", name, batch_start + idx + metric_index
+                        datapoint_id=self._make_metric_id(
+                            f"{table.schema_name}.{table.name}", name
                         ),
                         name=name,
                         calculation=calculation,
@@ -376,9 +386,12 @@ class DataPointGenerator:
                         unit=metric.get("unit"),
                         aggregation=self._normalize_aggregation(metric.get("aggregation")),
                         owner=_DEFAULT_OWNER,
-                        tags=["auto-profiled"],
-                        metadata={"source": "auto-profiler-llm"},
-                    )
+                    tags=["auto-profiled"],
+                    metadata={
+                        "source": "auto-profiler-llm",
+                        "table_key": f"{table.schema_name}.{table.name}",
+                    },
+                )
                     generated.append(
                         GeneratedDataPoint(
                             datapoint=business_datapoint.model_dump(
@@ -489,10 +502,63 @@ class DataPointGenerator:
             return value
         return value + " (auto-profiled)"
 
+    def _select_primary_numeric_column(self, columns: list[ColumnProfile]) -> str:
+        priority_tokens = [
+            "amount",
+            "total",
+            "price",
+            "cost",
+            "revenue",
+            "qty",
+            "quantity",
+            "count",
+            "number",
+            "balance",
+            "score",
+        ]
+        scored = []
+        for col in columns:
+            score = 0
+            name = col.name.lower()
+            for token in priority_tokens:
+                if token in name:
+                    score += 1
+            scored.append((score, col.name))
+        scored.sort(reverse=True)
+        return scored[0][1]
+
+    def _derive_table_purpose(self, table: TableProfile) -> str:
+        base_name = self._title_case(table.name)
+        column_names = [col.name for col in table.columns[:5]]
+        hints = ""
+        name_lower = table.name.lower()
+        if any(token in name_lower for token in ["user", "account", "customer"]):
+            hints = "Stores people or account records."
+        elif any(token in name_lower for token in ["order", "invoice", "payment"]):
+            hints = "Captures transactional records."
+        elif any(token in name_lower for token in ["event", "log", "activity"]):
+            hints = "Tracks events or activity logs."
+        elif any(token in name_lower for token in ["product", "item", "catalog"]):
+            hints = "Holds product or catalog details."
+        elif any(token in name_lower for token in ["session", "visit"]):
+            hints = "Tracks session or visit details."
+        columns_hint = ""
+        if column_names:
+            columns_hint = f"Key columns include {', '.join(column_names)}."
+        parts = [f"Auto-profiled table {table.schema_name}.{table.name}.", hints, columns_hint]
+        return " ".join(part for part in parts if part)
+
     @staticmethod
-    def _make_datapoint_id(prefix: str, name: str, index: int) -> str:
-        slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-        return f"{prefix}_{slug}_{index:03d}"
+    def _slugify(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+    def _make_table_id(self, schema: str, table: str) -> str:
+        slug = self._slugify(f"{schema}_{table}")
+        return f"table_{slug}"
+
+    def _make_metric_id(self, table: str, metric_name: str) -> str:
+        slug = self._slugify(f"{table}_{metric_name}")
+        return f"metric_{slug}"
 
     @staticmethod
     def _title_case(value: str) -> str:
@@ -517,6 +583,15 @@ class DataPointGenerator:
             }
             for col in table.columns
         ]
+        relationships = [
+            {
+                "target_table": rel.target_table,
+                "source_column": rel.source_column,
+                "relationship_type": rel.relationship_type,
+                "cardinality": rel.cardinality,
+            }
+            for rel in table.relationships
+        ]
         return (
             "Document this table for business users. Return JSON with keys: "
             "business_purpose (string), columns (object mapping column name to business meaning), "
@@ -524,7 +599,36 @@ class DataPointGenerator:
             "confidence (0-1), explanation (string).\n\n"
             f"Table: {table.schema_name}.{table.name}\n"
             f"Row count (estimate): {table.row_count}\n"
-            f"Columns: {json.dumps(columns)}"
+            f"Columns: {json.dumps(columns)}\n"
+            f"Relationships: {json.dumps(relationships)}"
+        )
+
+    def _dedupe_generated(self, generated: GeneratedDataPoints) -> GeneratedDataPoints:
+        schema_map: dict[str, GeneratedDataPoint] = {}
+        for item in generated.schema_datapoints:
+            datapoint = item.datapoint or {}
+            table_name = datapoint.get("table_name") or datapoint.get("schema")
+            if not table_name:
+                table_name = datapoint.get("datapoint_id")
+            existing = schema_map.get(table_name)
+            if not existing or item.confidence >= existing.confidence:
+                schema_map[table_name] = item
+
+        business_map: dict[tuple[str, str], GeneratedDataPoint] = {}
+        for item in generated.business_datapoints:
+            datapoint = item.datapoint or {}
+            related_tables = datapoint.get("related_tables") or []
+            table_key = related_tables[0] if related_tables else "unknown"
+            name = datapoint.get("name") or datapoint.get("datapoint_id")
+            key = (table_key, str(name))
+            existing = business_map.get(key)
+            if not existing or item.confidence >= existing.confidence:
+                business_map[key] = item
+
+        return GeneratedDataPoints(
+            profile_id=generated.profile_id,
+            schema_datapoints=list(schema_map.values()),
+            business_datapoints=list(business_map.values()),
         )
 
     def _build_metric_prompt(self, table: TableProfile, numeric_columns: list) -> str:
@@ -541,5 +645,6 @@ class DataPointGenerator:
             "an array of objects with fields: name, calculation, aggregation, unit, "
             "synonyms, business_rules, confidence, explanation.\n\n"
             f"Table: {table.schema_name}.{table.name}\n"
+            f"Row count (estimate): {table.row_count}\n"
             f"Numeric columns: {json.dumps(numeric_cols)}"
         )

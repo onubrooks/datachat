@@ -20,10 +20,12 @@ import {
   Code,
   ShieldCheck,
   Play,
+  Sparkles,
 } from "lucide-react";
 import { Card, CardContent } from "../ui/card";
 import { cn } from "@/lib/utils";
 import { useChatStore } from "@/lib/stores/chat";
+import type { WaitingUxMode } from "@/lib/settings";
 
 // Agent icons mapping
 const AGENT_ICONS: Record<string, React.ElementType> = {
@@ -32,6 +34,7 @@ const AGENT_ICONS: Record<string, React.ElementType> = {
   SQLAgent: Code,
   ValidatorAgent: ShieldCheck,
   ExecutorAgent: Play,
+  ContextAnswerAgent: Sparkles,
 };
 
 // Agent display names
@@ -41,9 +44,23 @@ const AGENT_NAMES: Record<string, string> = {
   SQLAgent: "SQL Generation",
   ValidatorAgent: "Validation",
   ExecutorAgent: "Execution",
+  ContextAnswerAgent: "Context Answer",
 };
 
-export function AgentStatus() {
+const AGENT_ORDER = [
+  "ClassifierAgent",
+  "ContextAgent",
+  "ContextAnswerAgent",
+  "SQLAgent",
+  "ValidatorAgent",
+  "ExecutorAgent",
+];
+
+interface AgentStatusProps {
+  mode?: WaitingUxMode;
+}
+
+export function AgentStatus({ mode = "animated" }: AgentStatusProps) {
   const { currentAgent, agentStatus, agentMessage, agentError, agentHistory } =
     useChatStore();
 
@@ -57,8 +74,27 @@ export function AgentStatus() {
     ? AGENT_NAMES[currentAgent] || currentAgent
     : "Processing";
 
+  const completedAgents = new Set(
+    agentHistory
+      .filter((item) => item.status === "completed")
+      .map((item) => item.current_agent)
+  );
+  const progressTotal = AGENT_ORDER.length;
+  const progressCompleted = Array.from(completedAgents).filter((agent) =>
+    AGENT_ORDER.includes(agent)
+  ).length;
+  const progressPercent = Math.min(
+    100,
+    Math.round((progressCompleted / progressTotal) * 100)
+  );
+
   return (
-    <Card className="mb-4 border-primary/20 bg-primary/5">
+    <Card
+      className={cn(
+        "mb-4 border-primary/20 bg-primary/5",
+        agentStatus === "running" && mode === "animated" && "animate-pulse"
+      )}
+    >
       <CardContent className="p-4">
         {/* Current Agent Status */}
         <div className="flex items-center gap-3 mb-3">
@@ -84,6 +120,27 @@ export function AgentStatus() {
             )}
           </div>
         </div>
+
+        {mode === "animated" && agentStatus === "running" && (
+          <div className="mb-3 text-xs text-muted-foreground">
+            Working on it<span className="animate-pulse">...</span>
+          </div>
+        )}
+
+        {mode === "progress" && (
+          <div className="mb-3">
+            <div className="flex justify-between text-xs text-muted-foreground mb-1">
+              <span>Progress</span>
+              <span>{progressPercent}%</span>
+            </div>
+            <div className="h-2 w-full rounded bg-muted">
+              <div
+                className="h-2 rounded bg-primary transition-all"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Agent Execution History */}
         {agentHistory.length > 0 && (

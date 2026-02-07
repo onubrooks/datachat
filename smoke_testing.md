@@ -117,7 +117,11 @@ Expected: answers return with SQL + results; validation errors are empty or mini
 ```bash
 datachat --version
 datachat status
+datachat setup --target-db postgresql://postgres:@localhost:5432/postgres \
+  --system-db postgresql://datachat:datachat_password@localhost:5432/datachat \
+  --auto-profile --max-tables 10 --non-interactive
 datachat ask "How many users are in the database?"
+datachat dp pending list
 ```
 
 Expected: status shows healthy components; `ask` returns SQL + results.

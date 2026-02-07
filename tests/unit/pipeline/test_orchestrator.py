@@ -17,6 +17,8 @@ import pytest
 from backend.models import (
     AgentMetadata,
     ClassifierAgentOutput,
+    ContextAnswer,
+    ContextAnswerAgentOutput,
     ContextAgentOutput,
     ExecutedQuery,
     ExecutorAgentOutput,
@@ -27,6 +29,8 @@ from backend.models import (
     RetrievedDataPoint,
     SQLAgentOutput,
     SQLValidationError,
+    ToolPlan,
+    ToolPlannerAgentOutput,
     ValidatedSQL,
     ValidatorAgentOutput,
 )
@@ -74,6 +78,14 @@ class TestPipelineExecution:
         pipeline.classifier.llm = mock_llm_provider
         pipeline.sql.llm = mock_llm_provider
         pipeline.executor.llm = mock_llm_provider
+        pipeline.tool_planner.execute = AsyncMock(
+            return_value=ToolPlannerAgentOutput(
+                success=True,
+                plan=ToolPlan(tool_calls=[], rationale="No tools needed.", fallback="pipeline"),
+                metadata=AgentMetadata(agent_name="ToolPlannerAgent", llm_calls=0),
+            )
+        )
+        pipeline.response_synthesis.execute = AsyncMock(return_value="Found 1 result.")
         return pipeline
 
     @pytest.fixture
@@ -116,7 +128,22 @@ class TestPipelineExecution:
                     total_retrieved=1,
                     sources_used=["vector"],
                 ),
+                context_confidence=0.2,
                 metadata=AgentMetadata(agent_name="ContextAgent", llm_calls=0),
+            )
+        )
+
+        pipeline.context_answer.execute = AsyncMock(
+            return_value=ContextAnswerAgentOutput(
+                success=True,
+                context_answer=ContextAnswer(
+                    answer="Here is a context-only answer.",
+                    confidence=0.8,
+                    evidence=[],
+                    needs_sql=False,
+                    clarifying_questions=[],
+                ),
+                metadata=AgentMetadata(agent_name="ContextAnswerAgent", llm_calls=1),
             )
         )
 
@@ -186,6 +213,7 @@ class TestPipelineExecution:
         assert mock_agents.sql.execute.called
         assert mock_agents.validator.execute.called
         assert mock_agents.executor.execute.called
+        assert not mock_agents.context_answer.execute.called
 
         # Verify final state
         assert result["natural_language_answer"] == "Found 1 result."
@@ -206,7 +234,7 @@ class TestPipelineExecution:
         assert "validator" in result["agent_timings"]
         assert "executor" in result["agent_timings"]
 
-        assert result["llm_calls"] == 3  # classifier + sql + executor
+        assert result["llm_calls"] == 4  # classifier + sql + executor + response_synthesis
         assert result["total_latency_ms"] > 0
 
     @pytest.mark.asyncio
@@ -233,6 +261,126 @@ class TestPipelineExecution:
         # ExecutorAgent outputs
         assert result["natural_language_answer"] == "Found 1 result."
         assert result["visualization_hint"] == "table"
+
+    @pytest.mark.asyncio
+    async def test_routes_to_context_answer_for_exploration(self, mock_agents):
+        mock_agents.classifier.execute = AsyncMock(
+            return_value=ClassifierAgentOutput(
+                success=True,
+                classification=QueryClassification(
+                    intent="exploration",
+                    entities=[],
+                    complexity="simple",
+                    clarification_needed=False,
+                    clarifying_questions=[],
+                    confidence=0.9,
+                ),
+                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=1),
+            )
+        )
+        mock_agents.context.execute = AsyncMock(
+            return_value=ContextAgentOutput(
+                success=True,
+                data={},
+                investigation_memory=InvestigationMemory(
+                    query="test query",
+                    datapoints=[
+                        RetrievedDataPoint(
+                            datapoint_id="table_001",
+                            datapoint_type="Schema",
+                            name="Test Table",
+                            score=0.9,
+                            source="vector",
+                            metadata={"type": "Schema"},
+                        )
+                    ],
+                    retrieval_mode="hybrid",
+                    total_retrieved=1,
+                    sources_used=["vector"],
+                ),
+                context_confidence=0.8,
+                metadata=AgentMetadata(agent_name="ContextAgent", llm_calls=0),
+            )
+        )
+        mock_agents.context_answer.execute = AsyncMock(
+            return_value=ContextAnswerAgentOutput(
+                success=True,
+                context_answer=ContextAnswer(
+                    answer="Context-only response.",
+                    confidence=0.7,
+                    evidence=[],
+                    needs_sql=False,
+                    clarifying_questions=[],
+                ),
+                metadata=AgentMetadata(agent_name="ContextAnswerAgent", llm_calls=1),
+            )
+        )
+
+        result = await mock_agents.run("Explain what this dataset is about.")
+
+        assert mock_agents.context_answer.execute.called
+        assert not mock_agents.sql.execute.called
+        assert result["answer_source"] == "context"
+
+    @pytest.mark.asyncio
+    async def test_context_answer_can_fall_through_to_sql(self, mock_agents):
+        mock_agents.classifier.execute = AsyncMock(
+            return_value=ClassifierAgentOutput(
+                success=True,
+                classification=QueryClassification(
+                    intent="exploration",
+                    entities=[],
+                    complexity="simple",
+                    clarification_needed=False,
+                    clarifying_questions=[],
+                    confidence=0.9,
+                ),
+                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=1),
+            )
+        )
+        mock_agents.context.execute = AsyncMock(
+            return_value=ContextAgentOutput(
+                success=True,
+                data={},
+                investigation_memory=InvestigationMemory(
+                    query="test query",
+                    datapoints=[
+                        RetrievedDataPoint(
+                            datapoint_id="table_001",
+                            datapoint_type="Schema",
+                            name="Test Table",
+                            score=0.9,
+                            source="vector",
+                            metadata={"type": "Schema"},
+                        )
+                    ],
+                    retrieval_mode="hybrid",
+                    total_retrieved=1,
+                    sources_used=["vector"],
+                ),
+                context_confidence=0.8,
+                metadata=AgentMetadata(agent_name="ContextAgent", llm_calls=0),
+            )
+        )
+        mock_agents.context_answer.execute = AsyncMock(
+            return_value=ContextAnswerAgentOutput(
+                success=True,
+                context_answer=ContextAnswer(
+                    answer="Need numbers.",
+                    confidence=0.5,
+                    evidence=[],
+                    needs_sql=True,
+                    clarifying_questions=[],
+                ),
+                metadata=AgentMetadata(agent_name="ContextAnswerAgent", llm_calls=1),
+            )
+        )
+
+        result = await mock_agents.run("show me counts")
+
+        assert mock_agents.context_answer.execute.called
+        assert mock_agents.sql.execute.called
+        assert result["answer_source"] == "sql"
 
 
 class TestRetryLogic:
@@ -271,6 +419,14 @@ class TestRetryLogic:
         pipeline.classifier.llm = mock_llm_provider
         pipeline.sql.llm = mock_llm_provider
         pipeline.executor.llm = mock_llm_provider
+        pipeline.tool_planner.execute = AsyncMock(
+            return_value=ToolPlannerAgentOutput(
+                success=True,
+                plan=ToolPlan(tool_calls=[], rationale="No tools needed.", fallback="pipeline"),
+                metadata=AgentMetadata(agent_name="ToolPlannerAgent", llm_calls=0),
+            )
+        )
+        pipeline.response_synthesis.execute = AsyncMock(return_value="Found 1 result.")
         return pipeline
 
     @pytest.mark.asyncio
@@ -511,6 +667,14 @@ class TestStreaming:
         pipeline.classifier.llm = mock_llm_provider
         pipeline.sql.llm = mock_llm_provider
         pipeline.executor.llm = mock_llm_provider
+        pipeline.tool_planner.execute = AsyncMock(
+            return_value=ToolPlannerAgentOutput(
+                success=True,
+                plan=ToolPlan(tool_calls=[], rationale="No tools needed.", fallback="pipeline"),
+                metadata=AgentMetadata(agent_name="ToolPlannerAgent", llm_calls=0),
+            )
+        )
+        pipeline.response_synthesis.execute = AsyncMock(return_value="Result is 1")
         return pipeline
 
     @pytest.mark.asyncio
@@ -636,11 +800,20 @@ class TestErrorHandling:
     @pytest.fixture
     def pipeline(self, mock_retriever, mock_connector):
         """Create pipeline."""
-        return DataChatPipeline(
+        pipeline = DataChatPipeline(
             retriever=mock_retriever,
             connector=mock_connector,
             max_retries=2,
         )
+        pipeline.tool_planner.execute = AsyncMock(
+            return_value=ToolPlannerAgentOutput(
+                success=True,
+                plan=ToolPlan(tool_calls=[], rationale="No tools needed.", fallback="pipeline"),
+                metadata=AgentMetadata(agent_name="ToolPlannerAgent", llm_calls=0),
+            )
+        )
+        pipeline.response_synthesis.execute = AsyncMock(return_value="Found 1 result.")
+        return pipeline
 
     @pytest.mark.asyncio
     async def test_classifier_error_is_captured(self, pipeline):

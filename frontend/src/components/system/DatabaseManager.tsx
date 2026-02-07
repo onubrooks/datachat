@@ -40,6 +40,13 @@ export function DatabaseManager() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
+  const [toolProfileMessage, setToolProfileMessage] = useState<string | null>(null);
+  const [toolProfileError, setToolProfileError] = useState<string | null>(null);
+  const [toolProfileRunning, setToolProfileRunning] = useState(false);
+  const [toolApprovalOpen, setToolApprovalOpen] = useState(false);
+  const [qualityReport, setQualityReport] = useState<Record<string, unknown> | null>(null);
+  const [qualityError, setQualityError] = useState<string | null>(null);
+  const [qualityRunning, setQualityRunning] = useState(false);
 
   const [name, setName] = useState("");
   const [databaseUrl, setDatabaseUrl] = useState("");
@@ -122,6 +129,55 @@ export function DatabaseManager() {
       setSyncError((err as Error).message);
     }
   }, [preserveApprovedOnEmpty]);
+
+  const handleToolProfile = async () => {
+    setToolApprovalOpen(true);
+  };
+
+  const handleToolProfileApprove = async () => {
+    setToolProfileError(null);
+    setToolProfileMessage(null);
+    setToolProfileRunning(true);
+    try {
+      const response = await api.executeTool({
+        name: "profile_and_generate_datapoints",
+        approved: true,
+        arguments: {
+          depth,
+          batch_size: 10,
+          max_tables: selectedTables.length ? selectedTables.length : null,
+        },
+      });
+      const result = response.result || {};
+      setToolProfileMessage(
+        `Profiling complete. Pending DataPoints created: ${
+          (result as Record<string, unknown>).pending_count ?? 0
+        }.`
+      );
+      await refresh();
+    } catch (err) {
+      setToolProfileError((err as Error).message);
+    } finally {
+      setToolProfileRunning(false);
+      setToolApprovalOpen(false);
+    }
+  };
+
+  const handleQualityReport = async () => {
+    setQualityError(null);
+    setQualityRunning(true);
+    try {
+      const response = await api.executeTool({
+        name: "datapoint_quality_report",
+        arguments: { limit: 10 },
+      });
+      setQualityReport(response.result || {});
+    } catch (err) {
+      setQualityError((err as Error).message);
+    } finally {
+      setQualityRunning(false);
+    }
+  };
 
   const selectedCount = selectedTables.length;
   const hasSelection = selectedCount > 0;
@@ -809,6 +865,24 @@ export function DatabaseManager() {
                   Note: Auto-generated values are normalized to match DataPoint
                   schema. Invalid aggregations are skipped.
                 </div>
+                <div className="rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  Tool-based profiling runs the same workflow with explicit approval.
+                </div>
+                <Button
+                  variant="secondary"
+                  onClick={handleToolProfile}
+                  disabled={toolProfileRunning}
+                >
+                  {toolProfileRunning ? "Running..." : "Profile + Generate (Tool)"}
+                </Button>
+                {toolProfileMessage && (
+                  <div className="text-xs text-muted-foreground">
+                    {toolProfileMessage}
+                  </div>
+                )}
+                {toolProfileError && (
+                  <div className="text-xs text-destructive">{toolProfileError}</div>
+                )}
               </div>
             )}
           </div>
@@ -822,6 +896,97 @@ export function DatabaseManager() {
             {approved.length} total
           </div>
         </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleQualityReport}
+            disabled={qualityRunning}
+          >
+            {qualityRunning ? "Checking..." : "Run Quality Report"}
+          </Button>
+          {qualityError && <span className="text-destructive">{qualityError}</span>}
+        </div>
+        {qualityReport && (
+          <div className="rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            <div>Total DataPoints: {qualityReport.total_datapoints ?? 0}</div>
+            <div>
+              Weak Schema:{" "}
+              {(qualityReport.weak_schema as unknown[] | undefined)?.length ?? 0}
+            </div>
+            <div>
+              Weak Metrics:{" "}
+              {(qualityReport.weak_business as unknown[] | undefined)?.length ?? 0}
+            </div>
+            <div>
+              Duplicate Metrics:{" "}
+              {(qualityReport.duplicate_metrics as unknown[] | undefined)?.length ?? 0}
+            </div>
+            <div className="mt-2 space-y-2">
+              {(qualityReport.weak_schema as Array<Record<string, unknown>> | undefined)?.length ? (
+                <div>
+                  <div className="font-medium text-foreground">Weak Schema</div>
+                  <ul className="mt-1 space-y-1">
+                    {(qualityReport.weak_schema as Array<Record<string, unknown>>).map(
+                      (item) => (
+                        <li key={String(item.datapoint_id)}>
+                          {String(item.table_name || item.datapoint_id)} ·{" "}
+                          {String(item.reason)}
+                        </li>
+                      )
+                    )}
+                  </ul>
+                </div>
+              ) : null}
+              {(qualityReport.weak_business as Array<Record<string, unknown>> | undefined)?.length ? (
+                <div>
+                  <div className="font-medium text-foreground">Weak Metrics</div>
+                  <ul className="mt-1 space-y-1">
+                    {(qualityReport.weak_business as Array<Record<string, unknown>>).map(
+                      (item) => (
+                        <li key={String(item.datapoint_id)}>
+                          {String(item.name || item.datapoint_id)} ·{" "}
+                          {String(item.reason)}
+                        </li>
+                      )
+                    )}
+                  </ul>
+                </div>
+              ) : null}
+              {(qualityReport.duplicate_metrics as Array<Record<string, unknown>> | undefined)
+                ?.length ? (
+                <div>
+                  <div className="font-medium text-foreground">Duplicate Metrics</div>
+                  <ul className="mt-1 space-y-1">
+                    {(qualityReport.duplicate_metrics as Array<Record<string, unknown>>).map(
+                      (item, index) => (
+                        <li key={`${item.table}-${index}`}>
+                          {String(item.table)} · {String(item.calculation)} ·{" "}
+                          {String((item.datapoint_ids as string[] | undefined)?.length || 0)} ids
+                        </li>
+                      )
+                    )}
+                  </ul>
+                </div>
+              ) : null}
+              {(qualityReport.duplicate_ids as Array<Record<string, unknown>> | undefined)
+                ?.length ? (
+                <div>
+                  <div className="font-medium text-foreground">Duplicate IDs</div>
+                  <ul className="mt-1 space-y-1">
+                    {(qualityReport.duplicate_ids as Array<Record<string, unknown>>).map(
+                      (item) => (
+                        <li key={String(item.datapoint_id)}>
+                          {String(item.datapoint_id)} · {String(item.count)} copies
+                        </li>
+                      )
+                    )}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        )}
         {approved.length === 0 && (
           <p className="text-sm text-muted-foreground">
             No approved DataPoints yet.
@@ -909,6 +1074,43 @@ export function DatabaseManager() {
           ))}
         </div>
       </Card>
+      {toolApprovalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-lg bg-background p-6 shadow-lg">
+            <h3 className="text-base font-semibold">Approve Tool Execution</h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              You are about to profile the default database and generate pending DataPoints.
+            </p>
+            <div className="mt-4 space-y-2 text-xs text-muted-foreground">
+              <div>Depth: {depth}</div>
+              <div>Tables selected: {selectedTables.length || "all"}</div>
+              <div>Batch size: 10</div>
+            </div>
+            <div className="mt-4 rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              Cost hint: this triggers LLM calls for metrics and can take several minutes
+              on larger databases.
+            </div>
+            {toolProfileError && (
+              <div className="mt-2 text-xs text-destructive">{toolProfileError}</div>
+            )}
+            <div className="mt-4 flex gap-2">
+              <Button
+                onClick={handleToolProfileApprove}
+                disabled={toolProfileRunning}
+              >
+                {toolProfileRunning ? "Running..." : "Approve & Run"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => setToolApprovalOpen(false)}
+                disabled={toolProfileRunning}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -127,6 +127,9 @@ class ContextAgent(BaseAgent):
                 retrieval_mode=input.retrieval_mode,
                 sources_used=list(set(sources_used)),  # Deduplicate
             )
+            context_confidence = self._estimate_context_confidence(
+                input.query, investigation_memory
+            )
 
             metadata.mark_complete()
 
@@ -141,6 +144,7 @@ class ContextAgent(BaseAgent):
                 metadata=metadata,
                 next_agent="SQLAgent",
                 investigation_memory=investigation_memory,
+                context_confidence=context_confidence,
             )
 
         except Exception as e:
@@ -224,3 +228,52 @@ class ContextAgent(BaseAgent):
             **input.context,
             "investigation_memory": output.investigation_memory.model_dump(),
         }
+
+    def _estimate_context_confidence(
+        self, query: str, memory: InvestigationMemory
+    ) -> float:
+        query_lower = query.lower()
+        datapoints = memory.datapoints
+        if not datapoints:
+            return 0.0
+
+        has_schema = any(dp.datapoint_type == "Schema" for dp in datapoints)
+        has_business = any(dp.datapoint_type == "Business" for dp in datapoints)
+
+        if any(
+            keyword in query_lower
+            for keyword in (
+                "how",
+                "what is",
+                "explain",
+                "describe",
+                "tell me about",
+                "definition",
+                "meaning",
+                "schema",
+                "tables",
+                "columns",
+                "available",
+            )
+        ):
+            return 0.75 if (has_schema or has_business) else 0.3
+
+        if any(
+            keyword in query_lower
+            for keyword in (
+                "total",
+                "sum",
+                "count",
+                "average",
+                "avg",
+                "min",
+                "max",
+                "trend",
+                "by",
+                "per",
+                "over time",
+            )
+        ):
+            return 0.35 if has_business else 0.2
+
+        return 0.5 if (has_schema or has_business) else 0.2

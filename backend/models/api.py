@@ -6,7 +6,7 @@ Pydantic models for FastAPI endpoints.
 
 from pydantic import BaseModel, Field
 
-from backend.models.agent import SQLValidationError, ValidationWarning
+from backend.models.agent import EvidenceItem, SQLValidationError, ValidationWarning
 
 
 class Message(BaseModel):
@@ -69,11 +69,29 @@ class ChatResponse(BaseModel):
     sources: list[DataSource] = Field(
         default_factory=list, description="Data sources used to answer"
     )
+    answer_source: str | None = Field(
+        default=None, description="Answer source (context|sql|error)"
+    )
+    answer_confidence: float | None = Field(
+        default=None, description="Confidence score for the answer"
+    )
+    evidence: list[EvidenceItem] = Field(
+        default_factory=list, description="Evidence items supporting the answer"
+    )
     validation_errors: list[SQLValidationError] = Field(
         default_factory=list, description="SQL validation errors (if any)"
     )
     validation_warnings: list[ValidationWarning] = Field(
         default_factory=list, description="SQL validation warnings (if any)"
+    )
+    tool_approval_required: bool = Field(
+        default=False, description="Whether tool execution needs approval"
+    )
+    tool_approval_message: str | None = Field(
+        default=None, description="Approval request message"
+    )
+    tool_approval_calls: list[dict] = Field(
+        default_factory=list, description="Tool calls requiring approval"
     )
     metrics: ChatMetrics | None = Field(None, description="Performance metrics")
     conversation_id: str | None = Field(None, description="Conversation ID for follow-up")
@@ -91,6 +109,16 @@ class ChatResponse(BaseModel):
                         "type": "Schema",
                         "name": "Fact Sales Table",
                         "relevance_score": 0.95,
+                    }
+                ],
+                "answer_source": "sql",
+                "answer_confidence": 0.92,
+                "evidence": [
+                    {
+                        "datapoint_id": "table_fact_sales_001",
+                        "name": "Fact Sales Table",
+                        "type": "Schema",
+                        "reason": "Used for SQL generation",
                     }
                 ],
                 "metrics": {
@@ -196,6 +224,38 @@ class SystemInitializeResponse(BaseModel):
     setup_required: list[SetupStep] = Field(
         default_factory=list, description="Required setup steps"
     )
+
+
+class ToolExecuteRequest(BaseModel):
+    """Tool execution request payload."""
+
+    name: str = Field(..., description="Tool name")
+    arguments: dict = Field(default_factory=dict, description="Tool arguments")
+    approved: bool = Field(default=False, description="Whether tool execution is approved")
+    user_id: str | None = Field(default=None, description="Optional user ID")
+    correlation_id: str | None = Field(
+        default=None, description="Optional correlation ID for audit logging"
+    )
+
+
+class ToolExecuteResponse(BaseModel):
+    """Tool execution response payload."""
+
+    tool: str = Field(..., description="Tool name")
+    success: bool = Field(..., description="Whether execution succeeded")
+    result: dict | None = Field(None, description="Tool result payload")
+    error: str | None = Field(None, description="Error message if execution failed")
+
+
+class ToolInfo(BaseModel):
+    """Tool definition summary."""
+
+    name: str
+    description: str
+    category: str
+    requires_approval: bool
+    enabled: bool
+    parameters_schema: dict
 
 
 class ErrorResponse(BaseModel):

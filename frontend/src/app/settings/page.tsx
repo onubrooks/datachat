@@ -1,0 +1,92 @@
+/**
+ * Settings Page
+ *
+ * Simple preferences for waiting UX mode.
+ */
+
+"use client";
+
+import { useEffect, useState } from "react";
+import Link from "next/link";
+
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import {
+  getWaitingUxMode,
+  setWaitingUxMode,
+  type WaitingUxMode,
+} from "@/lib/settings";
+
+const OPTIONS: Array<{
+  value: WaitingUxMode;
+  title: string;
+  description: string;
+}> = [
+  {
+    value: "basic",
+    title: "Basic",
+    description: "Show only the current agent.",
+  },
+  {
+    value: "animated",
+    title: "Animated",
+    description: "Agent timeline + subtle animation.",
+  },
+  {
+    value: "progress",
+    title: "Progress",
+    description: "Agent timeline + progress bar.",
+  },
+];
+
+export default function SettingsPage() {
+  const [mode, setMode] = useState<WaitingUxMode>("animated");
+
+  useEffect(() => {
+    setMode(getWaitingUxMode());
+  }, []);
+
+  const handleChange = (value: WaitingUxMode) => {
+    setMode(value);
+    setWaitingUxMode(value);
+  };
+
+  return (
+    <main className="h-screen flex flex-col p-6 gap-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Settings</h1>
+          <p className="text-sm text-muted-foreground">
+            Choose your preferred waiting experience.
+          </p>
+        </div>
+        <Button asChild variant="secondary" size="sm">
+          <Link href="/">Back to Chat</Link>
+        </Button>
+      </div>
+
+      <Card className="p-4 space-y-4">
+        <div className="text-sm font-medium">Waiting UX Mode</div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => handleChange(option.value)}
+              className={`rounded-md border px-4 py-3 text-left text-sm transition ${
+                mode === option.value
+                  ? "border-primary bg-primary/5"
+                  : "border-border hover:border-primary/40"
+              }`}
+            >
+              <div className="font-medium">{option.title}</div>
+              <div className="text-xs text-muted-foreground mt-1">
+                {option.description}
+              </div>
+            </button>
+          ))}
+        </div>
+      </Card>
+    </main>
+  );
+}

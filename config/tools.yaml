@@ -1,0 +1,29 @@
+tools:
+  - name: context_answer
+    enabled: true
+    requires_approval: false
+    max_execution_time_seconds: 30
+  - name: run_sql
+    enabled: true
+    requires_approval: false
+    max_execution_time_seconds: 60
+  - name: list_tables
+    enabled: true
+    requires_approval: false
+    max_execution_time_seconds: 30
+  - name: list_columns
+    enabled: true
+    requires_approval: false
+    max_execution_time_seconds: 30
+  - name: get_table_sample
+    enabled: true
+    requires_approval: false
+    max_execution_time_seconds: 30
+  - name: profile_and_generate_datapoints
+    enabled: true
+    requires_approval: true
+    max_execution_time_seconds: 300
+  - name: datapoint_quality_report
+    enabled: true
+    requires_approval: false
+    max_execution_time_seconds: 30

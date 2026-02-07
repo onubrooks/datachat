@@ -50,8 +50,22 @@ export interface ChatResponse {
   data: Record<string, unknown[]> | null;
   visualization_hint: string | null;
   sources: DataSource[];
+  answer_source?: string | null;
+  answer_confidence?: number | null;
+  evidence?: {
+    datapoint_id: string;
+    name?: string | null;
+    type?: string | null;
+    reason?: string | null;
+  }[];
   validation_errors?: SQLValidationError[];
   validation_warnings?: ValidationWarning[];
+  tool_approval_required?: boolean;
+  tool_approval_message?: string | null;
+  tool_approval_calls?: {
+    name: string;
+    arguments?: Record<string, unknown>;
+  }[];
   metrics: ChatMetrics;
   conversation_id: string;
 }
@@ -91,6 +105,30 @@ export interface SystemInitializeResponse {
   has_system_database: boolean;
   has_datapoints: boolean;
   setup_required: SetupStep[];
+}
+
+export interface ToolInfo {
+  name: string;
+  description: string;
+  category: string;
+  requires_approval: boolean;
+  enabled: boolean;
+  parameters_schema: Record<string, unknown>;
+}
+
+export interface ToolExecuteRequest {
+  name: string;
+  arguments?: Record<string, unknown>;
+  approved?: boolean;
+  user_id?: string;
+  correlation_id?: string;
+}
+
+export interface ToolExecuteResponse {
+  tool: string;
+  success: boolean;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
 }
 
 export interface StreamChatHandlers {
@@ -533,6 +571,28 @@ export class DataChatAPI {
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: response.statusText }));
       throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async listTools(): Promise<ToolInfo[]> {
+    const response = await fetch(`${this.baseUrl}/api/v1/tools`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async executeTool(payload: ToolExecuteRequest): Promise<ToolExecuteResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/tools/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.detail || error.message || `HTTP ${response.status}`);
     }
     return response.json();
   }

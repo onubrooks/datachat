@@ -19,6 +19,7 @@ Usage:
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -34,7 +35,7 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from backend.config import get_settings
+from backend.config import clear_settings_cache, get_settings
 from backend.connectors.postgres import PostgresConnector
 from backend.initialization.initializer import SystemInitializer
 from backend.knowledge.datapoints import DataPointLoader
@@ -42,10 +43,18 @@ from backend.knowledge.graph import KnowledgeGraph
 from backend.knowledge.retriever import Retriever
 from backend.knowledge.vectors import VectorStore
 from backend.pipeline.orchestrator import DataChatPipeline
+from backend.tools import ToolExecutor, initialize_tools
+from backend.tools.base import ToolContext
 from backend.settings_store import apply_config_defaults
 
 console = Console()
 API_BASE_URL = os.getenv("DATA_CHAT_API_URL", "http://localhost:8000")
+
+
+def configure_cli_logging() -> None:
+    logging.basicConfig(level=logging.WARNING)
+    for logger_name in ("backend", "httpx", "openai", "asyncio"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
 # ============================================================================
@@ -186,18 +195,27 @@ async def create_pipeline_from_config() -> DataChatPipeline:
     )
     status_state = await initializer.status()
     if not status_state.is_initialized:
-        console.print("[red]DataChat requires setup before queries can run.[/red]")
-        if not status_state.has_system_database:
+        if not status_state.has_databases:
+            console.print("[red]DataChat requires setup before queries can run.[/red]")
+            if not status_state.has_system_database:
+                console.print(
+                    "[yellow]Note: SYSTEM_DATABASE_URL is not set. Registry/profiling and "
+                    "demo data are unavailable.[/yellow]"
+                )
+            for step in status_state.setup_required:
+                console.print(f"[yellow]- {step.title}: {step.description}[/yellow]")
             console.print(
-                "[yellow]Note: SYSTEM_DATABASE_URL is not set. Registry/profiling and "
-                "demo data are unavailable.[/yellow]"
+                "[cyan]Hint: Run 'datachat setup' or 'datachat demo' to continue.[/cyan]"
             )
-        for step in status_state.setup_required:
-            console.print(f"[yellow]- {step.title}: {step.description}[/yellow]")
-        console.print(
-            "[cyan]Hint: Run 'datachat setup' or 'datachat demo' to continue.[/cyan]"
-        )
-        raise click.ClickException("System not initialized")
+            raise click.ClickException("System not initialized")
+
+        if not status_state.has_datapoints:
+            console.print(
+                "[yellow]No DataPoints loaded. Continuing with live schema only.[/yellow]"
+            )
+            console.print(
+                "[cyan]Hint: Run 'datachat dp sync' or enable profiling for richer answers.[/cyan]"
+            )
 
     # Create pipeline
     pipeline = DataChatPipeline(
@@ -259,6 +277,81 @@ def _build_columnar_data(query_result: dict[str, Any] | None) -> dict[str, list]
     return None
 
 
+def _format_source_footer(result: dict[str, Any]) -> str | None:
+    source = result.get("answer_source")
+    confidence = result.get("answer_confidence")
+    if not source:
+        return None
+    if isinstance(confidence, (int, float)):
+        return f"Source: {source} ({confidence:.2f})"
+    return f"Source: {source}"
+
+
+def _print_evidence(result: dict[str, Any]) -> None:
+    evidence = result.get("evidence") or []
+    if not evidence:
+        console.print("[dim]No evidence items available.[/dim]")
+        return
+    table = Table(title="Evidence", show_header=True, header_style="bold cyan")
+    table.add_column("DataPoint")
+    table.add_column("Type")
+    table.add_column("Reason")
+    for item in evidence:
+        if isinstance(item, dict):
+            table.add_row(
+                str(item.get("name") or item.get("datapoint_id") or "unknown"),
+                str(item.get("type") or "DataPoint"),
+                str(item.get("reason") or ""),
+            )
+    console.print(table)
+
+
+def _emit_query_output(
+    answer: str,
+    sql: str | None,
+    data: dict | None,
+    result: dict[str, Any],
+    evidence: bool,
+    show_metrics: bool,
+) -> None:
+    console.print()
+    format_answer(answer, sql, data)
+    console.print()
+
+    footer = _format_source_footer(result)
+    if footer:
+        console.print(f"[dim]{footer}[/dim]")
+        console.print()
+
+    if show_metrics:
+        metrics = Table(show_header=False, box=None)
+        metrics.add_row("⏱️  Latency:", f"{result.get('total_latency_ms', 0):.0f}ms")
+        metrics.add_row("🤖 LLM Calls:", str(result.get("llm_calls", 0)))
+        metrics.add_row("🔄 Retries:", str(result.get("retry_count", 0)))
+        console.print(metrics)
+        console.print()
+
+    if evidence:
+        _print_evidence(result)
+        console.print()
+
+
+def _print_query_output(
+    answer: str,
+    sql: str | None,
+    data: dict | None,
+    result: dict[str, Any],
+    evidence: bool,
+    show_metrics: bool,
+    pager: bool,
+) -> None:
+    if pager:
+        with console.pager():
+            _emit_query_output(answer, sql, data, result, evidence, show_metrics)
+    else:
+        _emit_query_output(answer, sql, data, result, evidence, show_metrics)
+
+
 # ============================================================================
 # CLI Commands
 # ============================================================================
@@ -268,11 +361,18 @@ def _build_columnar_data(query_result: dict[str, Any] | None) -> dict[str, list]
 @click.version_option(version="0.1.0", prog_name="DataChat")
 def cli():
     """DataChat - Natural language interface for data warehouses."""
+    configure_cli_logging()
     pass
 
 
 @cli.command()
-def chat():
+@click.option("--evidence", is_flag=True, help="Show DataPoint evidence details")
+@click.option(
+    "--pager/--no-pager",
+    default=False,
+    help="Show each response in a scrollable pager.",
+)
+def chat(evidence: bool, pager: bool):
     """Interactive REPL mode for conversations."""
     console.print(
         Panel.fit(
@@ -318,19 +418,15 @@ def chat():
                     data = _build_columnar_data(query_result)
 
                     # Display results
-                    console.print()
-                    format_answer(answer, sql, data)
-
-                    # Display metrics
-                    metrics = Table(show_header=False, box=None)
-                    metrics.add_row(
-                        "⏱️  Latency:",
-                        f"{result.get('total_latency_ms', 0):.0f}ms",
+                    _print_query_output(
+                        answer=answer,
+                        sql=sql,
+                        data=data,
+                        result=result,
+                        evidence=evidence,
+                        show_metrics=True,
+                        pager=pager or evidence,
                     )
-                    metrics.add_row("🤖 LLM Calls:", str(result.get("llm_calls", 0)))
-                    metrics.add_row("🔄 Retries:", str(result.get("retry_count", 0)))
-                    console.print(metrics)
-                    console.print()
 
                     # Update conversation history
                     conversation_history.append({"role": "user", "content": query})
@@ -359,7 +455,13 @@ def chat():
 
 @cli.command()
 @click.argument("query")
-def ask(query: str):
+@click.option("--evidence", is_flag=True, help="Show DataPoint evidence details")
+@click.option(
+    "--pager/--no-pager",
+    default=False,
+    help="Show the response in a scrollable pager.",
+)
+def ask(query: str, evidence: bool, pager: bool):
     """Ask a single question and exit."""
 
     async def run_query():
@@ -377,9 +479,15 @@ def ask(query: str):
             data = _build_columnar_data(query_result)
 
             # Display results
-            console.print()
-            format_answer(answer, sql, data)
-            console.print()
+            _print_query_output(
+                answer=answer,
+                sql=sql,
+                data=data,
+                result=result,
+                evidence=evidence,
+                show_metrics=False,
+                pager=pager or evidence,
+            )
 
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")
@@ -581,7 +689,35 @@ def dev(
 
 
 @cli.command()
-def setup():
+@click.option("--target-db", "database_url", help="Target database URL.")
+@click.option(
+    "--system-db",
+    "system_database_url",
+    help="System database URL for registry/profiling.",
+)
+@click.option(
+    "--auto-profile/--no-auto-profile",
+    default=None,
+    help="Auto-profile database (generate DataPoints draft).",
+)
+@click.option(
+    "--max-tables",
+    type=int,
+    default=None,
+    help="Max tables to auto-profile (0 = all).",
+)
+@click.option(
+    "--non-interactive",
+    is_flag=True,
+    help="Fail instead of prompting for missing values.",
+)
+def setup(
+    database_url: str | None,
+    system_database_url: str | None,
+    auto_profile: bool | None,
+    max_tables: int | None,
+    non_interactive: bool,
+):
     """Guide system initialization for first-time setup."""
 
     async def run_setup():
@@ -599,35 +735,111 @@ def setup():
             )
         )
 
-        database_url = click.prompt("Target Database URL", default=default_url, show_default=True)
-        system_database_url = None
-        if not settings.system_database.url:
-            system_database_url = click.prompt(
+        resolved_database_url = (
+            database_url
+            or default_url
+            or (str(settings.database.url) if settings.database.url else "")
+        )
+        if not resolved_database_url:
+            if non_interactive:
+                raise click.ClickException("Missing target database URL.")
+            resolved_database_url = click.prompt(
+                "Target Database URL", default=default_url, show_default=True
+            )
+
+        resolved_system_database_url = system_database_url or (
+            str(settings.system_database.url)
+            if settings.system_database.url
+            else None
+        )
+        if not resolved_system_database_url and not non_interactive:
+            resolved_system_database_url = click.prompt(
                 "System Database URL (for demo/registry)",
                 default="postgresql://datachat:datachat_password@localhost:5432/datachat",
                 show_default=True,
             )
-        if database_url:
-            state.set_target_database_url(database_url)
-        if system_database_url:
-            state.set_system_database_url(system_database_url)
-        auto_profile = click.confirm(
-            "Auto-profile database (generate DataPoints draft)",
-            default=False,
-            show_default=True,
-        )
+
+        if resolved_database_url:
+            state.set_target_database_url(resolved_database_url)
+        if resolved_system_database_url:
+            state.set_system_database_url(resolved_system_database_url)
+
+        resolved_auto_profile = auto_profile
+        if resolved_auto_profile is None:
+            if non_interactive:
+                resolved_auto_profile = False
+            else:
+                resolved_auto_profile = click.confirm(
+                    "Auto-profile database (generate DataPoints draft)",
+                    default=False,
+                    show_default=True,
+                )
+
+        resolved_max_tables = max_tables
+        if resolved_auto_profile:
+            if resolved_max_tables is None and not non_interactive:
+                resolved_max_tables = click.prompt(
+                    "Max tables to auto-profile (0 = all)",
+                    default=10,
+                    show_default=True,
+                    type=int,
+                )
+            if resolved_max_tables is not None and resolved_max_tables <= 0:
+                resolved_max_tables = None
 
         vector_store = VectorStore()
         await vector_store.initialize()
 
         initializer = SystemInitializer({"vector_store": vector_store})
         status_state, message = await initializer.initialize(
-            database_url=database_url,
-            auto_profile=auto_profile,
-            system_database_url=system_database_url,
+            database_url=resolved_database_url,
+            auto_profile=bool(resolved_auto_profile),
+            system_database_url=resolved_system_database_url,
         )
 
         console.print(f"[green]{message}[/green]")
+        if resolved_auto_profile:
+            clear_settings_cache()
+            apply_config_defaults()
+            refreshed_settings = get_settings()
+            if not refreshed_settings.system_database.url:
+                console.print(
+                    "[yellow]Auto-profiling requires SYSTEM_DATABASE_URL. "
+                    "Set it in your shell or .env and rerun setup.[/yellow]"
+                )
+            elif not refreshed_settings.database_credentials_key:
+                console.print(
+                    "[yellow]Auto-profiling requires DATABASE_CREDENTIALS_KEY. "
+                    "Set it in your shell or .env and rerun setup.[/yellow]"
+                )
+            else:
+                try:
+                    initialize_tools(refreshed_settings.tools.policy_path)
+                    executor = ToolExecutor()
+                    ctx = ToolContext(user_id="cli", correlation_id="setup", approved=True)
+                    args = {"depth": "metrics_basic", "batch_size": 10}
+                    if resolved_max_tables:
+                        args["max_tables"] = resolved_max_tables
+                    result = await executor.execute(
+                        "profile_and_generate_datapoints",
+                        args,
+                        ctx,
+                    )
+                    pending_count = result.get("result", {}).get("pending_count")
+                    if pending_count is not None:
+                        console.print(
+                            f"[green]✓ Auto-profiling generated {pending_count} pending DataPoints.[/green]"
+                        )
+                        if resolved_max_tables and pending_count > resolved_max_tables:
+                            console.print(
+                                "[dim]Note: each table can generate multiple DataPoints (schema + metrics).[/dim]"
+                            )
+                    else:
+                        console.print("[green]✓ Auto-profiling completed.[/green]")
+                except Exception as exc:
+                    console.print(
+                        f"[yellow]Auto-profiling failed to start: {exc}[/yellow]"
+                    )
         if status_state.setup_required:
             console.print("[yellow]Remaining setup steps:[/yellow]")
             for step in status_state.setup_required:
@@ -963,6 +1175,78 @@ def datapoint():
     pass
 
 
+# ============================================================================
+# Tool Commands
+# ============================================================================
+
+
+@cli.group(name="tools")
+def tools():
+    """Manage tool execution and reports."""
+    pass
+
+
+@tools.command(name="list")
+def list_tools():
+    """List available tools."""
+    try:
+        response = httpx.get(f"{API_BASE_URL}/api/v1/tools", timeout=15.0)
+        response.raise_for_status()
+        data = response.json()
+        table = Table(title="Tools", show_header=True, header_style="bold cyan")
+        table.add_column("Name")
+        table.add_column("Category")
+        table.add_column("Approval")
+        table.add_column("Enabled")
+        for tool in data:
+            table.add_row(
+                tool.get("name", ""),
+                tool.get("category", ""),
+                "yes" if tool.get("requires_approval") else "no",
+                "yes" if tool.get("enabled") else "no",
+            )
+        console.print(table)
+    except Exception as exc:
+        console.print(f"[red]Failed to list tools: {exc}[/red]")
+        sys.exit(1)
+
+
+@tools.command(name="run")
+@click.argument("name")
+@click.option("--approve", is_flag=True, help="Approve tool execution.")
+def run_tool(name: str, approve: bool):
+    """Run a tool via the API."""
+    if not approve:
+        approve = click.confirm(
+            "This tool may trigger profiling or other actions. Proceed?", default=False
+        )
+    payload = {"name": name, "arguments": {}, "approved": approve}
+    try:
+        response = httpx.post(
+            f"{API_BASE_URL}/api/v1/tools/execute", json=payload, timeout=60.0
+        )
+        response.raise_for_status()
+        console.print(json.dumps(response.json(), indent=2))
+    except Exception as exc:
+        console.print(f"[red]Tool execution failed: {exc}[/red]")
+        sys.exit(1)
+
+
+@tools.command(name="quality-report")
+def quality_report():
+    """Run DataPoint quality report."""
+    payload = {"name": "datapoint_quality_report", "arguments": {"limit": 10}}
+    try:
+        response = httpx.post(
+            f"{API_BASE_URL}/api/v1/tools/execute", json=payload, timeout=30.0
+        )
+        response.raise_for_status()
+        console.print(json.dumps(response.json(), indent=2))
+    except Exception as exc:
+        console.print(f"[red]Failed to run quality report: {exc}[/red]")
+        sys.exit(1)
+
+
 @datapoint.command(name="list")
 def list_datapoints():
     """List all DataPoints in the knowledge base."""
@@ -1010,8 +1294,175 @@ def list_datapoints():
     asyncio.run(run_list())
 
 
+@datapoint.group(name="pending")
+def pending_datapoints():
+    """Review pending DataPoints (requires backend)."""
+
+
+def _fetch_pending_datapoints() -> list[dict[str, Any]]:
+    response = httpx.get(f"{API_BASE_URL}/api/v1/datapoints/pending", timeout=15.0)
+    response.raise_for_status()
+    data = response.json()
+    return data.get("pending", [])
+
+
+def _resolve_default_connection_id() -> str:
+    response = httpx.get(f"{API_BASE_URL}/api/v1/databases", timeout=15.0)
+    response.raise_for_status()
+    connections = response.json()
+    if not isinstance(connections, list) or not connections:
+        raise click.ClickException(
+            "No database connections found. Run 'datachat setup' or add one in the UI."
+        )
+    default = next((item for item in connections if item.get("is_default")), None)
+    connection = default or connections[0]
+    connection_id = connection.get("connection_id")
+    if not connection_id:
+        raise click.ClickException("Default connection is missing an ID.")
+    return str(connection_id)
+
+
+def _resolve_latest_profile_id(connection_id: str) -> str:
+    response = httpx.get(
+        f"{API_BASE_URL}/api/v1/profiling/jobs/connection/{connection_id}/latest",
+        timeout=15.0,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if not data:
+        raise click.ClickException(
+            "No profiling job found. Run 'datachat profile start' or 'datachat setup --auto-profile'."
+        )
+    profile_id = data.get("profile_id")
+    if not profile_id:
+        raise click.ClickException("Latest profiling job is missing a profile_id.")
+    return str(profile_id)
+    pass
+
+
+@pending_datapoints.command(name="list")
+def list_pending_datapoints():
+    """List pending DataPoints awaiting approval."""
+    try:
+        pending = _fetch_pending_datapoints()
+        if not pending:
+            console.print("[yellow]No pending DataPoints found[/yellow]")
+            return
+
+        table = Table(title="Pending DataPoints", show_header=True, header_style="bold cyan")
+        table.add_column("Pending ID")
+        table.add_column("Type")
+        table.add_column("Name")
+        table.add_column("Confidence", justify="right")
+        table.add_column("Status")
+        for item in pending:
+            datapoint = item.get("datapoint", {}) if isinstance(item, dict) else {}
+            table.add_row(
+                str(item.get("pending_id", "")),
+                str(datapoint.get("type", "")),
+                str(datapoint.get("name") or datapoint.get("datapoint_id") or ""),
+                f"{item.get('confidence', 0):.2f}" if item.get("confidence") is not None else "-",
+                str(item.get("status", "")),
+            )
+        console.print(table)
+    except Exception as exc:
+        console.print(f"[red]Failed to list pending DataPoints: {exc}[/red]")
+        sys.exit(1)
+
+
+@pending_datapoints.command(name="approve")
+@click.argument("pending_id")
+@click.option("--note", help="Optional review note.")
+def approve_pending_datapoint(pending_id: str, note: str | None):
+    """Approve a pending DataPoint."""
+    payload = {"review_note": note} if note else None
+    try:
+        response = httpx.post(
+            f"{API_BASE_URL}/api/v1/datapoints/pending/{pending_id}/approve",
+            json=payload,
+            timeout=15.0,
+        )
+        response.raise_for_status()
+        console.print("[green]✓ Approved DataPoint[/green]")
+    except Exception as exc:
+        console.print(f"[red]Failed to approve DataPoint: {exc}[/red]")
+        sys.exit(1)
+
+
+@pending_datapoints.command(name="reject")
+@click.argument("pending_id")
+@click.option("--note", help="Optional review note.")
+def reject_pending_datapoint(pending_id: str, note: str | None):
+    """Reject a pending DataPoint."""
+    payload = {"review_note": note} if note else None
+    try:
+        response = httpx.post(
+            f"{API_BASE_URL}/api/v1/datapoints/pending/{pending_id}/reject",
+            json=payload,
+            timeout=15.0,
+        )
+        response.raise_for_status()
+        console.print("[green]✓ Rejected DataPoint[/green]")
+    except Exception as exc:
+        console.print(f"[red]Failed to reject DataPoint: {exc}[/red]")
+        sys.exit(1)
+
+
+@pending_datapoints.command(name="approve-all")
+@click.option("--profile-id", help="Approve pending items for a specific profile.")
+@click.option(
+    "--latest",
+    is_flag=True,
+    help="Approve pending items for the latest profile on the default connection.",
+)
+def approve_all_pending(profile_id: str | None, latest: bool):
+    """Bulk-approve pending DataPoints."""
+    if profile_id and latest:
+        raise click.ClickException("Use either --profile-id or --latest, not both.")
+    try:
+        if latest and not profile_id:
+            connection_id = _resolve_default_connection_id()
+            profile_id = _resolve_latest_profile_id(connection_id)
+
+        if profile_id:
+            pending = [
+                item
+                for item in _fetch_pending_datapoints()
+                if str(item.get("profile_id")) == profile_id
+            ]
+            if not pending:
+                console.print(
+                    "[yellow]No pending DataPoints found for that profile.[/yellow]"
+                )
+                return
+            approved = 0
+            for item in pending:
+                pending_id = item.get("pending_id")
+                if not pending_id:
+                    continue
+                response = httpx.post(
+                    f"{API_BASE_URL}/api/v1/datapoints/pending/{pending_id}/approve",
+                    timeout=15.0,
+                )
+                response.raise_for_status()
+                approved += 1
+            console.print(f"[green]✓ Approved {approved} DataPoints[/green]")
+        else:
+            response = httpx.post(
+                f"{API_BASE_URL}/api/v1/datapoints/pending/bulk-approve", timeout=30.0
+            )
+            response.raise_for_status()
+            data = response.json()
+            pending = data.get("pending", [])
+            console.print(f"[green]✓ Approved {len(pending)} DataPoints[/green]")
+    except Exception as exc:
+        console.print(f"[red]Failed to bulk-approve DataPoints: {exc}[/red]")
+        sys.exit(1)
+
+
 @datapoint.command(name="generate")
-@click.option("--profile-id", required=True, help="Profiling profile UUID.")
+@click.option("--profile-id", help="Profiling profile UUID.")
+@click.option("--connection-id", help="Connection UUID for latest profiling job lookup.")
 @click.option(
     "--depth",
     type=click.Choice(["schema_only", "metrics_basic", "metrics_full"]),
@@ -1023,7 +1474,8 @@ def list_datapoints():
 @click.option("--max-tables", default=None, type=int)
 @click.option("--max-metrics-per-table", default=3, show_default=True, type=int)
 def generate_datapoints_cli(
-    profile_id: str,
+    profile_id: str | None,
+    connection_id: str | None,
     depth: str,
     tables: tuple[str, ...],
     batch_size: int,
@@ -1031,6 +1483,18 @@ def generate_datapoints_cli(
     max_metrics_per_table: int,
 ):
     """Start DataPoint generation for a profiling profile."""
+    if max_tables is not None and max_tables <= 0:
+        max_tables = None
+    if not profile_id:
+        try:
+            resolved_connection_id = connection_id or _resolve_default_connection_id()
+            profile_id = _resolve_latest_profile_id(resolved_connection_id)
+            console.print(
+                f"[dim]Using latest profile {profile_id} for connection {resolved_connection_id}.[/dim]"
+            )
+        except click.ClickException as exc:
+            console.print(f"[red]{exc}[/red]")
+            sys.exit(1)
     payload = {
         "profile_id": profile_id,
         "tables": list(tables) or None,
@@ -1138,18 +1602,23 @@ def sync_datapoints(datapoints_dir: str):
             # Load all DataPoints
             console.print(f"[cyan]Loading DataPoints from {datapoints_dir}...[/cyan]")
             loader = DataPointLoader()
-            result = loader.load_directory(datapoints_path)
+            datapoints = loader.load_directory(datapoints_path)
+            stats = loader.get_stats()
 
-            if result.failed > 0:
-                console.print(f"[yellow]⚠ {result.failed} DataPoints failed to load[/yellow]")
-                for error in result.errors:
-                    console.print(f"  [red]• {error}[/red]")
+            if stats["failed_count"] > 0:
+                console.print(
+                    f"[yellow]⚠ {stats['failed_count']} DataPoints failed to load[/yellow]"
+                )
+                for error in stats["failed_files"]:
+                    console.print(
+                        f"  [red]• {error['path']}: {error['error']}[/red]"
+                    )
 
-            if not result.datapoints:
+            if not datapoints:
                 console.print("[yellow]No valid DataPoints found[/yellow]")
                 return
 
-            console.print(f"[green]✓ Loaded {len(result.datapoints)} DataPoints[/green]")
+            console.print(f"[green]✓ Loaded {len(datapoints)} DataPoints[/green]")
 
             # Rebuild vector store
             console.print("\n[cyan]Rebuilding vector store...[/cyan]")
@@ -1168,9 +1637,9 @@ def sync_datapoints(datapoints_dir: str):
             )
 
             with progress:
-                task = progress.add_task("Adding to vector store...", total=len(result.datapoints))
-                await vector_store.add_datapoints(result.datapoints)
-                progress.update(task, completed=len(result.datapoints))
+                task = progress.add_task("Adding to vector store...", total=len(datapoints))
+                await vector_store.add_datapoints(datapoints)
+                progress.update(task, completed=len(datapoints))
 
             # Rebuild knowledge graph
             console.print("[cyan]Rebuilding knowledge graph...[/cyan]")
@@ -1178,9 +1647,9 @@ def sync_datapoints(datapoints_dir: str):
 
             with progress:
                 task = progress.add_task(
-                    "Adding to knowledge graph...", total=len(result.datapoints)
+                    "Adding to knowledge graph...", total=len(datapoints)
                 )
-                for datapoint in result.datapoints:
+                for datapoint in datapoints:
                     graph.add_datapoint(datapoint)
                     progress.update(task, advance=1)
 
@@ -1188,7 +1657,7 @@ def sync_datapoints(datapoints_dir: str):
             console.print()
             summary = Table(show_header=False, box=None)
             summary.add_row("[green]✓ Sync complete[/green]")
-            summary.add_row("DataPoints loaded:", f"[cyan]{len(result.datapoints)}[/cyan]")
+            summary.add_row("DataPoints loaded:", f"[cyan]{len(datapoints)}[/cyan]")
             summary.add_row("Vector store:", f"[cyan]{await vector_store.get_count()}[/cyan]")
 
             stats = graph.get_stats()

@@ -125,12 +125,12 @@ class BaseDataPoint(BaseModel):
         # prefix: lowercase letters
         # name: lowercase letters/numbers/underscores (but not starting/ending with _)
         # number: exactly 3 digits
-        pattern = r"^[a-z]+_[a-z0-9]+(?:_[a-z0-9]+)*_\d{3}$"
+        pattern = r"^[a-z]+_[a-z0-9]+(?:_[a-z0-9]+)*(?:_\d{3})?$"
         if not re.match(pattern, v):
             raise ValueError(
                 f"Invalid datapoint_id format: '{v}'. "
-                "Expected format: {prefix}_{name}_{number} "
-                "(e.g., 'table_fact_sales_001')"
+                "Expected format: {prefix}_{name} or {prefix}_{name}_{number} "
+                "(e.g., 'table_fact_sales' or 'table_fact_sales_001')"
             )
         return v
 

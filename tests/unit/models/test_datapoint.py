@@ -357,11 +357,14 @@ class TestDataPointIDValidation:
     def test_valid_datapoint_id_formats(self):
         """Valid datapoint_id formats are accepted."""
         valid_ids = [
+            "table_sales",
+            "table_sales_1",
             "table_fact_sales_001",
             "metric_revenue_001",
             "proc_daily_etl_001",
             "table_dim_customer_123",
             "metric_avg_order_value_999",
+            "table_sales_001_extra",
         ]
 
         for datapoint_id in valid_ids:
@@ -382,12 +385,11 @@ class TestDataPointIDValidation:
         """Invalid datapoint_id formats are rejected."""
         invalid_ids = [
             "invalid",  # No underscores or number
-            "table_sales",  # Missing number
-            "table_sales_1",  # Number too short
             "TABLE_SALES_001",  # Uppercase
             "table-sales-001",  # Hyphens instead of underscores
-            "table_sales_001_extra",  # Extra part
             "table__sales_001",  # Double underscore
+            "table__",  # Missing name
+            "table",  # Missing separator and name
         ]
 
         for invalid_id in invalid_ids:
