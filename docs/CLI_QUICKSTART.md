@@ -65,6 +65,24 @@ DataPoints (schema + metrics), so the pending count can exceed the table limit.
 datachat ask "What tables are available in the database?"
 ```
 
+Control clarification prompts:
+
+```bash
+datachat ask --max-clarifications 3 "Show me the first 5 rows"
+```
+
+Quick tutorial (interactive):
+
+```bash
+datachat chat
+```
+
+Example flow:
+
+1. Ask: `Show me the first 5 rows`
+2. When prompted, answer with a table: `sales`
+3. Follow up with a column or limit if asked (for example: `amount`, `first 2 rows`)
+
 For long outputs, use a pager to keep the answer at the top and scroll as needed:
 
 ```bash
@@ -83,4 +101,3 @@ datachat chat --pager
   - Ensure `SYSTEM_DATABASE_URL` and `DATABASE_CREDENTIALS_KEY` are set.
 - **No DataPoints loaded**
   - Run `datachat dp sync --datapoints-dir datapoints/managed` after adding files.
-

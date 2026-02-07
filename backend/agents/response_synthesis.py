@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from backend.agents.base import BaseAgent
 from backend.config import get_settings

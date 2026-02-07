@@ -4,6 +4,7 @@ Integration Tests for WebSocket Streaming
 Tests the /ws/chat WebSocket endpoint with real-time streaming.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -21,7 +22,7 @@ class TestWebSocketStreaming:
         """Create test client."""
         return TestClient(app)
 
-    def _app_state_for_pipeline(self, pipeline: AsyncMock | None):
+    def _app_state_for_pipeline(self, pipeline: AsyncMock | None, database_manager=None):
         vector_store = AsyncMock()
         vector_store.get_count = AsyncMock(return_value=1)
         connector = AsyncMock()
@@ -30,6 +31,7 @@ class TestWebSocketStreaming:
             "pipeline": pipeline,
             "vector_store": vector_store,
             "connector": connector,
+            "database_manager": database_manager,
         }
 
     @pytest.fixture
@@ -104,7 +106,13 @@ class TestWebSocketStreaming:
     def test_websocket_receives_agent_status_events(self, client):
         """Test that WebSocket receives agent_start and agent_complete events."""
         # Create mock pipeline that will call the callback
-        async def mock_run_with_streaming(query, conversation_history, event_callback):
+        async def mock_run_with_streaming(
+            query,
+            conversation_history,
+            database_type=None,
+            database_url=None,
+            event_callback=None,
+        ):
             # Simulate agent events
             await event_callback(
                 "agent_start", {"agent": "ClassifierAgent", "timestamp": "2026-01-16T12:00:00Z"}
@@ -195,6 +203,43 @@ class TestWebSocketStreaming:
                 assert final_message["data"]["total_revenue"] == [1234567.89]
                 assert len(final_message["sources"]) == 1
                 assert final_message["metrics"]["llm_calls"] == 3
+
+    def test_websocket_uses_target_database_for_streaming_call(self, client):
+        manager = AsyncMock()
+        manager.get_connection = AsyncMock(
+            return_value=SimpleNamespace(
+                database_type="clickhouse",
+                database_url=SimpleNamespace(
+                    get_secret_value=lambda: "clickhouse://u:p@host:8123/db"
+                ),
+            )
+        )
+        mock_pipeline = AsyncMock()
+        mock_pipeline.run_with_streaming = AsyncMock(
+            return_value={
+                "natural_language_answer": "Test answer",
+                "total_latency_ms": 1000.0,
+                "agent_timings": {},
+                "llm_calls": 1,
+                "retry_count": 0,
+                "retrieved_datapoints": [],
+            }
+        )
+        with patch(
+            "backend.api.main.app_state",
+            self._app_state_for_pipeline(mock_pipeline, database_manager=manager),
+        ):
+            with client.websocket_connect("/ws/chat") as websocket:
+                websocket.send_json(
+                    {"message": "Test query", "target_database": "db-123"}
+                )
+                while True:
+                    event = websocket.receive_json()
+                    if event.get("event") == "complete":
+                        break
+        kwargs = mock_pipeline.run_with_streaming.call_args.kwargs
+        assert kwargs["database_type"] == "clickhouse"
+        assert kwargs["database_url"] == "clickhouse://u:p@host:8123/db"
 
     def test_websocket_handles_client_disconnect(self, client):
         """Test that WebSocket handles client disconnect gracefully."""

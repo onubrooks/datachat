@@ -27,6 +27,7 @@ Ask questions in plain English and get SQL queries, data visualizations, and ins
 - **Auto-Profiling** - Generate draft DataPoints from your schema
 - **Multi-Database Registry** - Store multiple connections with per-query routing
 - **Auto-Sync** - Keep vectors and graph in sync with DataPoint changes
+- **Credentials-Only Mode** - Query immediately with just database credentials (DataPoints recommended for better quality)
 
 ---
 
@@ -68,7 +69,7 @@ That's it! DataChat is now running with:
 - **PostgreSQL** on port 5432
 - **ChromaDB** for vector storage
 
-> **Next:** Complete initialization before running queries.
+> **Next:** Complete initialization with a target database before running queries.
 >
 > **Option A: Use the setup wizard**
 >
@@ -90,7 +91,8 @@ That's it! DataChat is now running with:
 > - Load them: `docker-compose exec backend datachat dp sync --datapoints-dir datapoints/managed`
 >   (or `datapoints/demo` if you loaded the demo dataset)
 >
-> **Without DataPoints, DataChat falls back to live schema only.**
+> **Without DataPoints, DataChat runs in live schema mode (metadata + query results only).**
+> See `docs/CREDENTIALS_ONLY_MODE.md` for capabilities and limits.
 
 **AWS RDS note:** Use SSL if required by your instance:
 ```
@@ -127,6 +129,9 @@ cp .env.example .env
 # Generate encryption key for saved DB credentials:
 python -c "import secrets; print(secrets.token_hex(32))"
 # Set DATABASE_CREDENTIALS_KEY in .env
+
+# Local runs prefer values in .env over shell environment variables.
+# Set DATA_CHAT_ENV_SOURCE=system to force system env to take priority.
 
 # 4. Start the server
 uvicorn backend.api.main:app --reload --port 8000

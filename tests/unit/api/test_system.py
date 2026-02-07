@@ -47,6 +47,23 @@ class TestSystemEndpoints:
             ],
         )
 
+    @pytest.fixture
+    def credentials_only_status(self):
+        return SystemStatus(
+            is_initialized=True,
+            has_databases=True,
+            has_system_database=False,
+            has_datapoints=False,
+            setup_required=[
+                SetupStep(
+                    step="datapoints",
+                    title="Load DataPoints (Recommended)",
+                    description="Optional enrichment for higher answer quality.",
+                    action="load_datapoints",
+                ),
+            ],
+        )
+
     @pytest.mark.asyncio
     async def test_status_returns_initialization_state(self, client, not_initialized_status):
         with patch(
@@ -98,3 +115,29 @@ class TestSystemEndpoints:
             data = response.json()
             assert data["error"] == "system_not_initialized"
             assert "setup_steps" in data
+
+    @pytest.mark.asyncio
+    async def test_chat_allows_credentials_only_mode(self, client, credentials_only_status):
+        with patch(
+            "backend.api.routes.chat.SystemInitializer.status",
+            new=AsyncMock(return_value=credentials_only_status),
+        ):
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(
+                return_value={
+                    "natural_language_answer": "Found 1 result.",
+                    "validated_sql": "SELECT 1",
+                    "query_result": {"rows": [{"value": 1}], "columns": ["value"]},
+                    "total_latency_ms": 12.0,
+                    "agent_timings": {},
+                    "llm_calls": 1,
+                    "retry_count": 0,
+                }
+            )
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
+                response = client.post("/api/v1/chat", json={"message": "test query"})
+                assert response.status_code == 200
+                assert "Live schema mode" in response.json()["answer"]

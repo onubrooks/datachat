@@ -63,6 +63,10 @@ class ChatResponse(BaseModel):
     """Response model for chat endpoint."""
 
     answer: str = Field(..., description="Natural language answer to the query")
+    clarifying_questions: list[str] = Field(
+        default_factory=list,
+        description="Clarifying questions when more detail is required",
+    )
     sql: str | None = Field(None, description="Generated SQL query (if applicable)")
     data: dict[str, list] | None = Field(None, description="Query results in columnar format")
     visualization_hint: str | None = Field(None, description="Suggested visualization type")
@@ -185,14 +189,21 @@ class SetupStep(BaseModel):
 class SystemStatusResponse(BaseModel):
     """Initialization status response."""
 
-    is_initialized: bool = Field(..., description="Whether the system is ready for queries")
+    is_initialized: bool = Field(
+        ...,
+        description=(
+            "Whether the system can answer queries (target DB connected). "
+            "DataPoints are optional enrichment."
+        ),
+    )
     has_databases: bool = Field(..., description="Whether a database connection is available")
     has_system_database: bool = Field(
         ..., description="Whether a system database is available for registry/profiling"
     )
     has_datapoints: bool = Field(..., description="Whether DataPoints are loaded")
     setup_required: list[SetupStep] = Field(
-        default_factory=list, description="Required setup steps"
+        default_factory=list,
+        description="Remaining setup/recommended steps",
     )
 
 
@@ -215,14 +226,21 @@ class SystemInitializeResponse(BaseModel):
     """Initialization response payload."""
 
     message: str = Field(..., description="Initialization status message")
-    is_initialized: bool = Field(..., description="Whether the system is ready for queries")
+    is_initialized: bool = Field(
+        ...,
+        description=(
+            "Whether the system can answer queries (target DB connected). "
+            "DataPoints are optional enrichment."
+        ),
+    )
     has_databases: bool = Field(..., description="Whether a database connection is available")
     has_system_database: bool = Field(
         ..., description="Whether a system database is available for registry/profiling"
     )
     has_datapoints: bool = Field(..., description="Whether DataPoints are loaded")
     setup_required: list[SetupStep] = Field(
-        default_factory=list, description="Required setup steps"
+        default_factory=list,
+        description="Remaining setup/recommended steps",
     )
 
 

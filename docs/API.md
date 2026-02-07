@@ -18,6 +18,8 @@ Request body:
 
 Notes:
 - When provided, `database_url` and `system_database_url` are persisted to `~/.datachat/config.json`.
+- `is_initialized=true` means a target database is connected and chat can run.
+- DataPoints are optional enrichment; when absent, chat runs in live schema mode.
 
 ## Chat
 
@@ -32,6 +34,12 @@ Request body:
   "target_database": "optional-connection-id"
 }
 ```
+
+Notes:
+- If `target_database` is provided, SQL generation and execution both use that
+  connection's database type and URL.
+- If `target_database` is omitted, the default registry connection is used when set.
+- When no DataPoints are loaded, responses include a live schema mode notice.
 
 ## Database Connections
 

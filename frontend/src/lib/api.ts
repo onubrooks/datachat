@@ -46,6 +46,7 @@ export interface ValidationWarning {
 
 export interface ChatResponse {
   answer: string;
+  clarifying_questions?: string[];
   sql: string | null;
   data: Record<string, unknown[]> | null;
   visualization_hint: string | null;

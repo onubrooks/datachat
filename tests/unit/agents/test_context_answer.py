@@ -3,7 +3,6 @@ import pytest
 from backend.agents.context_answer import ContextAnswerAgent
 from backend.llm.models import LLMResponse, LLMUsage
 from backend.models.agent import (
-    AgentMetadata,
     ContextAnswerAgentInput,
     InvestigationMemory,
     RetrievedDataPoint,

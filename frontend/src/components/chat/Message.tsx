@@ -27,9 +27,10 @@ import type { Message as MessageType } from "@/lib/stores/chat";
 
 interface MessageProps {
   message: MessageType;
+  onClarifyingAnswer?: (question: string) => void;
 }
 
-export function Message({ message }: MessageProps) {
+export function Message({ message, onClarifyingAnswer }: MessageProps) {
   const isUser = message.role === "user";
   const columnNames = message.data ? Object.keys(message.data) : [];
   const rowCount =
@@ -101,6 +102,33 @@ export function Message({ message }: MessageProps) {
           )}
           {/* Main message text */}
           <div className="whitespace-pre-wrap">{message.content}</div>
+
+          {message.clarifying_questions &&
+            message.clarifying_questions.length > 0 && (
+              <Card className="mt-4">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Clarifying questions</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ul className="space-y-2 text-sm">
+                    {message.clarifying_questions.map((question, index) => (
+                      <li key={`${question}-${index}`} className="flex items-start gap-2">
+                        <span className="mt-0.5 flex-1">• {question}</span>
+                        {onClarifyingAnswer && (
+                          <button
+                            type="button"
+                            className="text-xs text-primary underline"
+                            onClick={() => onClarifyingAnswer(question)}
+                          >
+                            Answer
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
+            )}
 
           {/* SQL Query */}
           {message.sql && (

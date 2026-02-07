@@ -102,9 +102,10 @@ class SystemInitializer:
             setup_required.append(
                 SetupStep(
                     step="datapoints",
-                    title="Load DataPoints",
+                    title="Load DataPoints (Recommended)",
                     description=(
-                        "Add DataPoints describing your schema and business logic "
+                        "Optional but recommended: add DataPoints describing your schema "
+                        "and business logic for higher answer quality "
                         "(or run datachat demo for sample data)."
                     ),
                     action="load_datapoints",
@@ -112,7 +113,9 @@ class SystemInitializer:
             )
 
         return SystemStatus(
-            is_initialized=has_databases and has_datapoints,
+            # Credentials-only mode: once a target DB is connected, queries can run.
+            # DataPoints are optional enrichment.
+            is_initialized=has_databases,
             has_databases=has_databases,
             has_system_database=has_system_database,
             has_datapoints=has_datapoints,

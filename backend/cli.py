@@ -17,10 +17,20 @@ Usage:
     datachat status                        # Show connection status
 """
 
+import os
+
+os.environ.setdefault("ABSL_LOGGING_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("ABSL_LOGGING_STDERR_THRESHOLD", "3")
+os.environ.setdefault("GRPC_ENABLE_FORK_SUPPORT", "0")
+os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+os.environ.setdefault("GRPC_TRACE", "")
+os.environ.setdefault("GLOG_minloglevel", "3")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+
 import asyncio
 import json
 import logging
-import os
+import re
 import shutil
 import subprocess
 import sys
@@ -43,18 +53,19 @@ from backend.knowledge.graph import KnowledgeGraph
 from backend.knowledge.retriever import Retriever
 from backend.knowledge.vectors import VectorStore
 from backend.pipeline.orchestrator import DataChatPipeline
+from backend.settings_store import apply_config_defaults
 from backend.tools import ToolExecutor, initialize_tools
 from backend.tools.base import ToolContext
-from backend.settings_store import apply_config_defaults
 
 console = Console()
 API_BASE_URL = os.getenv("DATA_CHAT_API_URL", "http://localhost:8000")
 
 
 def configure_cli_logging() -> None:
-    logging.basicConfig(level=logging.WARNING)
-    for logger_name in ("backend", "httpx", "openai", "asyncio"):
-        logging.getLogger(logger_name).setLevel(logging.WARNING)
+    logging.disable(logging.CRITICAL)
+    logging.basicConfig(level=logging.CRITICAL)
+    for logger_name in ("backend", "httpx", "openai", "asyncio", "google", "grpc"):
+        logging.getLogger(logger_name).setLevel(logging.CRITICAL)
 
 
 # ============================================================================
@@ -141,12 +152,10 @@ async def create_pipeline_from_config() -> DataChatPipeline:
     settings = get_settings()
 
     # Initialize vector store
-    console.print("[cyan]Initializing vector store...[/cyan]")
     vector_store = VectorStore()
     await vector_store.initialize()
 
     # Initialize knowledge graph
-    console.print("[cyan]Initializing knowledge graph...[/cyan]")
     knowledge_graph = KnowledgeGraph()
 
     # Initialize retriever
@@ -331,6 +340,13 @@ def _emit_query_output(
         console.print(metrics)
         console.print()
 
+    clarifying_questions = result.get("clarifying_questions") or []
+    if clarifying_questions:
+        console.print("[bold]Clarifying questions:[/bold]")
+        for question in clarifying_questions:
+            console.print(f"- {question}")
+        console.print()
+
     if evidence:
         _print_evidence(result)
         console.print()
@@ -350,6 +366,30 @@ def _print_query_output(
             _emit_query_output(answer, sql, data, result, evidence, show_metrics)
     else:
         _emit_query_output(answer, sql, data, result, evidence, show_metrics)
+
+
+def _should_exit_chat(query: str) -> bool:
+    text = query.strip().lower()
+    if not text:
+        return False
+    exit_phrases = {
+        "exit",
+        "quit",
+        "q",
+        "bye",
+        "goodbye",
+        "stop",
+        "end chat",
+        "end the chat",
+        "close chat",
+        "close the chat",
+        "stop chat",
+    }
+    if text in exit_phrases:
+        return True
+    if re.search(r"\b(end|stop|quit|exit)\b.*\b(chat|conversation)\b", text):
+        return True
+    return False
 
 
 # ============================================================================
@@ -400,7 +440,7 @@ def chat(evidence: bool, pager: bool):
                     if not query.strip():
                         continue
 
-                    if query.lower() in ["exit", "quit", "q"]:
+                    if _should_exit_chat(query):
                         console.print("\n[yellow]Goodbye![/yellow]")
                         break
 
@@ -461,33 +501,65 @@ def chat(evidence: bool, pager: bool):
     default=False,
     help="Show the response in a scrollable pager.",
 )
-def ask(query: str, evidence: bool, pager: bool):
+@click.option(
+    "--max-clarifications",
+    default=3,
+    show_default=True,
+    type=int,
+    help="Maximum clarification prompts before stopping.",
+)
+def ask(query: str, evidence: bool, pager: bool, max_clarifications: int):
     """Ask a single question and exit."""
 
     async def run_query():
         try:
             pipeline = await create_pipeline_from_config()
+            conversation_history = []
+            current_query = query
+            clarification_attempts = 0
+            max_clarifications_limit = max(0, max_clarifications)
 
-            # Show loading with progress
-            with console.status("[cyan]Processing query...[/cyan]", spinner="dots"):
-                result = await pipeline.run(query=query)
+            while True:
+                # Show loading with progress
+                with console.status("[cyan]Processing query...[/cyan]", spinner="dots"):
+                    result = await pipeline.run(
+                        query=current_query,
+                        conversation_history=conversation_history,
+                    )
 
-            # Extract results
-            answer = result.get("natural_language_answer", "No answer generated")
-            sql = result.get("validated_sql") or result.get("generated_sql")
-            query_result = result.get("query_result")
-            data = _build_columnar_data(query_result)
+                # Extract results
+                answer = result.get("natural_language_answer", "No answer generated")
+                sql = result.get("validated_sql") or result.get("generated_sql")
+                query_result = result.get("query_result")
+                data = _build_columnar_data(query_result)
 
-            # Display results
-            _print_query_output(
-                answer=answer,
-                sql=sql,
-                data=data,
-                result=result,
-                evidence=evidence,
-                show_metrics=False,
-                pager=pager or evidence,
-            )
+                # Display results
+                _print_query_output(
+                    answer=answer,
+                    sql=sql,
+                    data=data,
+                    result=result,
+                    evidence=evidence,
+                    show_metrics=False,
+                    pager=pager or evidence,
+                )
+
+                clarifying_questions = result.get("clarifying_questions") or []
+                if not clarifying_questions or clarification_attempts >= max_clarifications_limit:
+                    break
+
+                followup = console.input("[bold cyan]Clarification:[/bold cyan] ").strip()
+                if not followup:
+                    break
+
+                conversation_history.extend(
+                    [
+                        {"role": "user", "content": current_query},
+                        {"role": "assistant", "content": answer},
+                    ]
+                )
+                current_query = followup
+                clarification_attempts += 1
 
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")

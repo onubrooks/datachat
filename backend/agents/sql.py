@@ -38,6 +38,14 @@ from backend.prompts.loader import PromptLoader
 logger = logging.getLogger(__name__)
 
 
+class SQLClarificationNeeded(Exception):
+    """Raised when SQL generation needs user clarification."""
+
+    def __init__(self, questions: list[str]) -> None:
+        super().__init__("SQL generation needs clarification")
+        self.questions = questions
+
+
 class SQLAgent(BaseAgent):
     """
     SQL generation agent with self-correction.
@@ -88,6 +96,8 @@ class SQLAgent(BaseAgent):
         )
         self.prompts = PromptLoader()
         self._live_schema_cache: dict[str, str] = {}
+        self._live_schema_tables_cache: dict[str, set[str]] = {}
+        self._live_profile_cache: dict[str, dict[str, dict[str, object]]] = {}
 
     async def execute(self, input: SQLAgentInput) -> SQLAgentOutput:
         """
@@ -118,7 +128,26 @@ class SQLAgent(BaseAgent):
 
         try:
             # Initial SQL generation
-            generated_sql = await self._generate_sql(input, metadata)
+            try:
+                generated_sql = await self._generate_sql(input, metadata)
+            except SQLClarificationNeeded as exc:
+                generated_sql = GeneratedSQL(
+                    sql="SELECT 1",
+                    explanation="Clarification needed before generating SQL.",
+                    used_datapoints=[],
+                    confidence=0.0,
+                    assumptions=[],
+                    clarifying_questions=exc.questions,
+                )
+                return SQLAgentOutput(
+                    success=True,
+                    data={},
+                    metadata=metadata,
+                    next_agent="ValidatorAgent",
+                    generated_sql=generated_sql,
+                    correction_attempts=[],
+                    needs_clarification=True,
+                )
 
             # Self-validation
             issues = self._validate_sql(generated_sql, input)
@@ -216,7 +245,14 @@ class SQLAgent(BaseAgent):
         Raises:
             LLMError: If LLM call fails
         """
-        fallback_sql = self._build_introspection_query(input.query)
+        resolved_query, _ = self._resolve_followup_query(input)
+        if resolved_query != input.query:
+            input = input.model_copy(update={"query": resolved_query})
+
+        fallback_sql = self._build_introspection_query(
+            input.query,
+            input.database_type,
+        )
         if fallback_sql:
             return GeneratedSQL(
                 sql=fallback_sql,
@@ -282,7 +318,14 @@ class SQLAgent(BaseAgent):
                 )
                 retry_response = await self.llm.generate(retry_request)
                 self._track_llm_call(tokens=retry_response.usage.total_tokens)
-                generated_sql = self._parse_llm_response(retry_response.content, input)
+                try:
+                    generated_sql = self._parse_llm_response(
+                        retry_response.content, input
+                    )
+                except ValueError as exc:
+                    raise SQLClarificationNeeded(
+                        self._build_clarifying_questions(input.query)
+                    ) from exc
 
             logger.debug(
                 f"Generated SQL: {generated_sql.sql[:200]}...",
@@ -291,6 +334,8 @@ class SQLAgent(BaseAgent):
 
             return generated_sql
 
+        except SQLClarificationNeeded:
+            raise
         except Exception as e:
             logger.error(f"LLM call failed: {e}", exc_info=True)
             raise LLMError(
@@ -380,8 +425,12 @@ class SQLAgent(BaseAgent):
         """
         issues: list[ValidationIssue] = []
         sql = generated_sql.sql.strip().upper()
+        db_type = input.database_type or getattr(self.config.database, "db_type", "postgresql")
+        is_show_statement = db_type == "mysql" and sql.startswith("SHOW")
 
         # Basic syntax checks
+        if is_show_statement:
+            return issues
         if not sql.startswith("SELECT") and not sql.startswith("WITH"):
             issues.append(
                 ValidationIssue(
@@ -419,12 +468,12 @@ class SQLAgent(BaseAgent):
         table_matches = re.findall(table_pattern, sql, re.IGNORECASE)
         referenced_tables = {match[0] or match[1] for match in table_matches}
         referenced_table_lowers = {table.lower() for table in referenced_tables}
+        catalog_schemas = self._catalog_schemas_for_db(db_type)
+        catalog_aliases = self._catalog_aliases_for_db(db_type)
         catalog_tables = {
             table
             for table in referenced_table_lowers
-            if table.startswith("information_schema.")
-            or table.startswith("pg_catalog.")
-            or table in {"information_schema", "pg_catalog"}
+            if self._is_catalog_table(table, catalog_schemas, catalog_aliases)
         }
         is_catalog_only = referenced_tables and len(catalog_tables) == len(
             referenced_table_lowers
@@ -439,6 +488,20 @@ class SQLAgent(BaseAgent):
                 # Also add without schema prefix
                 if "." in table_name:
                     available_tables.add(table_name.split(".")[-1].upper())
+        available_table_lowers = {table.lower() for table in available_tables}
+
+        live_schema_tables: set[str] = set()
+        db_url = input.database_url or (
+            str(self.config.database.url) if self.config.database.url else None
+        )
+        if db_url:
+            schema_key = f"{db_type}::{db_url}"
+            live_schema_tables = self._live_schema_tables_cache.get(schema_key, set())
+
+        table_validation_candidates = (
+            available_table_lowers if available_table_lowers else live_schema_tables
+        )
+        has_table_validation = bool(table_validation_candidates)
 
         # Check for missing tables (excluding CTEs and special tables)
         for table in referenced_tables:
@@ -455,35 +518,53 @@ class SQLAgent(BaseAgent):
                 continue
             if table.lower().startswith(("information_schema.", "pg_catalog.")):
                 continue
+            if table.lower() in catalog_aliases:
+                continue
+            if not has_table_validation:
+                continue
 
             # Check if table exists in DataPoints
-            if table_upper not in available_tables and "." in table:
+            if table.lower() not in table_validation_candidates and "." in table:
                 # Check without schema
-                table_no_schema = table.split(".")[-1].upper()
-                if table_no_schema not in available_tables and table_no_schema not in cte_names:
+                table_no_schema = table.split(".")[-1].lower()
+                if (
+                    table_no_schema not in table_validation_candidates
+                    and table_no_schema.upper() not in cte_names
+                ):
                     issues.append(
                         ValidationIssue(
                             issue_type="missing_table",
                             message=f"Table '{table}' not found in available DataPoints",
-                            suggested_fix=f"Use one of: {', '.join(sorted(available_tables))}",
+                            suggested_fix=(
+                                f"Use one of: {', '.join(sorted(available_tables))}"
+                                if available_tables
+                                else "Use a table from the live schema snapshot."
+                            ),
                         )
                     )
-            elif table_upper not in available_tables:
+            elif table.lower() not in table_validation_candidates:
                 # Simple table name not found
                 issues.append(
                     ValidationIssue(
                         issue_type="missing_table",
                         message=f"Table '{table}' not found in available DataPoints",
-                        suggested_fix=f"Use one of: {', '.join(sorted(available_tables))}",
+                        suggested_fix=(
+                            f"Use one of: {', '.join(sorted(available_tables))}"
+                            if available_tables
+                            else "Use a table from the live schema snapshot."
+                        ),
                     )
                 )
 
         return issues
 
-    def _build_introspection_query(self, query: str) -> str | None:
+    def _build_introspection_query(
+        self,
+        query: str,
+        database_type: str | None = None,
+    ) -> str | None:
         text = query.lower().strip()
-        if getattr(self.config.database, "db_type", "postgresql") != "postgresql":
-            return None
+        target_db_type = database_type or getattr(self.config.database, "db_type", "postgresql")
         patterns = [
             r"\bwhat tables\b",
             r"\blist tables\b",
@@ -495,12 +576,23 @@ class SQLAgent(BaseAgent):
         if not any(re.search(pattern, text) for pattern in patterns):
             return None
 
-        return (
-            "SELECT table_schema, table_name "
-            "FROM information_schema.tables "
-            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
-            "ORDER BY table_schema, table_name"
-        )
+        if target_db_type == "postgresql":
+            return (
+                "SELECT table_schema, table_name "
+                "FROM information_schema.tables "
+                "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+                "ORDER BY table_schema, table_name"
+            )
+        if target_db_type == "mysql":
+            return "SHOW TABLES"
+        if target_db_type == "clickhouse":
+            return (
+                "SELECT database, name "
+                "FROM system.tables "
+                "WHERE database NOT IN ('system', 'INFORMATION_SCHEMA') "
+                "ORDER BY database, name"
+            )
+        return None
 
     def _build_row_count_fallback(self, input: SQLAgentInput) -> str | None:
         if not self._requires_row_count(input.query):
@@ -508,6 +600,8 @@ class SQLAgent(BaseAgent):
         if self._requires_sample_rows(input.query):
             return None
         table_name = self._select_schema_table(input)
+        if not table_name:
+            table_name = self._extract_explicit_table_name(input.query)
         if not table_name:
             return None
         return f"SELECT COUNT(*) FROM {table_name}"
@@ -562,6 +656,90 @@ class SQLAgent(BaseAgent):
                 return 3
         return 3
 
+    def _build_clarifying_questions(self, query: str) -> list[str]:
+        questions = ["Which table should I use to answer this?"]
+        text = query.lower()
+        if any(term in text for term in ("total", "sum", "average", "avg", "count")):
+            questions.append(
+                "Which column should I aggregate (for example: amount, total_amount, revenue)?"
+            )
+        if any(term in text for term in ("date", "time", "month", "year", "quarter")):
+            questions.append("Is there a specific date or time range I should use?")
+        return questions
+
+    def _resolve_followup_query(
+        self, input: SQLAgentInput
+    ) -> tuple[str, str | None]:
+        history = input.conversation_history or []
+        if not history:
+            return input.query, None
+
+        last_assistant = None
+        last_assistant_index = None
+        for idx in range(len(history) - 1, -1, -1):
+            msg = history[idx]
+            role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+            if role == "assistant":
+                last_assistant = msg
+                last_assistant_index = idx
+                break
+
+        if last_assistant is None:
+            return input.query, None
+
+        assistant_text = (
+            str(last_assistant.get("content", ""))
+            if isinstance(last_assistant, dict)
+            else str(getattr(last_assistant, "content", ""))
+        ).lower()
+        if "which table" not in assistant_text and "clarifying" not in assistant_text:
+            return input.query, None
+
+        query_text = input.query.strip()
+        if not query_text or len(query_text.split()) > 4:
+            return input.query, None
+
+        previous_user = None
+        if last_assistant_index is not None:
+            for idx in range(last_assistant_index - 1, -1, -1):
+                msg = history[idx]
+                role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+                if role == "user":
+                    previous_user = msg
+                    break
+        if previous_user is None:
+            return input.query, None
+
+        previous_text = (
+            str(previous_user.get("content", ""))
+            if isinstance(previous_user, dict)
+            else str(getattr(previous_user, "content", ""))
+        ).strip()
+        if not previous_text:
+            return input.query, None
+
+        table_hint = re.sub(r"[^\w.]+", "", query_text)
+        if not table_hint:
+            return input.query, None
+
+        resolved_query = f"{previous_text} Use table {table_hint}."
+        return resolved_query, table_hint
+
+    def _extract_explicit_table_name(self, query: str) -> str | None:
+        patterns = [
+            r"\bhow\s+many\s+rows?\s+(?:are\s+)?in\s+([a-zA-Z0-9_.]+)",
+            r"\brows?\s+in\s+([a-zA-Z0-9_.]+)",
+            r"\bcount\s+of\s+rows?\s+in\s+([a-zA-Z0-9_.]+)",
+            r"\brecords?\s+in\s+([a-zA-Z0-9_.]+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, query.lower())
+            if match:
+                table_name = match.group(1).rstrip(".,;:?)")
+                if table_name:
+                    return table_name
+        return None
+
     def _select_schema_table(self, input: SQLAgentInput) -> str | None:
         for dp in input.investigation_memory.datapoints:
             if dp.datapoint_type != "Schema":
@@ -591,9 +769,16 @@ class SQLAgent(BaseAgent):
         Returns:
             Formatted prompt string
         """
+        resolved_query, _ = self._resolve_followup_query(input)
         # Extract schema and business context
         schema_context = self._format_schema_context(input.investigation_memory)
-        live_context = await self._get_live_schema_context(input.query)
+        include_profile = not input.investigation_memory.datapoints
+        live_context = await self._get_live_schema_context(
+            query=resolved_query,
+            database_type=input.database_type,
+            database_url=input.database_url,
+            include_profile=include_profile,
+        )
         if live_context:
             if schema_context == "No schema context available":
                 schema_context = live_context
@@ -603,25 +788,38 @@ class SQLAgent(BaseAgent):
                     f"{live_context}"
                 )
         business_context = self._format_business_context(input.investigation_memory)
+        conversation_context = self._format_conversation_context(
+            input.conversation_history
+        )
         return self.prompts.render(
             "agents/sql_generator.md",
-            user_query=input.query,
+            user_query=resolved_query,
             schema_context=schema_context,
             business_context=business_context,
-            backend=getattr(self.config.database, "db_type", "postgresql"),
+            conversation_context=conversation_context,
+            backend=input.database_type or getattr(self.config.database, "db_type", "postgresql"),
             user_preferences={"default_limit": 1000},
         )
 
-    async def _get_live_schema_context(self, query: str) -> str | None:
-        db_type = getattr(self.config.database, "db_type", "postgresql")
+    async def _get_live_schema_context(
+        self,
+        query: str,
+        database_type: str | None = None,
+        database_url: str | None = None,
+        include_profile: bool = False,
+    ) -> str | None:
+        db_type = database_type or getattr(self.config.database, "db_type", "postgresql")
         if db_type != "postgresql":
             return None
 
-        db_url = str(self.config.database.url) if self.config.database.url else None
+        db_url = database_url or (
+            str(self.config.database.url) if self.config.database.url else None
+        )
         if not db_url:
             return None
 
-        cache_key = f"{db_url}::{query.lower().strip()}"
+        cache_key = f"{db_type}::{db_url}::{query.lower().strip()}::{include_profile}"
+        schema_key = f"{db_type}::{db_url}"
         cached = self._live_schema_cache.get(cache_key)
         if cached:
             return cached
@@ -640,9 +838,19 @@ class SQLAgent(BaseAgent):
 
         try:
             await connector.connect()
-            context = await self._fetch_live_schema_context(connector, query)
+            context, qualified_tables = await self._fetch_live_schema_context(
+                connector, query, schema_key, include_profile
+            )
             if context:
                 self._live_schema_cache[cache_key] = context
+            if qualified_tables:
+                expanded_tables = set()
+                for table in qualified_tables:
+                    expanded_tables.add(table.lower())
+                    if "." in table:
+                        expanded_tables.add(table.split(".")[-1].lower())
+                if expanded_tables:
+                    self._live_schema_tables_cache[schema_key] = expanded_tables
             return context
         except Exception as exc:
             logger.warning(f"Live schema lookup failed: {exc}")
@@ -651,8 +859,12 @@ class SQLAgent(BaseAgent):
             await connector.close()
 
     async def _fetch_live_schema_context(
-        self, connector: PostgresConnector, query: str
-    ) -> str | None:
+        self,
+        connector: PostgresConnector,
+        query: str,
+        schema_key: str,
+        include_profile: bool,
+    ) -> tuple[str | None, list[str]]:
         tables_query = (
             "SELECT table_schema, table_name "
             "FROM information_schema.tables "
@@ -661,7 +873,7 @@ class SQLAgent(BaseAgent):
         )
         result = await connector.execute(tables_query)
         if not result.rows:
-            return None
+            return None, []
 
         entries = []
         qualified_tables = []
@@ -676,27 +888,37 @@ class SQLAgent(BaseAgent):
                 entries.append(str(table))
 
         if not entries:
-            return None
+            return None, []
 
         tables = ", ".join(entries)
 
-        columns_context = await self._build_columns_context(
+        columns_context, columns_by_table, focus_tables = await self._build_columns_context(
             connector, query, qualified_tables
         )
+
+        join_context = ""
+        profile_context = ""
+        if include_profile and columns_by_table:
+            join_context = self._build_join_hints_context(columns_by_table, focus_tables)
+            profile_context = await self._build_lightweight_profile_context(
+                connector, schema_key, query, columns_by_table, focus_tables
+            )
 
         return (
             f"**Tables in database (compact list):** {tables}"
             f"{columns_context}"
-        )
+            f"{join_context}"
+            f"{profile_context}"
+        ), qualified_tables
 
     async def _build_columns_context(
         self,
         connector: PostgresConnector,
         query: str,
         qualified_tables: list[str],
-    ) -> str:
+    ) -> tuple[str, dict[str, list[tuple[str, str | None]]], list[str]]:
         if not qualified_tables:
-            return ""
+            return "", {}, []
 
         columns_query = (
             "SELECT table_schema, table_name, column_name, data_type "
@@ -706,9 +928,9 @@ class SQLAgent(BaseAgent):
         )
         columns_result = await connector.execute(columns_query)
         if not columns_result.rows:
-            return ""
+            return "", {}, []
 
-        columns_by_table: dict[str, list[str]] = {}
+        columns_by_table: dict[str, list[tuple[str, str | None]]] = {}
         for row in columns_result.rows:
             schema = row.get("table_schema")
             table = row.get("table_name")
@@ -719,12 +941,10 @@ class SQLAgent(BaseAgent):
             key = f"{schema}.{table}"
             if key not in qualified_tables:
                 continue
-            columns_by_table.setdefault(key, []).append(
-                f"{column} ({dtype})" if dtype else str(column)
-            )
+            columns_by_table.setdefault(key, []).append((str(column), dtype))
 
         if not columns_by_table:
-            return ""
+            return "", {}, []
 
         query_lower = query.lower()
         is_list_tables = bool(
@@ -739,26 +959,29 @@ class SQLAgent(BaseAgent):
             focus_tables = self._rank_tables_by_query(query, columns_by_table)[:10]
 
         if not focus_tables:
-            return ""
+            return "", columns_by_table, []
 
         lines = []
         for table in focus_tables:
             columns = columns_by_table.get(table, [])
             if columns:
-                lines.append(f"- {table}: {', '.join(columns[:30])}")
+                formatted_columns = []
+                for name, dtype in columns[:30]:
+                    formatted_columns.append(f"{name} ({dtype})" if dtype else name)
+                lines.append(f"- {table}: {', '.join(formatted_columns)}")
 
         if not lines:
-            return ""
+            return "", columns_by_table, focus_tables
 
         header = (
             "**Columns (all tables):**"
             if is_list_tables
             else "**Columns (top matched tables):**"
         )
-        return f"\n{header}\n" + "\n".join(lines)
+        return f"\n{header}\n" + "\n".join(lines), columns_by_table, focus_tables
 
     def _rank_tables_by_query(
-        self, query: str, columns_by_table: dict[str, list[str]]
+        self, query: str, columns_by_table: dict[str, list[tuple[str, str | None]]]
     ) -> list[str]:
         tokens = self._tokenize_query(query)
         if not tokens:
@@ -768,10 +991,11 @@ class SQLAgent(BaseAgent):
         for table, columns in columns_by_table.items():
             score = 0
             table_tokens = table.lower().replace(".", "_").split("_")
+            column_names = [name.lower() for name, _ in columns]
             for token in tokens:
                 if token in table_tokens:
                     score += 3
-                if any(token in col.lower() for col in columns):
+                if any(token in col for col in column_names):
                     score += 2
             if len(tokens) >= 2:
                 bigrams = {" ".join(tokens[i : i + 2]) for i in range(len(tokens) - 1)}
@@ -818,6 +1042,265 @@ class SQLAgent(BaseAgent):
             "exists",
         }
         return [token for token in raw_tokens if token not in stopwords]
+
+    def _build_join_hints_context(
+        self,
+        columns_by_table: dict[str, list[tuple[str, str | None]]],
+        focus_tables: list[str],
+    ) -> str:
+        if not focus_tables:
+            return ""
+
+        table_aliases: dict[str, set[str]] = {}
+        table_columns: dict[str, list[str]] = {}
+        for table in focus_tables[:8]:
+            base = table.split(".")[-1].lower()
+            aliases = {base}
+            if base.endswith("s") and len(base) > 1:
+                aliases.add(base[:-1])
+            else:
+                aliases.add(f"{base}s")
+            table_aliases[table] = aliases
+            table_columns[table] = [name.lower() for name, _ in columns_by_table.get(table, [])]
+
+        hints: list[str] = []
+        seen = set()
+        for source_table, columns in table_columns.items():
+            for column in columns:
+                if not column.endswith("_id"):
+                    continue
+                key = column[:-3]
+                for target_table, aliases in table_aliases.items():
+                    if target_table == source_table:
+                        continue
+                    if key not in aliases:
+                        continue
+                    target_columns = table_columns.get(target_table, [])
+                    target_column = None
+                    if "id" in target_columns:
+                        target_column = "id"
+                    elif f"{key}_id" in target_columns:
+                        target_column = f"{key}_id"
+                    hint = (
+                        f"- {source_table}.{column} -> "
+                        f"{target_table}.{target_column or 'id'}"
+                    )
+                    if hint not in seen:
+                        seen.add(hint)
+                        hints.append(hint)
+                if len(hints) >= 8:
+                    break
+            if len(hints) >= 8:
+                break
+
+        if not hints:
+            return ""
+        return "\n**Join hints (heuristic):**\n" + "\n".join(hints)
+
+    async def _build_lightweight_profile_context(
+        self,
+        connector: PostgresConnector,
+        schema_key: str,
+        query: str,
+        columns_by_table: dict[str, list[tuple[str, str | None]]],
+        focus_tables: list[str],
+    ) -> str:
+        if not focus_tables:
+            return ""
+
+        profile_cache = self._live_profile_cache.setdefault(schema_key, {})
+        lines: list[str] = []
+        for table in focus_tables[:3]:
+            if table not in profile_cache:
+                profile_cache[table] = await self._fetch_table_profile(
+                    connector, table, query, columns_by_table.get(table, [])
+                )
+            profile = profile_cache.get(table, {})
+            if not profile:
+                continue
+            row_count = profile.get("row_count")
+            columns = profile.get("columns", {})
+            if not columns:
+                continue
+            line = f"- {table}"
+            if row_count is not None:
+                line += f" (~{row_count} rows)"
+            lines.append(line)
+            for column_name, stats in list(columns.items())[:5]:
+                parts = []
+                null_frac = stats.get("null_frac")
+                if null_frac is not None:
+                    parts.append(f"null_frac={null_frac:.2f}")
+                n_distinct = stats.get("n_distinct")
+                if n_distinct is not None:
+                    parts.append(f"n_distinct={n_distinct}")
+                common_vals = stats.get("common_vals")
+                if common_vals:
+                    preview = ", ".join(common_vals[:3])
+                    parts.append(f"examples=[{preview}]")
+                if parts:
+                    lines.append(f"  - {column_name}: " + ", ".join(parts))
+
+        if not lines:
+            return ""
+        return "\n**Lightweight stats (cached):**\n" + "\n".join(lines)
+
+    async def _fetch_table_profile(
+        self,
+        connector: PostgresConnector,
+        table: str,
+        query: str,
+        columns: list[tuple[str, str | None]],
+    ) -> dict[str, object]:
+        schema = "public"
+        table_name = table
+        if "." in table:
+            schema, table_name = table.split(".", 1)
+
+        row_count = await self._fetch_table_row_estimate(connector, schema, table_name)
+        selected_columns = self._select_profile_columns(query, columns)
+        column_stats = await self._fetch_column_stats(
+            connector, schema, table_name, selected_columns
+        )
+        return {
+            "row_count": row_count,
+            "columns": column_stats,
+        }
+
+    def _select_profile_columns(
+        self, query: str, columns: list[tuple[str, str | None]]
+    ) -> list[str]:
+        if not columns:
+            return []
+        tokens = set(self._tokenize_query(query))
+        tokens.update({"amount", "total", "revenue", "price", "cost", "sales"})
+        numeric_types = {
+            "smallint",
+            "integer",
+            "bigint",
+            "numeric",
+            "decimal",
+            "real",
+            "double precision",
+            "float",
+        }
+        preferred: list[str] = []
+        fallback: list[str] = []
+        for name, dtype in columns:
+            dtype_norm = (dtype or "").lower()
+            if dtype_norm and dtype_norm in numeric_types:
+                fallback.append(name)
+                if any(token in name.lower() for token in tokens):
+                    preferred.append(name)
+
+        selected = preferred or fallback
+        return selected[:5]
+
+    async def _fetch_table_row_estimate(
+        self, connector: PostgresConnector, schema: str, table: str
+    ) -> int | None:
+        query = (
+            "SELECT reltuples::BIGINT AS estimate "
+            "FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = $1 AND c.relname = $2"
+        )
+        try:
+            result = await connector.execute(query, params=[schema, table])
+        except Exception:
+            return None
+        if not result.rows:
+            return None
+        value = result.rows[0].get("estimate")
+        return int(value) if value is not None else None
+
+    async def _fetch_column_stats(
+        self,
+        connector: PostgresConnector,
+        schema: str,
+        table: str,
+        columns: list[str],
+    ) -> dict[str, dict[str, object]]:
+        if not columns:
+            return {}
+        query = (
+            "SELECT attname, null_frac, n_distinct, most_common_vals "
+            "FROM pg_stats "
+            "WHERE schemaname = $1 AND tablename = $2 AND attname = ANY($3::text[])"
+        )
+        try:
+            result = await connector.execute(query, params=[schema, table, columns])
+        except Exception:
+            return {}
+
+        stats: dict[str, dict[str, object]] = {}
+        for row in result.rows:
+            attname = row.get("attname")
+            if not attname:
+                continue
+            common_vals = row.get("most_common_vals") or []
+            common_vals = [str(value) for value in common_vals if value is not None]
+            stats[str(attname)] = {
+                "null_frac": row.get("null_frac"),
+                "n_distinct": row.get("n_distinct"),
+                "common_vals": common_vals,
+            }
+        return stats
+
+    def _catalog_schemas_for_db(self, db_type: str) -> set[str]:
+        base = {"information_schema"}
+        if db_type == "postgresql":
+            return base | {"pg_catalog"}
+        if db_type == "clickhouse":
+            return base | {"system"}
+        if db_type == "mysql":
+            return base | {"mysql", "performance_schema", "sys"}
+        return base
+
+    def _catalog_aliases_for_db(self, db_type: str) -> set[str]:
+        if db_type == "postgresql":
+            return {
+                "pg_tables",
+                "pg_class",
+                "pg_namespace",
+                "pg_attribute",
+                "pg_stat_all_tables",
+                "pg_stat_user_tables",
+                "pg_indexes",
+                "pg_constraint",
+                "pg_description",
+                "pg_type",
+                "pg_roles",
+                "pg_stat_activity",
+                "pg_stat_database",
+                "pg_locks",
+                "pg_settings",
+                "svv_table_info",
+                "svv_columns",
+                "svv_tables",
+                "svv_views",
+                "svv_schema",
+                "stl_query",
+                "stl_scan",
+                "stl_wlm_query",
+                "svl_qlog",
+                "svl_query_report",
+            }
+        return set()
+
+    def _is_catalog_table(
+        self, table: str, catalog_schemas: set[str], catalog_aliases: set[str]
+    ) -> bool:
+        if table in catalog_aliases:
+            return True
+        if table in catalog_schemas:
+            return True
+        for schema in catalog_schemas:
+            if table.startswith(f"{schema}."):
+                return True
+            if f".{schema}." in table:
+                return True
+        return False
 
     def _build_correction_prompt(
         self, generated_sql: GeneratedSQL, issues: list[ValidationIssue], input: SQLAgentInput
@@ -944,6 +1427,26 @@ class SQLAgent(BaseAgent):
 
         return "\n".join(business_parts) if business_parts else "No business rules available"
 
+    def _format_conversation_context(self, history: list[dict] | list) -> str:
+        if not history:
+            return "No conversation context available."
+
+        recent = history[-6:]
+        lines = []
+        for msg in recent:
+            role = "user"
+            content = ""
+            if isinstance(msg, dict):
+                role = str(msg.get("role", role))
+                content = str(msg.get("content", ""))
+            else:
+                role = str(getattr(msg, "role", role))
+                content = str(getattr(msg, "content", ""))
+            if content:
+                lines.append(f"{role}: {content}")
+
+        return "\n".join(lines) if lines else "No conversation context available."
+
     def _parse_llm_response(self, content: str, input: SQLAgentInput) -> GeneratedSQL:
         """
         Parse LLM response into GeneratedSQL.
@@ -1018,7 +1521,7 @@ class SQLAgent(BaseAgent):
                 clarifying_questions=[],
             )
 
-        logger.error("Failed to parse LLM response: Response missing 'sql' field")
+        logger.warning("Failed to parse LLM response: Response missing 'sql' field")
         logger.debug(f"LLM response content: {content}")
         raise ValueError("Failed to parse LLM response: Response missing 'sql' field")
 

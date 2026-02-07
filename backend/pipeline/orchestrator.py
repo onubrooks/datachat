@@ -9,14 +9,15 @@ LangGraph-based pipeline that orchestrates all agents:
 - Error recovery and graceful degradation
 """
 
-import logging
 import json
+import logging
 import re
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC
 from pathlib import Path
 from typing import Any, TypedDict
+from urllib.parse import urlparse
 
 from langgraph.graph import END, StateGraph
 
@@ -35,10 +36,10 @@ from backend.connectors.postgres import PostgresConnector
 from backend.knowledge.retriever import Retriever
 from backend.models import (
     ClassifierAgentInput,
-    ContextAnswerAgentInput,
     ContextAgentInput,
-    ExecutorAgentInput,
+    ContextAnswerAgentInput,
     EvidenceItem,
+    ExecutorAgentInput,
     GeneratedSQL,
     Message,
     SQLAgentInput,
@@ -278,7 +279,14 @@ class DataChatPipeline:
             },
         )
 
-        workflow.add_edge("sql", "validator")
+        workflow.add_conditional_edges(
+            "sql",
+            self._should_validate_sql,
+            {
+                "validate": "validator",
+                "clarify": END,
+            },
+        )
         workflow.add_conditional_edges(
             "executor",
             self._should_synthesize_response,
@@ -471,7 +479,9 @@ class DataChatPipeline:
                         "metadata": dp.metadata,
                     }
                     for dp in output.investigation_memory.datapoints
-                ]
+                ],
+                database_type=state.get("database_type"),
+                database_url=state.get("database_url"),
             )
             sources_used = list({dp["datapoint_id"] for dp in filtered_datapoints})
             state["investigation_memory"] = {
@@ -580,9 +590,15 @@ class DataChatPipeline:
         return state
 
     async def _filter_datapoints_by_live_schema(
-        self, datapoints: list[dict[str, Any]]
+        self,
+        datapoints: list[dict[str, Any]],
+        database_type: str | None = None,
+        database_url: str | None = None,
     ) -> list[dict[str, Any]]:
-        live_tables = await self._get_live_table_catalog()
+        live_tables = await self._get_live_table_catalog(
+            database_type=database_type,
+            database_url=database_url,
+        )
         if not live_tables:
             return datapoints
 
@@ -601,14 +617,29 @@ class DataChatPipeline:
 
         return filtered
 
-    async def _get_live_table_catalog(self) -> set[str] | None:
+    async def _get_live_table_catalog(
+        self,
+        database_type: str | None = None,
+        database_url: str | None = None,
+    ) -> set[str] | None:
+        connector = self.connector
+        close_connector = False
+        if database_url:
+            connector = self._build_catalog_connector(database_type, database_url)
+            close_connector = connector is not None
+        if connector is None:
+            return None
+
         try:
-            if not self.connector.is_connected:
-                await self.connector.connect()
-            tables = await self.connector.get_schema()
+            if not connector.is_connected:
+                await connector.connect()
+            tables = await connector.get_schema()
         except Exception as exc:
             logger.warning(f"Failed to fetch live schema catalog: {exc}")
             return None
+        finally:
+            if close_connector:
+                await connector.close()
 
         catalog: set[str] = set()
         for table in tables:
@@ -619,6 +650,42 @@ class DataChatPipeline:
             elif table_name:
                 catalog.add(str(table_name).lower())
         return catalog or None
+
+    def _build_catalog_connector(
+        self, database_type: str | None, database_url: str
+    ) -> BaseConnector | None:
+        parsed = urlparse(database_url)
+        scheme = parsed.scheme.split("+")[0].lower() if parsed.scheme else ""
+        if database_type:
+            target_type = database_type
+        elif scheme in {"postgres", "postgresql"}:
+            target_type = "postgresql"
+        elif scheme == "clickhouse":
+            target_type = "clickhouse"
+        else:
+            target_type = getattr(self.config.database, "db_type", "postgresql")
+
+        if target_type == "postgresql":
+            if scheme not in {"postgres", "postgresql"} or not parsed.hostname:
+                return None
+            return PostgresConnector(
+                host=parsed.hostname,
+                port=parsed.port or 5432,
+                database=parsed.path.lstrip("/") if parsed.path else "datachat",
+                user=parsed.username or "postgres",
+                password=parsed.password or "",
+            )
+        if target_type == "clickhouse":
+            if scheme != "clickhouse" or not parsed.hostname:
+                return None
+            return ClickHouseConnector(
+                host=parsed.hostname,
+                port=parsed.port or 8123,
+                database=parsed.path.lstrip("/") if parsed.path else "default",
+                user=parsed.username or "default",
+                password=parsed.password or "",
+            )
+        return None
 
     def _extract_datapoint_table_key(self, datapoint: dict[str, Any]) -> str | None:
         metadata = datapoint.get("metadata") or {}
@@ -664,7 +731,6 @@ class DataChatPipeline:
 
         name = payload.get("name")
         table_name = payload.get("table_name")
-        schema = payload.get("schema")
         business_purpose = payload.get("business_purpose")
         key_columns = payload.get("key_columns") or []
         column_names = []
@@ -737,9 +803,21 @@ class DataChatPipeline:
                 conversation_history=state.get("conversation_history", []),
                 investigation_memory=investigation_memory,
                 database_type=state.get("database_type", "postgresql"),
+                database_url=state.get("database_url"),
             )
 
             output = await self.sql.execute(input_data)
+
+            if output.needs_clarification:
+                questions = output.generated_sql.clarifying_questions or []
+                state["clarification_needed"] = True
+                state["clarifying_questions"] = questions
+                state["answer_source"] = "clarification"
+                state["answer_confidence"] = 0.2
+                state["natural_language_answer"] = self._format_clarifying_response(
+                    state["query"], questions
+                )
+                return state
 
             # Update state
             state["generated_sql"] = output.generated_sql.sql
@@ -1031,7 +1109,7 @@ class DataChatPipeline:
             synthesized = await self.response_synthesis.execute(
                 query=state.get("query", ""),
                 sql=state.get("validated_sql") or state.get("generated_sql") or "",
-                result_summary=json.dumps(result_summary),
+                result_summary=json.dumps(result_summary, default=str),
                 context_preface=state.get("context_preface"),
             )
             state["natural_language_answer"] = synthesized
@@ -1061,6 +1139,11 @@ class DataChatPipeline:
     # ========================================================================
     # Conditional Edge Logic
     # ========================================================================
+
+    def _should_validate_sql(self, state: PipelineState) -> str:
+        if state.get("clarification_needed"):
+            return "clarify"
+        return "validate"
 
     def _should_use_context_answer(self, state: PipelineState) -> str:
         if state.get("error"):
@@ -1232,6 +1315,15 @@ class DataChatPipeline:
         if state.get("validated_sql") and state.get("query_result"):
             return "synthesize"
         return "end"
+
+    def _format_clarifying_response(
+        self, query: str, questions: list[str]
+    ) -> str:
+        if not questions:
+            return "I need a bit more detail to generate SQL. Which table should I use?"
+        prompt = "I need a bit more detail to generate SQL:"
+        formatted = "\n".join(f"- {question}" for question in questions)
+        return f"{prompt}\n{formatted}"
 
     # ========================================================================
     # Public API

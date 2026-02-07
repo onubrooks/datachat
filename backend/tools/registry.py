@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import yaml
 
-from backend.tools.base import ToolDefinition, ToolPolicy
+from backend.tools.base import ToolDefinition
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,6 @@ Tests the DataChat CLI commands.
 import json
 from unittest.mock import AsyncMock, patch
 
-import click
 import pytest
 from click.testing import CliRunner
 

@@ -18,6 +18,7 @@ You receive a structured context object:
 ```json
 {
   "user_query": "Show me top 10 customers by revenue last month",
+  "conversation_context": "user: Show me top 10 customers...\nassistant: Which table should I use?",
   "schema": {
     "tables": [...],
     "columns": [...],
@@ -40,6 +41,12 @@ You receive a structured context object:
 ```
 
 ## Your Task: 5-Step Generation Process
+
+### Conversation Context (If Provided)
+
+Use conversation context to interpret short follow-up answers. If the latest user
+message is a brief response to a clarifying question, combine it with the earlier
+question to form a complete intent before generating SQL.
 
 ### Step 1: Parse the Question
 

@@ -10,8 +10,8 @@ from backend.agents.executor import ExecutorAgent
 from backend.agents.sql import SQLAgent
 from backend.agents.validator import ValidatorAgent
 from backend.models import (
-    ContextAnswerAgentInput,
     ContextAgentInput,
+    ContextAnswerAgentInput,
     ExecutorAgentInput,
     SQLAgentInput,
     ValidatorAgentInput,
@@ -78,6 +78,8 @@ async def run_sql(query: str, ctx: ToolContext | None = None) -> dict[str, Any]:
         SQLAgentInput(
             query=query,
             investigation_memory=context_output.investigation_memory,
+            database_type=(ctx.metadata.get("database_type") if ctx else None) or "postgresql",
+            database_url=ctx.metadata.get("database_url") if ctx else None,
         )
     )
 

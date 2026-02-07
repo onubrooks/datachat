@@ -18,6 +18,10 @@ from backend.initialization.initializer import SystemInitializer
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+LIVE_SCHEMA_MODE_NOTICE = (
+    "Live schema mode: DataPoints are not loaded yet. "
+    "Answers are generated from database metadata and query results only."
+)
 
 
 @router.websocket("/ws/chat")
@@ -85,6 +89,44 @@ async def websocket_chat(websocket: WebSocket) -> None:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
+        database_type = "postgresql"
+        database_url = None
+        manager = app_state.get("database_manager")
+        target_database = data.get("target_database")
+        if target_database:
+            if manager is None:
+                await websocket.send_json(
+                    {
+                        "event": "error",
+                        "error": "service_unavailable",
+                        "message": (
+                            "Database registry is unavailable. "
+                            "Set DATABASE_CREDENTIALS_KEY."
+                        ),
+                    }
+                )
+                await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+                return
+            try:
+                connection = await manager.get_connection(target_database)
+            except Exception as exc:
+                await websocket.send_json(
+                    {
+                        "event": "error",
+                        "error": "invalid_target_database",
+                        "message": str(exc),
+                    }
+                )
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+            database_type = connection.database_type
+            database_url = connection.database_url.get_secret_value()
+        elif manager is not None:
+            default_connection = await manager.get_default_connection()
+            if default_connection is not None:
+                database_type = default_connection.database_type
+                database_url = default_connection.database_url.get_secret_value()
+
         # Get pipeline from app state
         pipeline = app_state.get("pipeline")
         if pipeline is None:
@@ -100,14 +142,14 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
         initializer = SystemInitializer(app_state)
         status_state = await initializer.status()
-        if not status_state.is_initialized:
+        if not status_state.has_databases:
             await websocket.send_json(
                 {
                     "event": "error",
                     "error": "system_not_initialized",
                     "message": (
-                        "DataChat requires setup. Run 'datachat setup' or "
-                        "'datachat demo' to get started."
+                        "DataChat requires a target database connection. "
+                        "Run 'datachat setup' or 'datachat demo' to get started."
                     ),
                     "setup_steps": [
                         {
@@ -152,6 +194,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
         result = await pipeline.run_with_streaming(
             query=message,
             conversation_history=history,
+            database_type=database_type,
+            database_url=database_url,
             event_callback=event_callback,
         )
 
@@ -162,6 +206,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 answer = f"I encountered an error: {result.get('error')}"
             else:
                 answer = "I was unable to process your query. Please try rephrasing."
+        if not status_state.has_datapoints and LIVE_SCHEMA_MODE_NOTICE not in answer:
+            answer = f"{answer}\n\n{LIVE_SCHEMA_MODE_NOTICE}"
 
         sql_query = result.get("validated_sql") or result.get("generated_sql")
         query_result = result.get("query_result")
@@ -211,6 +257,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
         payload = {
             "event": "complete",
             "answer": answer,
+            "clarifying_questions": result.get("clarifying_questions", []),
             "sql": sql_query,
             "data": data_result,
             "visualization_hint": visualization_hint,

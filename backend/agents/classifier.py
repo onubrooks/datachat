@@ -240,7 +240,8 @@ class ClassifierAgent(BaseAgent):
             )
 
         except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.error(f"Failed to parse classification response: {e}\nResponse: {response}")
+            truncated = response.replace("\n", " ")[:400]
+            logger.warning(f"Failed to parse classification response: {e}\nResponse: {truncated}")
             # Return default classification on parse failure
             return QueryClassification(
                 intent="data_query",

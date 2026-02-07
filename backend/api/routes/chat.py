@@ -17,6 +17,10 @@ from backend.models.api import ChatMetrics, ChatRequest, ChatResponse, DataSourc
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+LIVE_SCHEMA_MODE_NOTICE = (
+    "Live schema mode: DataPoints are not loaded yet. "
+    "Answers are generated from database metadata and query results only."
+)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -68,14 +72,14 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
 
         initializer = SystemInitializer(app_state)
         status_state = await initializer.status()
-        if not status_state.is_initialized:
+        if not status_state.has_databases:
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={
                     "error": "system_not_initialized",
                     "message": (
-                        "DataChat requires setup. Run 'datachat setup' or "
-                        "'datachat demo' to get started."
+                        "DataChat requires a target database connection. "
+                        "Run 'datachat setup' or 'datachat demo' to get started."
                     ),
                     "setup_steps": [
                         {
@@ -115,6 +119,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
                 answer = f"I encountered an error: {result.get('error')}"
             else:
                 answer = "I was unable to process your query. Please try rephrasing."
+        answer = _maybe_append_live_schema_notice(answer, status_state.has_datapoints)
 
         # Extract SQL
         sql_query = result.get("validated_sql") or result.get("generated_sql")
@@ -144,6 +149,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
 
         response = ChatResponse(
             answer=answer,
+            clarifying_questions=result.get("clarifying_questions", []),
             sql=sql_query,
             data=data,
             visualization_hint=visualization_hint,
@@ -244,3 +250,11 @@ def _build_evidence(result: dict[str, Any]) -> list[dict[str, Any]]:
                 }
             )
     return evidence_items
+
+
+def _maybe_append_live_schema_notice(answer: str, has_datapoints: bool) -> str:
+    if has_datapoints:
+        return answer
+    if LIVE_SCHEMA_MODE_NOTICE in answer:
+        return answer
+    return f"{answer}\n\n{LIVE_SCHEMA_MODE_NOTICE}"

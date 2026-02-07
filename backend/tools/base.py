@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import inspect
 import logging
-from enum import Enum
-from typing import Any, Callable
+from collections.abc import Callable
+from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
-
 
 logger = logging.getLogger(__name__)
 
 
-class ToolCategory(str, Enum):
+class ToolCategory(StrEnum):
     DATABASE = "database"
     PROFILING = "profiling"
     KNOWLEDGE = "knowledge"

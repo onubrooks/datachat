@@ -24,6 +24,7 @@ This folder contains the product, architecture, and operations documentation for
 - `docs/PROMPTS.md` - prompt architecture and best practices.
 - `docs/API.md` - API endpoints and request bodies.
 - `docs/MULTI_DATABASE.md` - multiple connection routing and setup.
+- `docs/MANUAL_TESTING_PR001_PR002.md` - manual + automated verification for credentials-only and multi-db routing updates.
 - `docs/OPERATIONS.md` - deployment and sync guidance.
 - `docs/DEMO_PLAYBOOK.md` - persona-based demo environments and scripts.
 - `docs/RAG_EVAL.md` - retrieval + end-to-end evaluation plan.

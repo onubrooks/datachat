@@ -463,6 +463,86 @@ class TestValidation:
         # Both 'sales' and 'filtered_sales' are CTEs, should not be flagged
         assert len(issues) == 0
 
+    def test_skips_missing_table_without_schema_datapoints(self, sql_agent):
+        """Test missing_table validation is skipped in credentials-only mode."""
+        memory = InvestigationMemory(
+            query="What is total sales?",
+            datapoints=[],
+            total_retrieved=0,
+            retrieval_mode="hybrid",
+            sources_used=[],
+        )
+        sql_input = SQLAgentInput(
+            query="What is total sales?",
+            investigation_memory=memory,
+        )
+        generated_sql = GeneratedSQL(
+            sql="SELECT SUM(amount) FROM sales",
+            explanation="Sum sales amount",
+            used_datapoints=[],
+            confidence=0.7,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+
+        issues = sql_agent._validate_sql(generated_sql, sql_input)
+
+        assert not any(issue.issue_type == "missing_table" for issue in issues)
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "SELECT COUNT(*) FROM pg_tables",
+            "SELECT COUNT(*) FROM information_schema.tables",
+        ],
+    )
+    def test_accepts_catalog_tables(self, sql_agent, sample_sql_agent_input, sql):
+        """Test accepts catalog tables without DataPoints."""
+        catalog_sql = GeneratedSQL(
+            sql=sql,
+            explanation="Catalog query",
+            used_datapoints=[],
+            confidence=0.8,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+
+        issues = sql_agent._validate_sql(catalog_sql, sample_sql_agent_input)
+
+        assert len(issues) == 0
+
+    def test_accepts_clickhouse_system_tables(self, sql_agent, sample_sql_agent_input):
+        """Test accepts ClickHouse system tables even when DataPoints exist."""
+        sql_input = sample_sql_agent_input.model_copy(update={"database_type": "clickhouse"})
+        catalog_sql = GeneratedSQL(
+            sql="SELECT name FROM system.tables",
+            explanation="ClickHouse catalog query",
+            used_datapoints=[],
+            confidence=0.8,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+
+        issues = sql_agent._validate_sql(catalog_sql, sql_input)
+
+        assert len(issues) == 0
+
+    def test_accepts_mysql_show_tables(self, sql_agent, sample_sql_agent_input):
+        """Test accepts MySQL SHOW TABLES in validation."""
+        sql_input = sample_sql_agent_input.model_copy(update={"database_type": "mysql"})
+        catalog_sql = GeneratedSQL(
+            sql="SHOW TABLES",
+            explanation="MySQL catalog query",
+            used_datapoints=[],
+            confidence=0.8,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+
+        issues = sql_agent._validate_sql(catalog_sql, sql_input)
+
+        assert len(issues) == 0
+
 
 class TestPromptBuilding:
     """Test prompt construction logic."""
@@ -515,6 +595,129 @@ class TestPromptBuilding:
         assert "analytics.fact_sales" in prompt or "fact_sales" in prompt
 
 
+class TestDatabaseContext:
+    """Test database context propagation into SQL generation."""
+
+    def test_introspection_query_respects_database_type(self, sql_agent):
+        postgres_query = sql_agent._build_introspection_query(
+            "what tables are available?",
+            database_type="postgresql",
+        )
+        mysql_query = sql_agent._build_introspection_query(
+            "show tables",
+            database_type="mysql",
+        )
+        clickhouse_query = sql_agent._build_introspection_query(
+            "what tables are available?",
+            database_type="clickhouse",
+        )
+        assert postgres_query is not None
+        assert "information_schema.tables" in postgres_query
+        assert mysql_query == "SHOW TABLES"
+        assert clickhouse_query is not None
+        assert "system.tables" in clickhouse_query
+
+    def test_row_count_fallback_uses_explicit_table(self, sql_agent):
+        memory = InvestigationMemory(
+            query="How many rows are in pg_tables?",
+            datapoints=[],
+            total_retrieved=0,
+            retrieval_mode="hybrid",
+            sources_used=[],
+        )
+        sql_input = SQLAgentInput(
+            query="How many rows are in pg_tables?",
+            investigation_memory=memory,
+        )
+        sql = sql_agent._build_row_count_fallback(sql_input)
+        assert sql == "SELECT COUNT(*) FROM pg_tables"
+
+    def test_row_count_fallback_schema_qualified_table(self, sql_agent):
+        memory = InvestigationMemory(
+            query="How many rows are in information_schema.tables?",
+            datapoints=[],
+            total_retrieved=0,
+            retrieval_mode="hybrid",
+            sources_used=[],
+        )
+        sql_input = SQLAgentInput(
+            query="How many rows are in information_schema.tables?",
+            investigation_memory=memory,
+        )
+        sql = sql_agent._build_row_count_fallback(sql_input)
+        assert sql == "SELECT COUNT(*) FROM information_schema.tables"
+
+    @pytest.mark.asyncio
+    async def test_build_prompt_uses_input_database_context(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(
+            update={
+                "database_type": "clickhouse",
+                "database_url": "clickhouse://user:pass@click.example.com:8123/analytics",
+            }
+        )
+        with patch.object(
+            sql_agent,
+            "_get_live_schema_context",
+            new=AsyncMock(return_value=None),
+        ) as mock_live_context:
+            prompt = await sql_agent._build_generation_prompt(sql_input)
+
+        assert "clickhouse" in prompt.lower()
+        assert mock_live_context.await_count == 1
+        assert mock_live_context.await_args.kwargs["database_type"] == "clickhouse"
+        assert mock_live_context.await_args.kwargs["database_url"] == sql_input.database_url
+        assert mock_live_context.await_args.kwargs["include_profile"] is False
+
+    @pytest.mark.asyncio
+    async def test_prompt_includes_conversation_context(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(
+            update={
+                "query": "sales",
+                "conversation_history": [
+                    {"role": "user", "content": "Show me the first 5 rows"},
+                    {"role": "assistant", "content": "Which table should I use?"},
+                ]
+            }
+        )
+        prompt = await sql_agent._build_generation_prompt(sql_input)
+
+        assert "conversation" in prompt.lower()
+        assert "which table should i use" in prompt.lower()
+        assert "use table sales" in prompt.lower()
+
+    @pytest.mark.asyncio
+    async def test_live_schema_lookup_prefers_input_database_url(self, sql_agent):
+        sql_agent.config.database.url = "postgresql://wrong:wrong@wrong-host:5432/wrong_db"
+
+        mock_connector = AsyncMock()
+        mock_connector.connect = AsyncMock()
+        mock_connector.close = AsyncMock()
+
+        with (
+            patch("backend.agents.sql.PostgresConnector", return_value=mock_connector) as connector_cls,
+            patch.object(
+                sql_agent,
+                "_fetch_live_schema_context",
+                new=AsyncMock(return_value=("schema-context", ["public.sales"])),
+            ),
+        ):
+            context = await sql_agent._get_live_schema_context(
+                query="show tables",
+                database_type="postgresql",
+                database_url="postgresql://demo:demo@chosen-host:5432/chosen_db",
+            )
+
+        assert context == "schema-context"
+        connector_cls.assert_called_once()
+        called = connector_cls.call_args.kwargs
+        assert called["host"] == "chosen-host"
+        assert called["database"] == "chosen_db"
+
+
 class TestErrorHandling:
     """Test error handling."""
 
@@ -541,8 +744,9 @@ class TestErrorHandling:
 
         sql_agent.llm.generate.return_value = invalid_response
 
-        with pytest.raises(SQLGenerationError):
-            await sql_agent(sample_sql_agent_input)
+        output = await sql_agent(sample_sql_agent_input)
+        assert output.needs_clarification is True
+        assert output.generated_sql.clarifying_questions
 
     @pytest.mark.asyncio
     async def test_handles_missing_required_fields(self, sql_agent, sample_sql_agent_input):
@@ -560,8 +764,9 @@ class TestErrorHandling:
 
         sql_agent.llm.generate.return_value = bad_response
 
-        with pytest.raises(SQLGenerationError):
-            await sql_agent(sample_sql_agent_input)
+        output = await sql_agent(sample_sql_agent_input)
+        assert output.needs_clarification is True
+        assert output.generated_sql.clarifying_questions
 
 
 class TestInputValidation:
