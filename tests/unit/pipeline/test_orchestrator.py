@@ -1018,6 +1018,19 @@ class TestIntentGate:
         assert state["answer_source"] == "sql"
         assert state["answer_confidence"] == 0.7
 
+    def test_normalize_answer_metadata_treats_generated_sql_as_sql(self, pipeline):
+        state = {
+            "generated_sql": "SELECT * FROM public.orders LIMIT 2",
+            "answer_source": None,
+            "answer_confidence": None,
+            "error": None,
+        }
+
+        pipeline._normalize_answer_metadata(state)
+
+        assert state["answer_source"] == "sql"
+        assert state["answer_confidence"] == 0.7
+
 
 class TestStreaming:
     """Test streaming functionality."""

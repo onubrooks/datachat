@@ -2678,7 +2678,11 @@ class DataChatPipeline:
                 source = "clarification"
             elif state.get("error"):
                 source = "error"
-            elif state.get("validated_sql") or state.get("query_result"):
+            elif (
+                state.get("validated_sql")
+                or state.get("generated_sql")
+                or state.get("query_result")
+            ):
                 source = "sql"
             elif state.get("intent_gate") in {"exit", "out_of_scope", "small_talk", "setup_help"}:
                 source = "system"
