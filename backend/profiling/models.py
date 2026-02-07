@@ -3,10 +3,22 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class ProfilingLimits(BaseModel):
+    """Safety and budget limits applied during profiling."""
+
+    sample_size: int = Field(default=100, ge=1, le=1000)
+    max_tables: int | None = Field(default=50, ge=1, le=500)
+    max_columns_per_table: int = Field(default=100, ge=1, le=500)
+    query_timeout_seconds: int = Field(default=5, ge=1, le=60)
+    per_table_timeout_seconds: int = Field(default=20, ge=1, le=300)
+    total_timeout_seconds: int = Field(default=180, ge=10, le=1800)
+    fail_fast: bool = False
 
 
 class ColumnProfile(BaseModel):
@@ -43,6 +55,11 @@ class TableProfile(BaseModel):
     columns: list[ColumnProfile]
     relationships: list[RelationshipProfile] = Field(default_factory=list)
     sample_size: int
+    status: Literal["completed", "partial", "failed"] = "completed"
+    error: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    profiled_column_count: int | None = None
+    sampled_column_count: int | None = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -53,6 +70,14 @@ class DatabaseProfile(BaseModel):
     profile_id: UUID = Field(default_factory=uuid4)
     connection_id: UUID
     tables: list[TableProfile]
+    profiling_limits: ProfilingLimits = Field(default_factory=ProfilingLimits)
+    total_tables_discovered: int = 0
+    tables_profiled: int = 0
+    tables_failed: int = 0
+    tables_skipped: int = 0
+    partial_failures: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    stats_cache: dict[str, dict[str, Any]] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -61,6 +86,8 @@ class ProfilingProgress(BaseModel):
 
     total_tables: int
     tables_completed: int
+    tables_failed: int = 0
+    tables_skipped: int = 0
 
 
 class GenerationProgress(BaseModel):

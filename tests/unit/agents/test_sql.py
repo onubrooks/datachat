@@ -837,6 +837,39 @@ class TestDatabaseContext:
         assert called["host"] == "chosen-host"
         assert called["database"] == "chosen_db"
 
+    def test_build_cached_profile_context_uses_matching_focus_tables(self, sql_agent):
+        with patch(
+            "backend.agents.sql.load_profile_cache",
+            return_value={
+                "tables": [
+                    {
+                        "name": "public.orders",
+                        "status": "completed",
+                        "row_count": 100,
+                        "columns": [
+                            {"name": "order_id", "data_type": "integer"},
+                            {"name": "total_amount", "data_type": "numeric"},
+                        ],
+                    },
+                    {
+                        "name": "public.customers",
+                        "status": "completed",
+                        "row_count": 50,
+                        "columns": [{"name": "id", "data_type": "integer"}],
+                    },
+                ]
+            },
+        ):
+            context = sql_agent._build_cached_profile_context(
+                db_type="postgresql",
+                db_url="postgresql://demo:demo@localhost:5432/warehouse",
+                focus_tables=["public.orders"],
+            )
+
+        assert "Auto-profile cache snapshot" in context
+        assert "public.orders" in context
+        assert "public.customers" not in context
+
 
 class TestErrorHandling:
     """Test error handling."""

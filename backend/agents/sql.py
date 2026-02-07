@@ -39,6 +39,7 @@ from backend.models.agent import (
     SQLGenerationError,
     ValidationIssue,
 )
+from backend.profiling.cache import load_profile_cache
 from backend.prompts.loader import PromptLoader
 
 logger = logging.getLogger(__name__)
@@ -882,7 +883,12 @@ class SQLAgent(BaseAgent):
         try:
             await connector.connect()
             context, qualified_tables = await self._fetch_live_schema_context(
-                connector, query, schema_key, include_profile
+                connector,
+                query,
+                schema_key,
+                include_profile,
+                db_type=db_type,
+                db_url=db_url,
             )
             if context:
                 self._live_schema_cache[cache_key] = context
@@ -907,6 +913,9 @@ class SQLAgent(BaseAgent):
         query: str,
         schema_key: str,
         include_profile: bool,
+        *,
+        db_type: str,
+        db_url: str,
     ) -> tuple[str | None, list[str]]:
         tables_query = (
             "SELECT table_schema, table_name "
@@ -941,10 +950,16 @@ class SQLAgent(BaseAgent):
 
         join_context = ""
         profile_context = ""
+        cached_profile_context = ""
         if include_profile and columns_by_table:
             join_context = self._build_join_hints_context(columns_by_table, focus_tables)
             profile_context = await self._build_lightweight_profile_context(
                 connector, schema_key, query, columns_by_table, focus_tables
+            )
+            cached_profile_context = self._build_cached_profile_context(
+                db_type=db_type,
+                db_url=db_url,
+                focus_tables=focus_tables,
             )
 
         return (
@@ -952,6 +967,7 @@ class SQLAgent(BaseAgent):
             f"{columns_context}"
             f"{join_context}"
             f"{profile_context}"
+            f"{cached_profile_context}"
         ), qualified_tables
 
     async def _build_columns_context(
@@ -1289,6 +1305,70 @@ class SQLAgent(BaseAgent):
                 "common_vals": common_vals,
             }
         return stats
+
+    def _build_cached_profile_context(
+        self,
+        *,
+        db_type: str,
+        db_url: str,
+        focus_tables: list[str],
+    ) -> str:
+        snapshot = load_profile_cache(database_type=db_type, database_url=db_url)
+        if not snapshot:
+            return ""
+        table_entries = snapshot.get("tables")
+        if not isinstance(table_entries, list) or not table_entries:
+            return ""
+
+        selected = []
+        focus_set = {table.lower() for table in focus_tables}
+        for entry in table_entries:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                continue
+            if focus_set and name.lower() not in focus_set:
+                continue
+            selected.append(entry)
+            if len(selected) >= 3:
+                break
+
+        if not selected:
+            for entry in table_entries[:3]:
+                if isinstance(entry, dict):
+                    selected.append(entry)
+
+        if not selected:
+            return ""
+
+        lines = []
+        for entry in selected:
+            table_name = str(entry.get("name") or "unknown")
+            status = str(entry.get("status") or "unknown")
+            row_count = entry.get("row_count")
+            line = f"- {table_name}"
+            if row_count is not None:
+                line += f" (~{row_count} rows)"
+            if status != "completed":
+                line += f" [{status}]"
+            lines.append(line)
+            columns = entry.get("columns")
+            if isinstance(columns, list):
+                for column in columns[:4]:
+                    if not isinstance(column, dict):
+                        continue
+                    col_name = str(column.get("name") or "")
+                    data_type = str(column.get("data_type") or "")
+                    if not col_name:
+                        continue
+                    if data_type:
+                        lines.append(f"  - {col_name} ({data_type})")
+                    else:
+                        lines.append(f"  - {col_name}")
+        if not lines:
+            return ""
+        return "\n**Auto-profile cache snapshot:**\n" + "\n".join(lines)
 
     def _catalog_schemas_for_db(self, db_type: str) -> set[str]:
         return get_catalog_schemas(db_type)

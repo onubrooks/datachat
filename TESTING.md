@@ -261,6 +261,29 @@ Auto-profiling and DataPoint generation notes:
 - Generation is async and batched (10 tables per LLM call).
 - Depth levels: `schema_only`, `metrics_basic`, `metrics_full`.
 - UI lets you select tables and track generation progress (WebSocket updates).
+- Profiling is bounded by default (`max_tables`, `max_columns_per_table`, and timeouts).
+- Profiling job progress reports include `tables_failed` and `tables_skipped` for partial coverage.
+
+##### 2.3.1 Profiling hardening verification
+
+```bash
+curl -X POST http://localhost:8000/api/v1/databases/<connection_id>/profile \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sample_size": 50,
+    "max_tables": 5,
+    "max_columns_per_table": 20,
+    "query_timeout_seconds": 3,
+    "per_table_timeout_seconds": 10,
+    "total_timeout_seconds": 60,
+    "fail_fast": false
+  }'
+```
+
+Expected:
+- Job is accepted with `202`.
+- `GET /api/v1/profiling/jobs/{job_id}` eventually reports `status=completed`.
+- `progress.tables_failed` and `progress.tables_skipped` are present (may be `0`).
 
 #### 2.3 Chat Endpoint (Simple Query)
 
