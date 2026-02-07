@@ -17,9 +17,9 @@ import pytest
 from backend.models import (
     AgentMetadata,
     ClassifierAgentOutput,
+    ContextAgentOutput,
     ContextAnswer,
     ContextAnswerAgentOutput,
-    ContextAgentOutput,
     ExecutedQuery,
     ExecutorAgentOutput,
     GeneratedSQL,
@@ -261,6 +261,18 @@ class TestPipelineExecution:
         # ExecutorAgent outputs
         assert result["natural_language_answer"] == "Found 1 result."
         assert result["visualization_hint"] == "table"
+
+    @pytest.mark.asyncio
+    async def test_pipeline_passes_database_context_to_sql_agent(self, mock_agents):
+        """Ensure per-request database type/url reach SQLAgentInput."""
+        await mock_agents.run(
+            "test query",
+            database_type="clickhouse",
+            database_url="clickhouse://user:pass@click.example.com:8123/analytics",
+        )
+        sql_input = mock_agents.sql.execute.call_args.args[0]
+        assert sql_input.database_type == "clickhouse"
+        assert sql_input.database_url == "clickhouse://user:pass@click.example.com:8123/analytics"
 
     @pytest.mark.asyncio
     async def test_routes_to_context_answer_for_exploration(self, mock_agents):

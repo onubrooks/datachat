@@ -4,6 +4,7 @@ Unit Tests for Chat Endpoint
 Tests the /api/v1/chat endpoint with mocked pipeline.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -64,6 +65,17 @@ class TestChatEndpoint:
             has_databases=True,
             has_system_database=True,
             has_datapoints=True,
+            setup_required=[],
+        )
+
+    @pytest.fixture
+    def initialized_without_datapoints_status(self):
+        """Mock credentials-only status (DB connected, no DataPoints)."""
+        return SystemStatus(
+            is_initialized=True,
+            has_databases=True,
+            has_system_database=True,
+            has_datapoints=False,
             setup_required=[],
         )
 
@@ -318,6 +330,62 @@ class TestChatEndpoint:
                 assert "conversation_id" in data
                 assert data["conversation_id"].startswith("conv_")
                 assert len(data["conversation_id"]) > 5
+
+    @pytest.mark.asyncio
+    async def test_chat_allows_credentials_only_mode_and_adds_notice(
+        self, client, mock_pipeline_result, initialized_without_datapoints_status
+    ):
+        with patch(
+            "backend.api.routes.chat.SystemInitializer.status",
+            new=AsyncMock(return_value=initialized_without_datapoints_status),
+        ):
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
+                response = client.post(
+                    "/api/v1/chat",
+                    json={"message": "What's the total revenue?"},
+                )
+                assert response.status_code == 200
+                payload = response.json()
+                assert "Live schema mode" in payload["answer"]
+                assert mock_pipeline.run.called
+
+    @pytest.mark.asyncio
+    async def test_chat_uses_target_database_for_pipeline(
+        self, client, mock_pipeline_result, initialized_status
+    ):
+        manager = AsyncMock()
+        manager.get_connection = AsyncMock(
+            return_value=SimpleNamespace(
+                database_type="clickhouse",
+                database_url=SimpleNamespace(get_secret_value=lambda: "clickhouse://u:p@host:8123/db"),
+            )
+        )
+        with patch(
+            "backend.api.routes.chat.SystemInitializer.status",
+            new=AsyncMock(return_value=initialized_status),
+        ):
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": manager},
+            ):
+                response = client.post(
+                    "/api/v1/chat",
+                    json={
+                        "message": "What tables are available?",
+                        "target_database": "db-123",
+                    },
+                )
+                assert response.status_code == 200
+                kwargs = mock_pipeline.run.call_args.kwargs
+                assert kwargs["database_type"] == "clickhouse"
+                assert kwargs["database_url"] == "clickhouse://u:p@host:8123/db"
 
     @pytest.mark.asyncio
     async def test_chat_preserves_conversation_id_if_provided(

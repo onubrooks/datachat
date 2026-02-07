@@ -57,23 +57,26 @@ User Query (Natural Language)
 ### Level 1: Schema-Aware Querying (Zero Setup)
 
 **What it does:**
-- Auto-profiles database schema on first connection
-- Generates ManagedDataPoints with table/column metadata and statistics
-- Enables immediate natural language querying without configuration
+- Connects with only target database credentials
+- Uses live schema snapshots (tables + columns) for SQL generation context
+- Enables immediate natural language querying without DataPoints
+- Optionally adds ManagedDataPoints via profiling for higher answer quality
 
 **Technical Implementation:**
-- Schema profiler runs on database connection
-- Generates metadata: column types, nullability, cardinality, sample values
-- Stores in `datapoints/managed/` (read-only, auto-generated)
-- Updates incrementally when schema changes detected
+- Live metadata path:
+  - SQL agent fetches a schema snapshot from the active target database
+  - Snapshot is injected into SQL generation and correction prompts
+- Profiling path (optional):
+  - Schema profiler generates ManagedDataPoints with richer metadata
+  - ManagedDataPoints are stored in `datapoints/managed/` and indexed for retrieval
 
 **User Experience:**
 ```
-User connects to database → DataChat profiles schema → User can immediately query
+User connects to database → DataChat can immediately query in live schema mode
 "Show me top 10 customers by revenue" → Works instantly
 ```
 
-**Storage Decision:** ManagedDataPoints stored as YAML files in `datapoints/managed/` for version control and transparency. Loaded into memory on startup for fast retrieval. PostgreSQL metadata cache optional for large schemas (1000+ tables).
+**Storage Decision:** ManagedDataPoints remain YAML files in `datapoints/managed/` for version control and transparency when profiling is enabled. Live schema mode does not require persisted DataPoints.
 
 ---
 

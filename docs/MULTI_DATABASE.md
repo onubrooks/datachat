@@ -73,3 +73,8 @@ curl -X POST http://localhost:8000/api/v1/chat \
 ```
 
 If `target_database` is omitted, DataChat uses the default connection.
+
+When `target_database` is provided, DataChat now applies that connection for:
+- SQL execution
+- SQL generation dialect/context
+- Live schema snapshot used by SQL generation fallback/correction

@@ -491,6 +491,14 @@ class SQLAgentInput(AgentInput):
     investigation_memory: InvestigationMemory = Field(
         ..., description="Context retrieved by ContextAgent"
     )
+    database_type: Literal["postgresql", "clickhouse", "mysql"] = Field(
+        default="postgresql",
+        description="Target database type for dialect-specific SQL generation",
+    )
+    database_url: str | None = Field(
+        default=None,
+        description="Database URL override for live schema lookups",
+    )
     max_correction_attempts: int = Field(
         default=3, ge=1, le=5, description="Maximum number of self-correction attempts"
     )
@@ -506,6 +514,8 @@ class SQLAgentInput(AgentInput):
                     "retrieval_mode": "hybrid",
                     "sources_used": [],
                 },
+                "database_type": "postgresql",
+                "database_url": "postgresql://user:pass@host:5432/warehouse",
                 "max_correction_attempts": 3,
             }
         }

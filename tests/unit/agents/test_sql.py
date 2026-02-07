@@ -515,6 +515,73 @@ class TestPromptBuilding:
         assert "analytics.fact_sales" in prompt or "fact_sales" in prompt
 
 
+class TestDatabaseContext:
+    """Test database context propagation into SQL generation."""
+
+    def test_introspection_query_respects_database_type(self, sql_agent):
+        postgres_query = sql_agent._build_introspection_query(
+            "what tables are available?",
+            database_type="postgresql",
+        )
+        clickhouse_query = sql_agent._build_introspection_query(
+            "what tables are available?",
+            database_type="clickhouse",
+        )
+        assert postgres_query is not None
+        assert "information_schema.tables" in postgres_query
+        assert clickhouse_query is None
+
+    @pytest.mark.asyncio
+    async def test_build_prompt_uses_input_database_context(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(
+            update={
+                "database_type": "clickhouse",
+                "database_url": "clickhouse://user:pass@click.example.com:8123/analytics",
+            }
+        )
+        with patch.object(
+            sql_agent,
+            "_get_live_schema_context",
+            new=AsyncMock(return_value=None),
+        ) as mock_live_context:
+            prompt = await sql_agent._build_generation_prompt(sql_input)
+
+        assert "clickhouse" in prompt.lower()
+        assert mock_live_context.await_count == 1
+        assert mock_live_context.await_args.kwargs["database_type"] == "clickhouse"
+        assert mock_live_context.await_args.kwargs["database_url"] == sql_input.database_url
+
+    @pytest.mark.asyncio
+    async def test_live_schema_lookup_prefers_input_database_url(self, sql_agent):
+        sql_agent.config.database.url = "postgresql://wrong:wrong@wrong-host:5432/wrong_db"
+
+        mock_connector = AsyncMock()
+        mock_connector.connect = AsyncMock()
+        mock_connector.close = AsyncMock()
+
+        with (
+            patch("backend.agents.sql.PostgresConnector", return_value=mock_connector) as connector_cls,
+            patch.object(
+                sql_agent,
+                "_fetch_live_schema_context",
+                new=AsyncMock(return_value="schema-context"),
+            ),
+        ):
+            context = await sql_agent._get_live_schema_context(
+                query="show tables",
+                database_type="postgresql",
+                database_url="postgresql://demo:demo@chosen-host:5432/chosen_db",
+            )
+
+        assert context == "schema-context"
+        connector_cls.assert_called_once()
+        called = connector_cls.call_args.kwargs
+        assert called["host"] == "chosen-host"
+        assert called["database"] == "chosen_db"
+
+
 class TestErrorHandling:
     """Test error handling."""
 

@@ -216,7 +216,10 @@ class SQLAgent(BaseAgent):
         Raises:
             LLMError: If LLM call fails
         """
-        fallback_sql = self._build_introspection_query(input.query)
+        fallback_sql = self._build_introspection_query(
+            input.query,
+            input.database_type,
+        )
         if fallback_sql:
             return GeneratedSQL(
                 sql=fallback_sql,
@@ -480,9 +483,14 @@ class SQLAgent(BaseAgent):
 
         return issues
 
-    def _build_introspection_query(self, query: str) -> str | None:
+    def _build_introspection_query(
+        self,
+        query: str,
+        database_type: str | None = None,
+    ) -> str | None:
         text = query.lower().strip()
-        if getattr(self.config.database, "db_type", "postgresql") != "postgresql":
+        target_db_type = database_type or getattr(self.config.database, "db_type", "postgresql")
+        if target_db_type != "postgresql":
             return None
         patterns = [
             r"\bwhat tables\b",
@@ -593,7 +601,11 @@ class SQLAgent(BaseAgent):
         """
         # Extract schema and business context
         schema_context = self._format_schema_context(input.investigation_memory)
-        live_context = await self._get_live_schema_context(input.query)
+        live_context = await self._get_live_schema_context(
+            query=input.query,
+            database_type=input.database_type,
+            database_url=input.database_url,
+        )
         if live_context:
             if schema_context == "No schema context available":
                 schema_context = live_context
@@ -608,20 +620,27 @@ class SQLAgent(BaseAgent):
             user_query=input.query,
             schema_context=schema_context,
             business_context=business_context,
-            backend=getattr(self.config.database, "db_type", "postgresql"),
+            backend=input.database_type or getattr(self.config.database, "db_type", "postgresql"),
             user_preferences={"default_limit": 1000},
         )
 
-    async def _get_live_schema_context(self, query: str) -> str | None:
-        db_type = getattr(self.config.database, "db_type", "postgresql")
+    async def _get_live_schema_context(
+        self,
+        query: str,
+        database_type: str | None = None,
+        database_url: str | None = None,
+    ) -> str | None:
+        db_type = database_type or getattr(self.config.database, "db_type", "postgresql")
         if db_type != "postgresql":
             return None
 
-        db_url = str(self.config.database.url) if self.config.database.url else None
+        db_url = database_url or (
+            str(self.config.database.url) if self.config.database.url else None
+        )
         if not db_url:
             return None
 
-        cache_key = f"{db_url}::{query.lower().strip()}"
+        cache_key = f"{db_type}::{db_url}::{query.lower().strip()}"
         cached = self._live_schema_cache.get(cache_key)
         if cached:
             return cached

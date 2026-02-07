@@ -9,8 +9,8 @@ LangGraph-based pipeline that orchestrates all agents:
 - Error recovery and graceful degradation
 """
 
-import logging
 import json
+import logging
 import re
 import time
 from collections.abc import AsyncIterator
@@ -35,10 +35,10 @@ from backend.connectors.postgres import PostgresConnector
 from backend.knowledge.retriever import Retriever
 from backend.models import (
     ClassifierAgentInput,
-    ContextAnswerAgentInput,
     ContextAgentInput,
-    ExecutorAgentInput,
+    ContextAnswerAgentInput,
     EvidenceItem,
+    ExecutorAgentInput,
     GeneratedSQL,
     Message,
     SQLAgentInput,
@@ -664,7 +664,6 @@ class DataChatPipeline:
 
         name = payload.get("name")
         table_name = payload.get("table_name")
-        schema = payload.get("schema")
         business_purpose = payload.get("business_purpose")
         key_columns = payload.get("key_columns") or []
         column_names = []
@@ -737,6 +736,7 @@ class DataChatPipeline:
                 conversation_history=state.get("conversation_history", []),
                 investigation_memory=investigation_memory,
                 database_type=state.get("database_type", "postgresql"),
+                database_url=state.get("database_url"),
             )
 
             output = await self.sql.execute(input_data)

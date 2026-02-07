@@ -92,9 +92,10 @@ psql "$SYSTEM_DATABASE_URL" -f scripts/demo_seed.sql
 datachat dp sync --datapoints-dir datapoints/demo
 ```
 
-### Step 3: Initialize DataPoints (REQUIRED)
+### Step 3: Initialize DataPoints (RECOMMENDED)
 
-⚠️ **Without DataPoints, DataChat cannot understand your database schema.**
+DataChat works with just database credentials in **live schema mode**.
+Load DataPoints to improve semantic accuracy, business context, and evidence quality.
 
 DataPoints are JSON files that describe:
 - Database tables and columns
@@ -369,24 +370,24 @@ curl -X POST http://localhost:8000/api/v1/chat \
 
 If you skip Step 3 and don't create DataPoints:
 
-❌ **What Fails:**
-1. ContextAgent returns no schema information
-2. SQLAgent tries to generate SQL without knowing table/column names
-3. Queries will likely fail or return errors
-4. System has no understanding of business logic
+⚠️ **What You Lose:**
+1. Business-semantic context (metric definitions, glossary, domain rules)
+2. Richer retrieval/evidence quality from curated DataPoints
+3. Stronger disambiguation for ambiguous metric language
 
 ✅ **What Still Works:**
-- Health checks
-- API endpoints
-- General conversation (non-database questions)
+1. Schema/table/column discovery via live system catalog queries
+2. SQL generation/execution using live schema snapshots
+3. Health checks, API endpoints, and chat workflows
 
 **Example Without DataPoints:**
 ```
 User: "How many users do we have?"
 
-Response: "I don't have information about your database schema.
-Please add DataPoints describing your tables so I can help query your data.
-You can also run datachat demo to try a sample dataset."
+Response: "There are 12,487 users.
+
+Live schema mode: DataPoints are not loaded yet. Answers are generated from
+database metadata and query results only."
 ```
 
 **Example With DataPoints:**
@@ -408,8 +409,8 @@ Before your first query:
 - [ ] System database set if you want demo/registry (`SYSTEM_DATABASE_URL`)
 - [ ] OpenAI API key configured
 - [ ] System initialized (Web UI or `datachat setup`)
-- [ ] DataPoints approved or created for key tables
-- [ ] DataPoints loaded (`datachat dp sync` for manual flow)
+- [ ] DataPoints approved or created for key tables (recommended)
+- [ ] DataPoints loaded (`datachat dp sync` for manual flow, recommended)
 - [ ] System status shows healthy (`datachat status`)
 - [ ] Test with simple query
 

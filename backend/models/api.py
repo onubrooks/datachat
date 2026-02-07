@@ -185,14 +185,21 @@ class SetupStep(BaseModel):
 class SystemStatusResponse(BaseModel):
     """Initialization status response."""
 
-    is_initialized: bool = Field(..., description="Whether the system is ready for queries")
+    is_initialized: bool = Field(
+        ...,
+        description=(
+            "Whether the system can answer queries (target DB connected). "
+            "DataPoints are optional enrichment."
+        ),
+    )
     has_databases: bool = Field(..., description="Whether a database connection is available")
     has_system_database: bool = Field(
         ..., description="Whether a system database is available for registry/profiling"
     )
     has_datapoints: bool = Field(..., description="Whether DataPoints are loaded")
     setup_required: list[SetupStep] = Field(
-        default_factory=list, description="Required setup steps"
+        default_factory=list,
+        description="Remaining setup/recommended steps",
     )
 
 
@@ -215,14 +222,21 @@ class SystemInitializeResponse(BaseModel):
     """Initialization response payload."""
 
     message: str = Field(..., description="Initialization status message")
-    is_initialized: bool = Field(..., description="Whether the system is ready for queries")
+    is_initialized: bool = Field(
+        ...,
+        description=(
+            "Whether the system can answer queries (target DB connected). "
+            "DataPoints are optional enrichment."
+        ),
+    )
     has_databases: bool = Field(..., description="Whether a database connection is available")
     has_system_database: bool = Field(
         ..., description="Whether a system database is available for registry/profiling"
     )
     has_datapoints: bool = Field(..., description="Whether DataPoints are loaded")
     setup_required: list[SetupStep] = Field(
-        default_factory=list, description="Required setup steps"
+        default_factory=list,
+        description="Remaining setup/recommended steps",
     )
 
 
