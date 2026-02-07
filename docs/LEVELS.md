@@ -63,6 +63,20 @@ Level 1: Schema-Aware Querying
 - Statistics: min, max, avg, cardinality
 - Inferred relationships (FK detection)
 
+**Deterministic Catalog Intelligence (Credentials-Only):**
+- Runs before SQL-generation LLM calls for schema-shape intents
+- Handles table/column discovery, row counts, and sample-row requests via system catalog queries
+- Generates targeted clarifications when table selection is ambiguous
+- Injects compact ranked schema context into SQL prompts when LLM generation is needed
+
+**Supported Catalog Query Templates:**
+- PostgreSQL
+- MySQL
+- ClickHouse
+- BigQuery
+- Redshift
+  Connector execution support remains dependent on available runtime connectors.
+
 **Query Generation:**
 - Multi-agent pipeline (Classifier → Context → SQL → Validator → Executor)
 - Context Agent loads relevant ManagedDataPoints
@@ -115,6 +129,7 @@ Query completed in 2.3s
 - Regenerates SQL every time (slower, potentially inconsistent)
 - No performance optimization (queries raw tables)
 - No understanding of metric relationships
+- For engines without runtime connectors, catalog templates are available but execution is deferred until connector support is enabled
 
 ---
 

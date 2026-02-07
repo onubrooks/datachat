@@ -209,6 +209,30 @@ Insights:
 
         assert "no results" in result.executed_query.natural_language_answer.lower()
 
+    @pytest.mark.asyncio
+    async def test_empty_information_schema_columns_is_non_hallucinatory(
+        self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
+    ):
+        sample_input.validated_sql.sql = (
+            "SELECT table_schema, table_name, column_name, data_type "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'sales' AND table_schema = 'public'"
+        )
+        mock_postgres_connector.execute = AsyncMock(
+            return_value=ConnectorQueryResult(
+                rows=[],
+                row_count=0,
+                columns=["table_schema", "table_name", "column_name", "data_type"],
+                execution_time_ms=9.0,
+            )
+        )
+        mock_llm_provider.set_response("Answer: hallucinated")
+
+        result = await executor_agent.execute(sample_input)
+
+        assert "No columns were found for table `sales`." == result.executed_query.natural_language_answer
+        assert result.metadata.llm_calls == 0
+
     # ============================================================================
     # Timeout Tests
     # ============================================================================
@@ -506,3 +530,28 @@ Insights:
         parsed = executor_agent._parse_correction_response(content)
 
         assert parsed == "SELECT COUNT(*) FROM public.orders"
+
+    def test_extract_table_name_from_sql_handles_bigquery_backticks_with_hyphen(
+        self, executor_agent
+    ):
+        sql = "SELECT * FROM `my-project.dataset.table` LIMIT 5"
+        extracted = executor_agent._extract_table_name_from_sql(sql)
+        assert extracted == "my-project.dataset.table"
+
+    def test_deterministic_summary_uses_full_bigquery_table_name(
+        self, executor_agent
+    ):
+        query_result = ConnectorQueryResult(
+            rows=[{"id": 1, "amount": 100}],
+            row_count=1,
+            columns=["id", "amount"],
+            execution_time_ms=1.0,
+        )
+        summary = executor_agent._generate_deterministic_summary(
+            "show one row",
+            "SELECT * FROM `my-project.dataset.table` LIMIT 1",
+            query_result,
+        )
+        assert summary is not None
+        answer, _insights = summary
+        assert "my-project.dataset.table" in answer

@@ -9,6 +9,7 @@ class CatalogTemplates(NamedTuple):
     """System-catalog templates for metadata discovery."""
 
     list_tables: str
+    list_columns: str
 
 
 _CATALOG_TEMPLATES: dict[str, CatalogTemplates] = {
@@ -19,6 +20,13 @@ _CATALOG_TEMPLATES: dict[str, CatalogTemplates] = {
             "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
             "ORDER BY table_schema, table_name"
         ),
+        list_columns=(
+            "SELECT table_schema, table_name, column_name, data_type "
+            "FROM information_schema.columns "
+            "WHERE table_name = '{table}' "
+            "{schema_predicate}"
+            "ORDER BY table_schema, table_name, ordinal_position"
+        ),
     ),
     "mysql": CatalogTemplates(
         list_tables=(
@@ -26,6 +34,13 @@ _CATALOG_TEMPLATES: dict[str, CatalogTemplates] = {
             "FROM information_schema.tables "
             "WHERE table_schema NOT IN ('mysql', 'performance_schema', 'information_schema', 'sys') "
             "ORDER BY table_schema, table_name"
+        ),
+        list_columns=(
+            "SELECT table_schema, table_name, column_name, data_type "
+            "FROM information_schema.columns "
+            "WHERE table_name = '{table}' "
+            "{schema_predicate}"
+            "ORDER BY table_schema, table_name, ordinal_position"
         ),
     ),
     "clickhouse": CatalogTemplates(
@@ -35,12 +50,26 @@ _CATALOG_TEMPLATES: dict[str, CatalogTemplates] = {
             "WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema') "
             "ORDER BY database, name"
         ),
+        list_columns=(
+            "SELECT database AS table_schema, table AS table_name, name AS column_name, type AS data_type "
+            "FROM system.columns "
+            "WHERE table = '{table}' "
+            "{schema_predicate}"
+            "ORDER BY table_schema, table_name, position"
+        ),
     ),
     "bigquery": CatalogTemplates(
         list_tables=(
             "SELECT table_schema, table_name "
             "FROM INFORMATION_SCHEMA.TABLES "
             "ORDER BY table_schema, table_name"
+        ),
+        list_columns=(
+            "SELECT table_schema, table_name, column_name, data_type "
+            "FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE table_name = '{table}' "
+            "{schema_predicate}"
+            "ORDER BY table_schema, table_name, ordinal_position"
         ),
     ),
     "redshift": CatalogTemplates(
@@ -50,6 +79,14 @@ _CATALOG_TEMPLATES: dict[str, CatalogTemplates] = {
             "WHERE schemaname NOT IN ('pg_catalog', 'information_schema') "
             "GROUP BY schemaname, tablename "
             "ORDER BY schemaname, tablename"
+        ),
+        list_columns=(
+            "SELECT schemaname AS table_schema, tablename AS table_name, "
+            "\"column\" AS column_name, type AS data_type "
+            "FROM pg_table_def "
+            "WHERE tablename = '{table}' "
+            "{schema_predicate}"
+            "ORDER BY table_schema, table_name, column_name"
         ),
     ),
 }
@@ -134,6 +171,45 @@ def get_list_tables_query(database_type: str | None) -> str | None:
     db_type = normalize_database_type(database_type)
     templates = _CATALOG_TEMPLATES.get(db_type)
     return templates.list_tables if templates else None
+
+
+def get_list_columns_query(
+    database_type: str | None,
+    *,
+    table_name: str,
+    schema_name: str | None = None,
+) -> str | None:
+    """Return catalog query used for column discovery."""
+    db_type = normalize_database_type(database_type)
+    templates = _CATALOG_TEMPLATES.get(db_type)
+    if not templates:
+        return None
+
+    if schema_name:
+        schema_predicate = f"AND table_schema = '{schema_name}' "  # nosec B608
+        if db_type == "clickhouse":
+            schema_predicate = f"AND database = '{schema_name}' "  # nosec B608
+        if db_type == "redshift":
+            schema_predicate = f"AND schemaname = '{schema_name}' "  # nosec B608
+    else:
+        schema_predicate = ""
+        if db_type in {"postgresql", "redshift"}:
+            schema_predicate = (
+                "AND table_schema NOT IN ('pg_catalog', 'information_schema') "
+            )
+        elif db_type == "mysql":
+            schema_predicate = (
+                "AND table_schema NOT IN ('mysql', 'performance_schema', 'information_schema', 'sys') "
+            )
+        elif db_type == "clickhouse":
+            schema_predicate = (
+                "AND database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema') "
+            )
+
+    return templates.list_columns.format(
+        table=table_name,
+        schema_predicate=schema_predicate,
+    )
 
 
 def get_catalog_schemas(database_type: str | None) -> set[str]:

@@ -12,6 +12,7 @@ from typing import Any
 
 from backend.agents.base import BaseAgent
 from backend.config import get_settings
+from backend.database.catalog import CatalogIntelligence
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
 from backend.models.agent import (
@@ -40,11 +41,36 @@ class ContextAnswerAgent(BaseAgent):
         else:
             self.llm = llm_provider
         self.prompts = PromptLoader()
+        self.catalog = CatalogIntelligence()
 
     async def execute(self, input: ContextAnswerAgentInput) -> ContextAnswerAgentOutput:
         logger.info(f"[{self.name}] Generating context-only answer")
 
         try:
+            deterministic = self.catalog.build_context_response(
+                query=input.query,
+                investigation_memory=input.investigation_memory,
+            )
+            if deterministic:
+                context_answer = ContextAnswer(
+                    answer=deterministic.answer,
+                    confidence=deterministic.confidence,
+                    evidence=[
+                        EvidenceItem(datapoint_id=item)
+                        for item in deterministic.evidence_datapoint_ids[:3]
+                    ],
+                    needs_sql=deterministic.needs_sql,
+                    clarifying_questions=deterministic.clarifying_questions,
+                )
+                metadata = self._create_metadata()
+                metadata.llm_calls = 0
+                return ContextAnswerAgentOutput(
+                    success=True,
+                    context_answer=context_answer,
+                    metadata=metadata,
+                    next_agent=None,
+                )
+
             datapoint_count = self._count_managed_datapoints(input.query)
             if datapoint_count is not None:
                 context_answer = ContextAnswer(

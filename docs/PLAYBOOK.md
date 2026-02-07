@@ -34,6 +34,14 @@ Instrument everything:
 - Performance metrics (latency, throughput, errors)
 - User analytics (feature usage, success rates)
 
+### 5. Deterministic-First Catalog Flows
+For schema/shape intents, do not start with LLM generation:
+- Detect deterministic intents first: list tables, list columns, sample rows, row counts.
+- Use system-catalog query templates per engine (`postgresql/mysql/clickhouse/bigquery/redshift`).
+- Only call the SQL-generation LLM when deterministic planning is not applicable.
+- If required slots are missing (for example table name), return targeted clarifying questions.
+- Pass compact ranked schema context into LLM prompts when the flow continues to generation.
+
 ---
 
 ## Code Organization Patterns
