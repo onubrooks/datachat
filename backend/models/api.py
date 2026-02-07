@@ -63,6 +63,10 @@ class ChatResponse(BaseModel):
     """Response model for chat endpoint."""
 
     answer: str = Field(..., description="Natural language answer to the query")
+    clarifying_questions: list[str] = Field(
+        default_factory=list,
+        description="Clarifying questions when more detail is required",
+    )
     sql: str | None = Field(None, description="Generated SQL query (if applicable)")
     data: dict[str, list] | None = Field(None, description="Query results in columnar format")
     visualization_hint: str | None = Field(None, description="Suggested visualization type")

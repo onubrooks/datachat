@@ -257,6 +257,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
         payload = {
             "event": "complete",
             "answer": answer,
+            "clarifying_questions": result.get("clarifying_questions", []),
             "sql": sql_query,
             "data": data_result,
             "visualization_hint": visualization_hint,

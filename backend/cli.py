@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -47,14 +48,21 @@ from backend.tools import ToolExecutor, initialize_tools
 from backend.tools.base import ToolContext
 from backend.settings_store import apply_config_defaults
 
+os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+os.environ.setdefault("GRPC_TRACE", "")
+
 console = Console()
 API_BASE_URL = os.getenv("DATA_CHAT_API_URL", "http://localhost:8000")
 
 
 def configure_cli_logging() -> None:
-    logging.basicConfig(level=logging.WARNING)
+    logging.basicConfig(level=logging.INFO)
+    info_filter = logging.Filter()
+    info_filter.filter = lambda record: record.levelno == logging.INFO  # type: ignore[method-assign]
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(info_filter)
     for logger_name in ("backend", "httpx", "openai", "asyncio"):
-        logging.getLogger(logger_name).setLevel(logging.WARNING)
+        logging.getLogger(logger_name).setLevel(logging.INFO)
 
 
 # ============================================================================
@@ -331,6 +339,13 @@ def _emit_query_output(
         console.print(metrics)
         console.print()
 
+    clarifying_questions = result.get("clarifying_questions") or []
+    if clarifying_questions:
+        console.print("[bold]Clarifying questions:[/bold]")
+        for question in clarifying_questions:
+            console.print(f"- {question}")
+        console.print()
+
     if evidence:
         _print_evidence(result)
         console.print()
@@ -350,6 +365,30 @@ def _print_query_output(
             _emit_query_output(answer, sql, data, result, evidence, show_metrics)
     else:
         _emit_query_output(answer, sql, data, result, evidence, show_metrics)
+
+
+def _should_exit_chat(query: str) -> bool:
+    text = query.strip().lower()
+    if not text:
+        return False
+    exit_phrases = {
+        "exit",
+        "quit",
+        "q",
+        "bye",
+        "goodbye",
+        "stop",
+        "end chat",
+        "end the chat",
+        "close chat",
+        "close the chat",
+        "stop chat",
+    }
+    if text in exit_phrases:
+        return True
+    if re.search(r"\b(end|stop|quit|exit)\b.*\b(chat|conversation)\b", text):
+        return True
+    return False
 
 
 # ============================================================================
@@ -400,7 +439,7 @@ def chat(evidence: bool, pager: bool):
                     if not query.strip():
                         continue
 
-                    if query.lower() in ["exit", "quit", "q"]:
+                    if _should_exit_chat(query):
                         console.print("\n[yellow]Goodbye![/yellow]")
                         break
 
@@ -467,27 +506,51 @@ def ask(query: str, evidence: bool, pager: bool):
     async def run_query():
         try:
             pipeline = await create_pipeline_from_config()
+            conversation_history = []
+            current_query = query
+            clarification_attempts = 0
 
-            # Show loading with progress
-            with console.status("[cyan]Processing query...[/cyan]", spinner="dots"):
-                result = await pipeline.run(query=query)
+            while True:
+                # Show loading with progress
+                with console.status("[cyan]Processing query...[/cyan]", spinner="dots"):
+                    result = await pipeline.run(
+                        query=current_query,
+                        conversation_history=conversation_history,
+                    )
 
-            # Extract results
-            answer = result.get("natural_language_answer", "No answer generated")
-            sql = result.get("validated_sql") or result.get("generated_sql")
-            query_result = result.get("query_result")
-            data = _build_columnar_data(query_result)
+                # Extract results
+                answer = result.get("natural_language_answer", "No answer generated")
+                sql = result.get("validated_sql") or result.get("generated_sql")
+                query_result = result.get("query_result")
+                data = _build_columnar_data(query_result)
 
-            # Display results
-            _print_query_output(
-                answer=answer,
-                sql=sql,
-                data=data,
-                result=result,
-                evidence=evidence,
-                show_metrics=False,
-                pager=pager or evidence,
-            )
+                # Display results
+                _print_query_output(
+                    answer=answer,
+                    sql=sql,
+                    data=data,
+                    result=result,
+                    evidence=evidence,
+                    show_metrics=False,
+                    pager=pager or evidence,
+                )
+
+                clarifying_questions = result.get("clarifying_questions") or []
+                if not clarifying_questions or clarification_attempts >= 2:
+                    break
+
+                followup = console.input("[bold cyan]Clarification:[/bold cyan] ").strip()
+                if not followup:
+                    break
+
+                conversation_history.extend(
+                    [
+                        {"role": "user", "content": current_query},
+                        {"role": "assistant", "content": answer},
+                    ]
+                )
+                current_query = followup
+                clarification_attempts += 1
 
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")

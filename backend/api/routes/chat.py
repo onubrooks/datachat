@@ -149,6 +149,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
 
         response = ChatResponse(
             answer=answer,
+            clarifying_questions=result.get("clarifying_questions", []),
             sql=sql_query,
             data=data,
             visualization_hint=visualization_hint,

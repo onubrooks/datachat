@@ -74,6 +74,9 @@ postgresql://user:password@host:5432/dbname?sslmode=require
 **Credentials:** The URL must include username/password. The setup flow does not prompt
 for password separately.
 
+**Env precedence:** Local runs prefer values in `.env` over shell environment variables.
+Set `DATA_CHAT_ENV_SOURCE=system` to force system env to take priority.
+
 If you prefer a guided setup, use `datachat setup` or run `datachat demo` to load sample data.
 
 ### Optional: Load Demo Data
@@ -96,6 +99,7 @@ datachat dp sync --datapoints-dir datapoints/demo
 
 DataChat works with just database credentials in **live schema mode**.
 Load DataPoints to improve semantic accuracy, business context, and evidence quality.
+See `docs/CREDENTIALS_ONLY_MODE.md` for capabilities and limits.
 
 DataPoints are JSON files that describe:
 - Database tables and columns

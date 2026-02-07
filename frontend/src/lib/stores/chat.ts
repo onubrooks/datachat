@@ -13,6 +13,7 @@ export interface Message extends ChatMessage {
   sql?: string | null;
   data?: Record<string, unknown[]> | null;
   visualization_hint?: string | null;
+  clarifying_questions?: string[];
   sources?: Array<{
     datapoint_id: string;
     type: string;
@@ -162,6 +163,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         role: "assistant",
         content: response.answer,
         timestamp: new Date(),
+        clarifying_questions: response.clarifying_questions,
         sql: response.sql,
         data: response.data,
         visualization_hint: response.visualization_hint,

@@ -92,6 +92,7 @@ That's it! DataChat is now running with:
 >   (or `datapoints/demo` if you loaded the demo dataset)
 >
 > **Without DataPoints, DataChat runs in live schema mode (metadata + query results only).**
+> See `docs/CREDENTIALS_ONLY_MODE.md` for capabilities and limits.
 
 **AWS RDS note:** Use SSL if required by your instance:
 ```
@@ -128,6 +129,9 @@ cp .env.example .env
 # Generate encryption key for saved DB credentials:
 python -c "import secrets; print(secrets.token_hex(32))"
 # Set DATABASE_CREDENTIALS_KEY in .env
+
+# Local runs prefer values in .env over shell environment variables.
+# Set DATA_CHAT_ENV_SOURCE=system to force system env to take priority.
 
 # 4. Start the server
 uvicorn backend.api.main:app --reload --port 8000

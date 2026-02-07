@@ -1,6 +1,7 @@
 # Manual Testing: PR-001 + PR-002
 
 This guide validates:
+
 - PR-001: credentials-only mode (database required, DataPoints optional)
 - PR-002: `target_database` propagates into SQL generation context and execution
 
@@ -41,6 +42,7 @@ curl -X POST http://localhost:8000/api/v1/system/initialize \
 ```
 
 Expected:
+
 - `is_initialized` is `true`
 - `has_databases` is `true`
 - `has_datapoints` can be `false`
@@ -52,6 +54,7 @@ curl http://localhost:8000/api/v1/system/status
 ```
 
 Expected:
+
 - `is_initialized=true` even when `has_datapoints=false`
 - `setup_required` may include DataPoints as a recommended step
 
@@ -66,6 +69,7 @@ curl -X POST http://localhost:8000/api/v1/chat \
 ```
 
 Expected:
+
 - HTTP 200
 - Response includes an answer (or safe SQL-related failure if the query itself is invalid)
 - Answer includes:
@@ -91,6 +95,20 @@ In DB B:
 CREATE TABLE IF NOT EXISTS sales (total_amount numeric);
 TRUNCATE TABLE sales;
 INSERT INTO sales(total_amount) VALUES (100), (200);
+```
+
+CLI shortcut (psql):
+
+```bash
+createdb db_a
+createdb db_b
+
+# Replace credentials in the URLs if yours differ.
+psql "postgresql://postgres:postgres@localhost:5432/db_a" \
+  -c "CREATE TABLE IF NOT EXISTS sales (amount numeric); TRUNCATE TABLE sales; INSERT INTO sales(amount) VALUES (10), (20);"
+
+psql "postgresql://postgres:postgres@localhost:5432/db_b" \
+  -c "CREATE TABLE IF NOT EXISTS sales (total_amount numeric); TRUNCATE TABLE sales; INSERT INTO sales(total_amount) VALUES (100), (200);"
 ```
 
 ### Step B2: Register both DBs
@@ -129,11 +147,12 @@ curl -X POST http://localhost:8000/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{
     "message": "What is total sales?",
-    "target_database": "<DB_B_CONNECTION_ID>"
+    "target_database": "3d0072e4-603a-4a73-ad00-c3edf2fb34d9"
   }'
 ```
 
 Expected:
+
 - SQL uses `sales.total_amount` (DB B column) rather than `sales.amount`
 - Query succeeds and returns sum from DB B values
 
@@ -142,6 +161,7 @@ If SQL still references `sales.amount` and fails on DB B, target database contex
 ## 5) Optional Manual Test C: WebSocket target_database
 
 Use any WebSocket client to connect to:
+
 - `ws://localhost:8000/api/v1/ws/chat`
 
 Send payload:
@@ -155,6 +175,6 @@ Send payload:
 ```
 
 Expected:
+
 - Stream completes with `event="complete"`
 - Returned SQL/answer aligns with DB B schema (`total_amount`)
-

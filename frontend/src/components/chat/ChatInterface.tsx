@@ -60,6 +60,7 @@ export function ChatInterface() {
   const [toolApprovalMessage, setToolApprovalMessage] = useState<string | null>(null);
   const [toolApprovalRunning, setToolApprovalRunning] = useState(false);
   const [toolApprovalError, setToolApprovalError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -147,6 +148,7 @@ export function ChatInterface() {
           onComplete: (response) => {
             updateLastMessage({
               content: response.answer,
+              clarifying_questions: response.clarifying_questions,
               sql: response.sql,
               data: response.data,
               visualization_hint: response.visualization_hint,
@@ -386,7 +388,14 @@ export function ChatInterface() {
         )}
 
         {messages.map((message) => (
-          <Message key={message.id} message={message} />
+          <Message
+            key={message.id}
+            message={message}
+            onClarifyingAnswer={(question) => {
+              setInput(`Regarding "${question}": `);
+              inputRef.current?.focus();
+            }}
+          />
         ))}
 
         {/* Agent Status */}
@@ -414,6 +423,7 @@ export function ChatInterface() {
       <div className="flex-shrink-0 border-t p-4">
         <div className="flex gap-2">
           <Input
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyPress}

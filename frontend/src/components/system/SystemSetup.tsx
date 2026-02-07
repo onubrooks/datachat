@@ -60,8 +60,9 @@ export function SystemSetup({
           <div>
             <h2 className="text-sm font-semibold">Finish DataChat setup</h2>
             <p className="text-xs text-muted-foreground">
-              DataChat needs a database connection and DataPoints before it can answer
-              queries. The system database is optional unless you want registry/profiling
+              DataChat needs a target database connection before it can answer queries.
+              DataPoints are optional but recommended for higher-quality, business-aware
+              responses. The system database is optional unless you want registry/profiling
               or demo data.
             </p>
             <p className="text-xs text-muted-foreground mt-2">

@@ -18,6 +18,7 @@ os.environ.setdefault(
     "DATABASE_URL",
     "postgresql://user:pass@localhost:5432/testdb",
 )
+os.environ.setdefault("DATA_CHAT_ENV_SOURCE", "system")
 
 # ============================================================================
 # Pytest Configuration

@@ -13,10 +13,12 @@ Usage:
 """
 
 import logging
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from pydantic import Field, PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -463,6 +465,17 @@ class Settings(BaseSettings):
         )
 
 
+_DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+
+
+def _apply_dotenv_precedence() -> None:
+    env_source = os.getenv("DATA_CHAT_ENV_SOURCE", "dotenv").lower()
+    if env_source not in {"dotenv", "envfile", "file"}:
+        return
+    if _DOTENV_PATH.exists():
+        load_dotenv(_DOTENV_PATH, override=True)
+
+
 @lru_cache
 def get_settings() -> Settings:
     """
@@ -479,6 +492,7 @@ def get_settings() -> Settings:
         >>> settings = get_settings()
         >>> print(settings.openai.api_key)
     """
+    _apply_dotenv_precedence()
     return Settings()
 
 

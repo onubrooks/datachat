@@ -74,6 +74,11 @@ curl -X POST http://localhost:8000/api/v1/chat \
 
 If `target_database` is omitted, DataChat uses the default connection.
 
+Notes:
+- SQL generation and live schema lookups respect the `target_database` selection.
+- When DataPoints are not loaded, DataChat runs in live schema mode using the
+  selected database's catalog metadata and query results.
+
 When `target_database` is provided, DataChat now applies that connection for:
 - SQL execution
 - SQL generation dialect/context

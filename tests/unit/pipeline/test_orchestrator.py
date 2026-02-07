@@ -275,6 +275,25 @@ class TestPipelineExecution:
         assert sql_input.database_url == "clickhouse://user:pass@click.example.com:8123/analytics"
 
     @pytest.mark.asyncio
+    async def test_live_table_catalog_uses_database_url_connector(self, pipeline):
+        mock_catalog = AsyncMock()
+        mock_catalog.is_connected = False
+        mock_catalog.connect = AsyncMock()
+        mock_catalog.get_schema = AsyncMock(return_value=[])
+        mock_catalog.close = AsyncMock()
+        pipeline._build_catalog_connector = lambda *_args, **_kwargs: mock_catalog
+
+        result = await pipeline._get_live_table_catalog(
+            database_type="postgresql",
+            database_url="postgresql://user:pass@localhost:5432/warehouse",
+        )
+
+        assert result is None
+        mock_catalog.connect.assert_awaited()
+        mock_catalog.get_schema.assert_awaited()
+        mock_catalog.close.assert_awaited()
+
+    @pytest.mark.asyncio
     async def test_routes_to_context_answer_for_exploration(self, mock_agents):
         mock_agents.classifier.execute = AsyncMock(
             return_value=ClassifierAgentOutput(
