@@ -142,12 +142,16 @@ DataChat combines three capabilities that no other tool offers:
 - [ ] Receive accurate SQL and query results within 5 seconds
 - [ ] See generated SQL for learning/verification
 - [ ] Export results as CSV or share link
+- [ ] Low-confidence semantic prompts trigger targeted clarifying questions (instead of guessed answers)
+- [ ] Every response includes source mode and confidence metadata (`answer_source`, `answer_confidence`)
 
 **Technical Requirements:**
 - Multi-agent pipeline (Classifier → Context → SQL → Validator → Executor)
 - Schema profiler runs on first connection, caches metadata
 - LLM generates SQL with >95% success rate
 - Query timeout after 30 seconds with helpful error message
+- Confidence gate before execution for ambiguous/low-confidence semantic intents
+- Clarification flow bounded by configurable max clarification turns
 
 ---
 

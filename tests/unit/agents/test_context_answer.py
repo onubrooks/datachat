@@ -131,3 +131,35 @@ async def test_context_answer_agent_falls_back_to_llm_for_non_catalog_query(
     assert output.context_answer.evidence[0].datapoint_id == "table_users_001"
     assert output.context_answer.needs_sql is False
     assert output.metadata.llm_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_context_answer_agent_gates_low_confidence_semantic_answer(
+    mock_async_function,
+):
+    agent = ContextAnswerAgent()
+    response = LLMResponse(
+        content='{"answer":"Maybe revenue is in users.","confidence":0.21,"evidence":[],"needs_sql":false,"clarifying_questions":[]}',
+        model="mock",
+        usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        finish_reason="stop",
+        provider="mock",
+    )
+    agent.llm.generate = mock_async_function(return_value=response)
+
+    input_data = ContextAnswerAgentInput(
+        query="How is revenue trending?",
+        conversation_history=[],
+        investigation_memory=_schema_memory(),
+        intent="exploration",
+        context_confidence=0.2,
+    )
+
+    output = await agent.execute(input_data)
+
+    assert output.context_answer.confidence == 0.2
+    assert output.context_answer.clarifying_questions
+    question = output.context_answer.clarifying_questions[0].lower()
+    assert "revenue" in question
+    assert "public.users" in question
+    assert "not confident enough" in output.context_answer.answer.lower()

@@ -7,6 +7,7 @@ Uses LLM to compose a grounded answer and evidence list.
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 class ContextAnswerAgent(BaseAgent):
     """Generate a context-only answer from DataPoints."""
+
+    LOW_CONFIDENCE_THRESHOLD = 0.55
 
     def __init__(self, llm_provider=None):
         super().__init__(name="ContextAnswerAgent")
@@ -111,6 +114,10 @@ class ContextAnswerAgent(BaseAgent):
             context_answer = self._parse_response(response.content, input)
             if self._requires_sql(input.query):
                 context_answer.needs_sql = True
+            context_answer = self._maybe_gate_low_confidence_semantic_answer(
+                context_answer,
+                input,
+            )
 
             metadata = self._create_metadata()
             metadata.llm_calls = 1
@@ -234,6 +241,40 @@ class ContextAnswerAgent(BaseAgent):
             clarifying_questions=[],
         )
 
+    def _maybe_gate_low_confidence_semantic_answer(
+        self,
+        context_answer: ContextAnswer,
+        input: ContextAnswerAgentInput,
+    ) -> ContextAnswer:
+        """Ask for clarification instead of returning low-confidence semantic answers."""
+        if context_answer.needs_sql:
+            return context_answer
+        if context_answer.clarifying_questions:
+            return context_answer
+        if not self._is_semantic_query(input.query, input.intent):
+            return context_answer
+
+        confidence_signal = max(
+            context_answer.confidence,
+            float(input.context_confidence or 0.0),
+        )
+        if confidence_signal >= self.LOW_CONFIDENCE_THRESHOLD:
+            return context_answer
+
+        candidate_tables = self._candidate_tables(input.investigation_memory)
+        question = self._build_targeted_clarification_question(
+            input.query,
+            candidate_tables,
+        )
+        answer_intro = "I am not confident enough to answer that from current context."
+        return ContextAnswer(
+            answer=answer_intro,
+            confidence=0.2,
+            evidence=context_answer.evidence[:2],
+            needs_sql=False,
+            clarifying_questions=[question],
+        )
+
     def _summarize_datapoint(self, datapoint) -> str:
         if datapoint.datapoint_type != "Schema":
             return f"{datapoint.name} looks most relevant to your question."
@@ -273,6 +314,101 @@ class ContextAnswerAgent(BaseAgent):
             "number of",
         )
         return any(keyword in query_lower for keyword in keywords)
+
+    def _is_semantic_query(self, query: str, intent: str | None) -> bool:
+        query_lower = query.lower().strip()
+        if not query_lower:
+            return False
+        if intent in {"exploration", "explanation", "meta"}:
+            return True
+        if self._requires_sql(query_lower):
+            return False
+        semantic_keywords = (
+            "revenue",
+            "sales",
+            "growth",
+            "trend",
+            "churn",
+            "retention",
+            "conversion",
+            "performance",
+            "quality",
+            "insight",
+            "why",
+            "explain",
+        )
+        return any(token in query_lower for token in semantic_keywords)
+
+    def _candidate_tables(self, memory) -> list[str]:
+        tables: list[str] = []
+        for datapoint in memory.datapoints:
+            if datapoint.datapoint_type != "Schema":
+                continue
+            metadata = datapoint.metadata if isinstance(datapoint.metadata, dict) else {}
+            table_name = metadata.get("table_name") or metadata.get("table")
+            if table_name:
+                tables.append(str(table_name))
+        return list(dict.fromkeys(tables))
+
+    def _build_targeted_clarification_question(
+        self, query: str, candidate_tables: list[str]
+    ) -> str:
+        focus = self._extract_focus_hint(query)
+        if candidate_tables:
+            shortlist = ", ".join(candidate_tables[:5])
+            if focus:
+                return f"Which table should I use for {focus}? Options: {shortlist}."
+            return f"Which table should I use? Options: {shortlist}."
+        if focus:
+            return f"Which table contains {focus}?"
+        return "Which table should I use to answer this?"
+
+    def _extract_focus_hint(self, query: str) -> str | None:
+        query_lower = query.lower()
+        for token in (
+            "revenue",
+            "sales",
+            "growth",
+            "churn",
+            "retention",
+            "conversion",
+            "registrations",
+            "orders",
+            "users",
+            "customers",
+        ):
+            if token in query_lower:
+                return token
+
+        cleaned = re.sub(r"[^a-z0-9\s]+", " ", query_lower)
+        words = [
+            word
+            for word in cleaned.split()
+            if word
+            and word
+            not in {
+                "what",
+                "which",
+                "how",
+                "is",
+                "are",
+                "the",
+                "a",
+                "an",
+                "of",
+                "for",
+                "in",
+                "to",
+                "me",
+                "show",
+                "list",
+                "tell",
+                "about",
+            }
+        ]
+        if not words:
+            return None
+        return " ".join(words[:3])
 
     def _count_managed_datapoints(self, query: str) -> int | None:
         query_lower = query.lower()

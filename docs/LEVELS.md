@@ -69,6 +69,12 @@ Level 1: Schema-Aware Querying
 - Generates targeted clarifications when table selection is ambiguous
 - Injects compact ranked schema context into SQL prompts when LLM generation is needed
 
+**Confidence Gating and Clarification Flow (Credentials-Only):**
+- Low-confidence semantic responses are gated behind clarifying questions instead of guessed answers
+- Clarifications are table-targeted when candidate tables are available
+- Clarification loops are bounded (`max_clarifications`) to avoid infinite back-and-forth
+- Responses consistently carry `answer_source` and `answer_confidence` metadata for UI/CLI rendering
+
 **Supported Catalog Query Templates:**
 - PostgreSQL
 - MySQL
