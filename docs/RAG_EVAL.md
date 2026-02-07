@@ -77,11 +77,16 @@ python scripts/eval_runner.py --mode retrieval --dataset eval/retrieval.json
 
 # End-to-end checks
 python scripts/eval_runner.py --mode qa --dataset eval/qa.json
+
+# Intent + credentials-only checks
+python scripts/eval_runner.py --mode intent --dataset eval/intent_credentials.json
 ```
 
 Notes:
 - Retrieval mode infers hits from `sources` returned by `/api/v1/chat`.
 - Answer type checks use a simple heuristic (single value vs table vs time series).
+- Intent mode tracks source accuracy, clarification behavior, SQL pattern checks,
+  and latency/LLM-call averages for credentials-only flows.
 
 ---
 

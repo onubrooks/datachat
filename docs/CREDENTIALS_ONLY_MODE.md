@@ -1,45 +1,49 @@
 # Credentials-Only Mode
 
-Credentials-only mode lets DataChat answer questions with just database credentials,
-without requiring DataPoints. This is also called "live schema mode."
+Credentials-only mode lets DataChat answer questions with only database credentials
+and live metadata, without loading DataPoints.
 
 ## How It Works
 
-1. Live schema snapshot (tables + columns).
-2. Lightweight stats cache for top matched tables (Postgres only):
-   - Row count estimates (pg_class)
-   - Column stats (pg_stats)
-3. Join hints (heuristic) based on *_id patterns (Postgres only).
-4. SQL generation uses the live snapshot when DataPoints are missing.
+1. Live schema snapshot from system catalogs (tables and columns).
+2. Deterministic SQL fallbacks for common requests:
+   - list tables
+   - sample rows
+   - row counts
+3. Lightweight profile context (Postgres):
+   - row estimates from `pg_class`
+   - column stats from `pg_stats`
+4. Join inference heuristics from `*_id` column patterns.
+5. LLM SQL generation as fallback when deterministic paths are not enough.
+
+## Support Matrix
+
+| Database | Catalog query templates | Live connector execution | Notes |
+| --- | --- | --- | --- |
+| PostgreSQL | Yes | Yes | Full credentials-only path. |
+| ClickHouse | Yes | Yes | Catalog templates + connector supported. |
+| MySQL | Yes | Not yet | Templates/validation ready; connector pending. |
+| BigQuery | Yes | Not yet | Templates ready for connector onboarding. |
+| Redshift | Yes | Not yet | Templates ready; execution will work after connector integration. |
+
+Important:
+- "Catalog query templates" means DataChat can generate correct system-catalog SQL.
+- "Live connector execution" means DataChat can connect and execute those queries today.
 
 ## Capabilities vs. Limits
 
-| Capability | Works? | Notes |
+| Capability | Status | Notes |
 | --- | --- | --- |
-| Basic table/column discovery | Yes | Live schema snapshot. |
-| Row counts | Yes | Uses COUNT(*) fallback or pg_class estimates. |
-| Simple aggregations (sum/avg) | Usually | Best when column names are descriptive. |
-| Join inference | Partial | Heuristic via *_id columns (Postgres only). |
-| Business logic (revenue, refunds) | No | Requires DataPoints or docs. |
-| Metric consistency | No | Definitions vary without DataPoints. |
-| Complex data modeling | Partial | Lacks dbt/ETL context. |
-| System catalog queries | Yes | Postgres, MySQL, ClickHouse catalogs supported. |
-| BigQuery/Redshift catalogs | Not yet | Planned; use Postgres mode for Redshift. |
+| Basic table discovery | Supported | Uses catalog tables directly. |
+| Basic column discovery | Supported | Included in live schema context. |
+| Row count questions | Supported | Deterministic fallback when table is explicit. |
+| Sample rows | Supported | Deterministic fallback with explicit table hints. |
+| Join suggestions | Partial | Heuristic only, may miss complex relationships. |
+| Business metrics (strict KPI definitions) | Limited | Requires DataPoints/docs for precision. |
+| Cross-domain semantic interpretation | Limited | Improves with DataPoints and domain docs. |
 
-## When to Use
+## Best Practices
 
-- Quick exploration of a new database.
-- Prototyping questions before defining DataPoints.
-- Diagnostics against system catalogs.
-
-## When Not to Use
-
-- Production metrics that require precise definitions.
-- KPI reporting with strict business rules.
-- Queries that need ETL or semantic model awareness.
-
-## Tips for Better Results
-
-- Use explicit table names in the question when possible.
-- Ask for samples first if you are unsure about column names.
-- Add DataPoints for critical tables/metrics once patterns stabilize.
+- Ask with explicit table names (`first 5 rows from public.orders`).
+- For ambiguous metrics, specify both table and column.
+- Move critical metrics to DataPoints once definitions stabilize.

@@ -21,6 +21,11 @@ from urllib.parse import urlparse
 from backend.agents.base import BaseAgent
 from backend.config import get_settings
 from backend.connectors.postgres import PostgresConnector
+from backend.database.catalog_templates import (
+    get_catalog_aliases,
+    get_catalog_schemas,
+    get_list_tables_query,
+)
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
 from backend.models.agent import (
@@ -426,7 +431,9 @@ class SQLAgent(BaseAgent):
         issues: list[ValidationIssue] = []
         sql = generated_sql.sql.strip().upper()
         db_type = input.database_type or getattr(self.config.database, "db_type", "postgresql")
-        is_show_statement = db_type == "mysql" and sql.startswith("SHOW")
+        is_show_statement = sql.startswith("SHOW") or sql.startswith("DESCRIBE") or sql.startswith(
+            "DESC"
+        )
 
         # Basic syntax checks
         if is_show_statement:
@@ -564,7 +571,6 @@ class SQLAgent(BaseAgent):
         database_type: str | None = None,
     ) -> str | None:
         text = query.lower().strip()
-        target_db_type = database_type or getattr(self.config.database, "db_type", "postgresql")
         patterns = [
             r"\bwhat tables\b",
             r"\blist tables\b",
@@ -575,24 +581,10 @@ class SQLAgent(BaseAgent):
         ]
         if not any(re.search(pattern, text) for pattern in patterns):
             return None
-
-        if target_db_type == "postgresql":
-            return (
-                "SELECT table_schema, table_name "
-                "FROM information_schema.tables "
-                "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
-                "ORDER BY table_schema, table_name"
-            )
-        if target_db_type == "mysql":
-            return "SHOW TABLES"
-        if target_db_type == "clickhouse":
-            return (
-                "SELECT database, name "
-                "FROM system.tables "
-                "WHERE database NOT IN ('system', 'INFORMATION_SCHEMA') "
-                "ORDER BY database, name"
-            )
-        return None
+        target_db_type = database_type or getattr(
+            self.config.database, "db_type", "postgresql"
+        )
+        return get_list_tables_query(target_db_type)
 
     def _build_row_count_fallback(self, input: SQLAgentInput) -> str | None:
         if not self._requires_row_count(input.query):
@@ -624,7 +616,9 @@ class SQLAgent(BaseAgent):
     def _build_sample_rows_fallback(self, input: SQLAgentInput) -> str | None:
         if not self._requires_sample_rows(input.query):
             return None
-        table_name = self._select_schema_table(input)
+        table_name = self._extract_explicit_table_name(input.query)
+        if not table_name:
+            table_name = self._select_schema_table(input)
         if not table_name:
             return None
         limit = self._extract_sample_limit(input.query)
@@ -731,12 +725,22 @@ class SQLAgent(BaseAgent):
             r"\brows?\s+in\s+([a-zA-Z0-9_.]+)",
             r"\bcount\s+of\s+rows?\s+in\s+([a-zA-Z0-9_.]+)",
             r"\brecords?\s+in\s+([a-zA-Z0-9_.]+)",
+            r"\b(?:first|top|last)\s+\d+\s+rows?\s+(?:from|in|of)\s+([a-zA-Z0-9_.]+)",
+            r"\bshow\s+me\s+(?:the\s+)?(?:first|top|last)?\s*\d*\s*rows?\s+(?:from|in|of)\s+([a-zA-Z0-9_.]+)",
+            r"\b(?:preview|sample)\s+(?:rows?\s+(?:from|in|of)\s+)?([a-zA-Z0-9_.]+)",
+            r"\btable\s+([a-zA-Z0-9_.]+)",
         ]
+        lowered = query.lower()
         for pattern in patterns:
-            match = re.search(pattern, query.lower())
+            match = re.search(pattern, lowered)
             if match:
                 table_name = match.group(1).rstrip(".,;:?)")
-                if table_name:
+                if table_name and table_name not in {
+                    "table",
+                    "tables",
+                    "row",
+                    "rows",
+                }:
                     return table_name
         return None
 
@@ -1248,45 +1252,10 @@ class SQLAgent(BaseAgent):
         return stats
 
     def _catalog_schemas_for_db(self, db_type: str) -> set[str]:
-        base = {"information_schema"}
-        if db_type == "postgresql":
-            return base | {"pg_catalog"}
-        if db_type == "clickhouse":
-            return base | {"system"}
-        if db_type == "mysql":
-            return base | {"mysql", "performance_schema", "sys"}
-        return base
+        return get_catalog_schemas(db_type)
 
     def _catalog_aliases_for_db(self, db_type: str) -> set[str]:
-        if db_type == "postgresql":
-            return {
-                "pg_tables",
-                "pg_class",
-                "pg_namespace",
-                "pg_attribute",
-                "pg_stat_all_tables",
-                "pg_stat_user_tables",
-                "pg_indexes",
-                "pg_constraint",
-                "pg_description",
-                "pg_type",
-                "pg_roles",
-                "pg_stat_activity",
-                "pg_stat_database",
-                "pg_locks",
-                "pg_settings",
-                "svv_table_info",
-                "svv_columns",
-                "svv_tables",
-                "svv_views",
-                "svv_schema",
-                "stl_query",
-                "stl_scan",
-                "stl_wlm_query",
-                "svl_qlog",
-                "svl_query_report",
-            }
-        return set()
+        return get_catalog_aliases(db_type)
 
     def _is_catalog_table(
         self, table: str, catalog_schemas: set[str], catalog_aliases: set[str]
@@ -1493,25 +1462,9 @@ class SQLAgent(BaseAgent):
             except json.JSONDecodeError as e:
                 logger.debug(f"Invalid JSON in LLM response: {e}")
 
-        # Fallback: extract SQL from code block or text.
-        sql_match = re.search(r"```sql\s*(.*?)```", content, re.DOTALL | re.IGNORECASE)
-        if sql_match:
-            sql_text = sql_match.group(1).strip()
-            if sql_text:
-                return GeneratedSQL(
-                    sql=sql_text,
-                    explanation="Generated SQL",
-                    used_datapoints=[],
-                    confidence=0.6,
-                    assumptions=[],
-                    clarifying_questions=[],
-                )
-
-        sql_inline = re.search(
-            r"(SELECT|WITH)\s+.*?(;|$)", content, re.DOTALL | re.IGNORECASE
-        )
-        if sql_inline:
-            sql_text = sql_inline.group(0).strip().rstrip(";")
+        # Fallback: extract SQL from markdown/code/text output.
+        sql_text = self._extract_sql_from_response(content)
+        if sql_text:
             return GeneratedSQL(
                 sql=sql_text,
                 explanation="Generated SQL",
@@ -1524,6 +1477,55 @@ class SQLAgent(BaseAgent):
         logger.warning("Failed to parse LLM response: Response missing 'sql' field")
         logger.debug(f"LLM response content: {content}")
         raise ValueError("Failed to parse LLM response: Response missing 'sql' field")
+
+    def _extract_sql_from_response(self, content: str) -> str | None:
+        """Extract SQL from non-JSON LLM output."""
+        code_blocks = re.findall(r"```(?:sql)?\s*(.*?)```", content, re.DOTALL | re.IGNORECASE)
+        for block in code_blocks:
+            candidate = block.strip()
+            extracted = self._extract_sql_statement(candidate)
+            if extracted:
+                return extracted
+
+        # Common key-value style fallback: sql: SELECT ...
+        inline_sql_field = re.search(
+            r"\bsql\s*[:=]\s*(.+)$",
+            content,
+            re.IGNORECASE | re.MULTILINE,
+        )
+        if inline_sql_field:
+            candidate = inline_sql_field.group(1).strip()
+            extracted = self._extract_sql_statement(candidate)
+            if extracted:
+                return extracted
+
+        return self._extract_sql_statement(content)
+
+    def _extract_sql_statement(self, text: str) -> str | None:
+        """Extract a SQL statement from free text."""
+        # Prefer SQL-looking statements at line boundaries to avoid
+        # accidentally parsing natural language like "show you ...".
+        select_like = re.compile(
+            r"(?:^|[\r\n])\s*(SELECT|WITH|EXPLAIN|DESCRIBE|DESC)\b[\s\S]*?(?:;|$)",
+            re.IGNORECASE,
+        )
+        show_like = re.compile(
+            r"(?:^|[\r\n])\s*SHOW\s+"
+            r"(?:TABLES|FULL\s+TABLES|COLUMNS|DATABASES|SCHEMAS|CREATE\s+TABLE)\b"
+            r"[\s\S]*?(?:;|$)",
+            re.IGNORECASE,
+        )
+
+        for pattern in (select_like, show_like):
+            match = pattern.search(text)
+            if not match:
+                continue
+            statement = match.group(0).strip()
+            statement = re.sub(r"\s+", " ", statement).strip().rstrip(";")
+            if statement and "{" not in statement and "}" not in statement:
+                return statement
+
+        return None
 
     def _validate_input(self, input: SQLAgentInput) -> None:
         """
