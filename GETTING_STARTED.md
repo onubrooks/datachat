@@ -1,585 +1,180 @@
 # Getting Started with DataChat
 
-Complete guide for setting up and using DataChat with your database.
+This guide reflects current, implemented behavior.
+
+## 1. Decide Your Mode
+
+### Mode A: Credentials-only (fastest)
+
+Use this when you want immediate querying with only DB credentials.
+
+Required:
+- `DATABASE_URL`
+- one LLM key (for example `LLM_OPENAI_API_KEY`)
+
+DataPoints are optional in this mode.
+
+### Mode B: Registry + profiling (recommended for teams)
+
+Use this when you need:
+- multiple saved database connections
+- `target_database` routing
+- profiling + pending DataPoint review/approval
+
+Additional required env:
+- `SYSTEM_DATABASE_URL`
+- `DATABASE_CREDENTIALS_KEY` (Fernet key)
 
 ---
 
-## Understanding DataChat Architecture
+## 2. Install
 
-DataChat consists of two databases:
-
-1. **System Database** - Registry/profiling metadata and demo data
-2. **Target Database** - The database you want to query with natural language
-
-If you don't have a database ready, you can run the demo dataset to get started quickly.
-
----
-
-## Initial Setup Steps
-
-### Step 1: Install DataChat
-
-**Option A: Docker Compose (Recommended)**
 ```bash
 git clone https://github.com/onubrooks/datachat.git
 cd datachat
-cp .env.example .env
-# Generate encryption key for saved DB credentials:
-python -c "import secrets; print(secrets.token_hex(32))"
-# Set DATABASE_CREDENTIALS_KEY in .env
-```
-
-**Option B: Manual Installation**
-```bash
-# Backend (from repo root)
 python3 -m venv venv
 source venv/bin/activate
 pip install -e .
-
-# Frontend
-cd frontend
-npm install
 ```
 
-Verify the CLI is available:
+Optional frontend:
 
 ```bash
-datachat --version
+cd frontend
+npm install
+cd ..
 ```
 
-Setup saves database URLs to `~/.datachat/config.json` for reuse.
+---
 
-### Step 2: Configure Your Database
+## 3. Configure Environment
 
-Edit `.env` file:
+```bash
+cp .env.example .env
+```
+
+Minimum credentials-only example:
 
 ```env
-# Target database (queries)
 DATABASE_URL=postgresql://user:password@host:5432/your_database
-
-# System database (registry/profiling/demo)
-SYSTEM_DATABASE_URL=postgresql://user:password@host:5432/datachat
-
-# Required: OpenAI API key for LLM
 LLM_OPENAI_API_KEY=sk-...
 ```
 
-**Important:** Replace `your_database` with your actual database name that contains the data you want to query.
+Optional registry/profiling add-ons:
 
-**AWS RDS note:** Many RDS Postgres instances require SSL. Use:
+```env
+SYSTEM_DATABASE_URL=postgresql://user:password@host:5432/datachat
+DATABASE_CREDENTIALS_KEY=your_fernet_key
 ```
-postgresql://user:password@host:5432/dbname?sslmode=require
-```
 
-**Credentials:** The URL must include username/password. The setup flow does not prompt
-for password separately.
-
-**Env precedence:** Local runs prefer values in `.env` over shell environment variables.
-Set `DATA_CHAT_ENV_SOURCE=system` to force system env to take priority.
-
-If you prefer a guided setup, use `datachat setup` or run `datachat demo` to load sample data.
-
-### Optional: Load Demo Data
-
-If you want to try DataChat quickly, load the demo dataset:
+Generate a Fernet key:
 
 ```bash
-# Quick setup (recommended)
-datachat demo --persona base --reset
-
-# Or manual steps
-# Seed demo tables
-psql "$SYSTEM_DATABASE_URL" -f scripts/demo_seed.sql
-
-# Load demo DataPoints
-datachat dp sync --datapoints-dir datapoints/demo
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-### Step 3: Initialize DataPoints (RECOMMENDED)
+---
 
-DataChat works with just database credentials in **live schema mode**.
-Load DataPoints to improve semantic accuracy, business context, and evidence quality.
-See `docs/CREDENTIALS_ONLY_MODE.md` for capabilities and limits.
+## 4. Start Services
 
-DataPoints are JSON files that describe:
-- Database tables and columns
-- Business logic and metrics
-- Data relationships
+Backend:
 
-#### Option A: Auto-Generate from Database Schema
+```bash
+uvicorn backend.api.main:app --reload --port 8000
+```
 
-Use the setup wizard to auto-profile your database and generate draft DataPoints.
-This requires the backend running (see Step 5).
+Optional frontend:
 
-**Web UI:**
-1. Open <http://localhost:3000>
-2. Follow the setup prompt and enable **Auto-profile**
-3. Review pending DataPoints in **Database Management**
-4. Approve the DataPoints you want to activate (approvals replace existing
-   approved DataPoints for the same table)
+```bash
+cd frontend
+npm run dev
+```
 
-SQL generation also uses a live schema snapshot (tables + columns) from the
-target database to avoid missing-table errors.
+Or run both (if frontend deps are installed):
 
-**CLI:**
+```bash
+datachat dev
+```
+
+---
+
+## 5. Verify Setup
+
+```bash
+datachat status
+datachat ask "list tables"
+```
+
+Expected:
+- database connectivity passes
+- query returns SQL/result or a targeted clarification
+
+---
+
+## 6. Optional Setup Wizard
+
 ```bash
 datachat setup
 ```
 
-When prompted, enable auto-profiling. Approved DataPoints are loaded into the
-vector store and knowledge graph immediately.
+What it does today:
+- validates/saves database URLs
+- initializes runtime components
+- can trigger auto-profiling when registry prerequisites are present
 
-**Auto-profiling prerequisites:** Set `SYSTEM_DATABASE_URL` and `DATABASE_CREDENTIALS_KEY`
-to enable the registry and profiling jobs.
+---
 
-#### Option B: Manually Create DataPoints
+## 7. Optional DataPoints (quality boost)
 
-Create a DataPoint file for each important table:
+DataPoints improve semantic accuracy for business questions.
 
-**Example: `datapoints/tables/users.json`**
-```json
-{
-  "datapoint_id": "table_users_001",
-  "type": "Schema",
-  "name": "Users Table",
-  "table_name": "public.users",
-  "schema": "public",
-  "business_purpose": "Stores user account information and authentication data",
-  "key_columns": [
-    {
-      "name": "id",
-      "type": "INTEGER",
-      "business_meaning": "Unique user identifier, auto-incremented",
-      "nullable": false
-    },
-    {
-      "name": "email",
-      "type": "VARCHAR(255)",
-      "business_meaning": "User's email address, used for login",
-      "nullable": false
-    },
-    {
-      "name": "created_at",
-      "type": "TIMESTAMP",
-      "business_meaning": "When the user account was created",
-      "nullable": false
-    },
-    {
-      "name": "is_active",
-      "type": "BOOLEAN",
-      "business_meaning": "Whether the user account is active",
-      "nullable": false
-    }
-  ],
-  "relationships": [
-    {
-      "target_table": "orders",
-      "join_column": "user_id",
-      "cardinality": "1:N",
-      "description": "Each user can have multiple orders"
-    }
-  ],
-  "common_queries": [
-    "SELECT * FROM users WHERE email = ?",
-    "SELECT COUNT(*) FROM users WHERE is_active = true"
-  ],
-  "gotchas": [
-    "Always filter by is_active for production queries",
-    "Email field is case-insensitive"
-  ],
-  "freshness": "Real-time",
-  "owner": "engineering@company.com"
-}
-```
-
-**Example: `datapoints/tables/orders.json`**
-```json
-{
-  "datapoint_id": "table_orders_001",
-  "type": "Schema",
-  "name": "Orders Table",
-  "table_name": "public.orders",
-  "schema": "public",
-  "business_purpose": "Stores customer orders and purchase information",
-  "key_columns": [
-    {
-      "name": "id",
-      "type": "INTEGER",
-      "business_meaning": "Unique order identifier",
-      "nullable": false
-    },
-    {
-      "name": "user_id",
-      "type": "INTEGER",
-      "business_meaning": "Foreign key to users table",
-      "nullable": false
-    },
-    {
-      "name": "total_amount",
-      "type": "DECIMAL(10,2)",
-      "business_meaning": "Total order amount in USD",
-      "nullable": false
-    },
-    {
-      "name": "status",
-      "type": "VARCHAR(50)",
-      "business_meaning": "Order status: pending, completed, cancelled",
-      "nullable": false
-    },
-    {
-      "name": "created_at",
-      "type": "TIMESTAMP",
-      "business_meaning": "When the order was placed",
-      "nullable": false
-    }
-  ],
-  "relationships": [
-    {
-      "target_table": "users",
-      "join_column": "user_id",
-      "cardinality": "N:1",
-      "description": "Each order belongs to one user"
-    }
-  ],
-  "common_queries": [
-    "SELECT SUM(total_amount) FROM orders WHERE status = 'completed'",
-    "SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC"
-  ],
-  "gotchas": [
-    "Filter by status for accurate revenue calculations",
-    "Use created_at for date range queries, not updated_at"
-  ],
-  "freshness": "T-1 (updated daily at midnight)",
-  "owner": "sales@company.com"
-}
-```
-
-**Example: Business Metric `datapoints/metrics/revenue.json`**
-```json
-{
-  "datapoint_id": "metric_revenue_001",
-  "type": "Business",
-  "name": "Total Revenue",
-  "calculation": "SUM(orders.total_amount) WHERE orders.status = 'completed'",
-  "synonyms": [
-    "revenue",
-    "sales",
-    "income",
-    "total sales",
-    "earnings"
-  ],
-  "business_rules": [
-    "Only include completed orders",
-    "Exclude cancelled and refunded orders",
-    "Convert to USD if multi-currency"
-  ],
-  "related_tables": ["orders", "payments"],
-  "owner": "finance@company.com"
-}
-```
-
-### Step 4: Load DataPoints into DataChat
+Load existing DataPoints:
 
 ```bash
-# Using CLI (manual flow)
 datachat dp sync --datapoints-dir ./datapoints
-
-# Or add individually
-datachat dp add schema ./datapoints/tables/users.json
-datachat dp add schema ./datapoints/tables/orders.json
-datachat dp add business ./datapoints/metrics/revenue.json
-
-# Verify they're loaded
-datachat dp list
 ```
 
-If you used auto-profiling, you can skip this step after approving DataPoints.
-
-**Expected Output:**
-```
-                    DataPoints
-┏━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
-┃ Type      ┃ Name            ┃ Owner          ┃
-┡━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
-│ Schema    │ Users Table     │ engineering... │
-│ Schema    │ Orders Table    │ sales...       │
-│ Business  │ Total Revenue   │ finance...     │
-└───────────┴─────────────────┴────────────────┘
-
-3 DataPoint(s) found
-```
-
-### Step 5: Start DataChat
+Review generated pending DataPoints (from profiling):
 
 ```bash
-# With Docker
-docker-compose up
-
-# Or manually
-# Terminal 1: Backend (from repo root)
-uvicorn backend.api.main:app --reload
-
-# Terminal 2: Frontend
-cd frontend
-npm run dev
-
-# Or run both with the CLI (requires frontend deps installed)
-datachat dev
-```
-
-Profiling + DataPoints tips:
-- Use Database Manager to select tables before generating DataPoints.
-- Depth options: `schema_only`, `metrics_basic`, `metrics_full` (LLM batched).
-- Generation runs async with progress updates.
-
-### Step 6: Verify Setup
-
-```bash
-# Check system status
-datachat status
-
-# Expected output shows:
-# ✓ Database - Connected
-# ✓ Vector Store - X datapoints
-# ✓ Knowledge Graph - X nodes, X edges
-```
-
-### Step 7: Test with Sample Queries
-
-Now you can query your database with natural language:
-
-**Via Web UI (http://localhost:3000):**
-- "How many users do we have?"
-- "What was the total revenue last month?"
-- "Show me the most recent orders"
-- "Which users have placed more than 5 orders?"
-
-**Via CLI:**
-```bash
-datachat ask "How many active users are there?"
-datachat ask "What is the average order value?"
-datachat ask "List all tables in the database"
-```
-
-**Via API:**
-```bash
-curl -X POST http://localhost:8000/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "How many orders were placed today?"}'
+datachat dp pending list
+datachat dp pending approve <pending_id>
 ```
 
 ---
 
-## What Happens Without DataPoints?
+## 8. Multi-Database Routing (Optional)
 
-If you skip Step 3 and don't create DataPoints:
+When registry is enabled, add connections and route per request:
+- API chat: `target_database` in `POST /api/v1/chat`
+- tools: `target_database` in `POST /api/v1/tools/execute`
 
-⚠️ **What You Lose:**
-1. Business-semantic context (metric definitions, glossary, domain rules)
-2. Richer retrieval/evidence quality from curated DataPoints
-3. Stronger disambiguation for ambiguous metric language
+If `target_database` is sent while registry is unavailable, the request fails (no silent fallback).
 
-✅ **What Still Works:**
-1. Schema/table/column discovery via live system catalog queries
-2. SQL generation/execution using live schema snapshots
-3. Health checks, API endpoints, and chat workflows
-
-**Example Without DataPoints:**
-```
-User: "How many users do we have?"
-
-Response: "There are 12,487 users.
-
-Live schema mode: DataPoints are not loaded yet. Answers are generated from
-database metadata and query results only."
-```
-
-**Example With DataPoints:**
-```
-User: "How many users do we have?"
-
-Generated SQL: SELECT COUNT(*) FROM users WHERE is_active = true
-
-Response: "You currently have 1,247 active users in the database."
-```
+See [`docs/MULTI_DATABASE.md`](docs/MULTI_DATABASE.md).
 
 ---
 
-## Quick Start Checklist
+## 9. What Works Without DataPoints
 
-Before your first query:
+Supported now:
+- table discovery
+- column discovery
+- row counts
+- sample rows
+- SQL generation/execution from live schema context
 
-- [ ] Target database connected (`DATABASE_URL` in `.env`)
-- [ ] System database set if you want demo/registry (`SYSTEM_DATABASE_URL`)
-- [ ] OpenAI API key configured
-- [ ] System initialized (Web UI or `datachat setup`)
-- [ ] DataPoints approved or created for key tables (recommended)
-- [ ] DataPoints loaded (`datachat dp sync` for manual flow, recommended)
-- [ ] System status shows healthy (`datachat status`)
-- [ ] Test with simple query
+More limited without DataPoints:
+- strict KPI semantics (for example company-specific "revenue")
+- domain-specific business logic and definitions
 
----
-
-## Minimum DataPoint Requirements
-
-For basic functionality, create DataPoints for:
-
-1. **Core Tables** - Main business entities (users, orders, products)
-2. **Important Metrics** - Key business KPIs (revenue, active users)
-3. **Relationships** - How tables join together
-
-**Minimum viable DataPoint** (for testing):
-```json
-{
-  "datapoint_id": "table_test_001",
-  "type": "Schema",
-  "name": "Test Table",
-  "table_name": "public.test",
-  "schema": "public",
-  "business_purpose": "Testing DataChat",
-  "key_columns": [
-    {
-      "name": "id",
-      "type": "INTEGER",
-      "business_meaning": "ID",
-      "nullable": false
-    }
-  ],
-  "relationships": [],
-  "common_queries": [],
-  "gotchas": [],
-  "freshness": "Real-time",
-  "owner": "test@example.com"
-}
-```
+See [`docs/CREDENTIALS_ONLY_MODE.md`](docs/CREDENTIALS_ONLY_MODE.md).
 
 ---
 
-## Common Scenarios
+## 10. Known Product Boundaries
 
-### Scenario 1: Testing DataChat with Sample Data
-
-**Goal:** Try DataChat without setting up your production database
-
-**Steps:**
-1. Use the provided PostgreSQL Docker container
-2. Create a simple test table:
-   ```sql
-   CREATE TABLE users (
-     id SERIAL PRIMARY KEY,
-     name VARCHAR(100),
-     email VARCHAR(255),
-     created_at TIMESTAMP DEFAULT NOW()
-   );
-
-   INSERT INTO users (name, email) VALUES
-     ('Alice', 'alice@example.com'),
-     ('Bob', 'bob@example.com');
-   ```
-3. Create one DataPoint describing the `users` table
-4. Ask: "How many users are there?"
-
-### Scenario 2: Production Database
-
-**Goal:** Connect DataChat to your production analytics database
-
-**Steps:**
-1. Set `DATABASE_URL` to your production database (read-only user recommended)
-2. Set `SYSTEM_DATABASE_URL` for registry/profiling/demo data
-3. Create DataPoints for 5-10 most important tables
-4. Add Business DataPoints for key metrics
-5. Test with your team's common questions
-6. Iterate and add more DataPoints based on usage
-
-### Scenario 3: Multiple Databases
-
-Use the database registry to add multiple connections and route queries using
-`target_database` in the chat request. The system database stores encrypted
-connections when `SYSTEM_DATABASE_URL` and `DATABASE_CREDENTIALS_KEY` are set.
-
----
-
-## Best Practices
-
-### 1. Start Small
-- Begin with 3-5 core tables
-- Add DataPoints incrementally
-- Test each addition
-
-### 2. Descriptive DataPoints
-- Use clear `business_purpose` descriptions
-- Include common query patterns
-- Document gotchas and edge cases
-
-### 3. Team Collaboration
-- Involve domain experts in writing DataPoints
-- Use `owner` field to track responsibility
-- Version control DataPoints in git
-
-### 4. Iterative Improvement
-- Monitor which queries fail
-- Add DataPoints for frequently queried tables
-- Update business rules based on feedback
-
-### 5. Security
-- Use read-only database user for `DATABASE_URL`
-- Don't include sensitive data in DataPoint examples
-- Review generated SQL before execution (coming soon: approval workflow)
-
----
-
-## Troubleshooting
-
-### "No schema information found"
-**Cause:** No DataPoints loaded
-**Solution:** Run `datachat dp sync --datapoints-dir ./datapoints`
-
-### "Table 'X' does not exist"
-**Cause:** DataPoint references wrong table name or schema
-**Solution:** Verify table name with `SELECT * FROM information_schema.tables`
-
-### "No relevant DataPoints found for query"
-**Cause:** Vector search didn't match query to DataPoints
-**Solution:** Add more descriptive content to DataPoint `business_purpose` and `synonyms`
-
-### Queries are slow
-**Cause:** Database queries taking time
-**Solution:** Add indexes, optimize queries, or configure timeout settings
-
----
-
-## What's Next?
-
-After setup:
-
-1. **Add More DataPoints** - Cover more of your schema
-2. **Create Business Metrics** - Define KPIs and calculations
-3. **Document Processes** - Add ProcessDataPoints for ETL jobs
-4. **Share with Team** - Onboard colleagues
-5. **Monitor Usage** - Track common queries and add DataPoints accordingly
-
----
-
-## Future Enhancements
-
-Planned features:
-
-- [ ] **Auto-generate DataPoints** from database introspection
-- [ ] **Improve auto-profiling** coverage and customization
-- [ ] **Cross-database querying** - Join results across connections
-- [ ] **DataPoint templates** - Quick-start templates for common schemas
-- [ ] **Visual DataPoint editor** - Web UI for creating DataPoints
-- [ ] **Query approval workflow** - Review SQL before execution
-- [ ] **Cached query results** - Faster responses for common questions
-
----
-
-## Need Help?
-
-- **Documentation:** Check [README.md](README.md) and [TESTING.md](TESTING.md)
-- **Issues:** [GitHub Issues](https://github.com/onubrooks/datachat/issues)
-- **Examples:** See `datapoints/examples/` directory
-
----
-
-**Remember:** DataPoints are the key to DataChat's intelligence. The more comprehensive your DataPoints, the better DataChat understands your data and generates accurate SQL queries.
+Not fully implemented yet:
+- workspace/folder indexing as a production feature
+- runtime connectors for MySQL/BigQuery/Redshift (templates exist, connectors pending)
+- automated Level 3-5 intelligence features
