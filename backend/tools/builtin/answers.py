@@ -26,6 +26,15 @@ def _get_retriever(ctx: ToolContext):
     return retriever
 
 
+def _normalize_validator_database(database_type: str | None) -> str:
+    value = (database_type or "").lower()
+    if value in {"postgres", "postgresql"}:
+        return "postgresql"
+    if value in {"clickhouse", "mysql"}:
+        return value
+    return "generic"
+
+
 @tool(
     name="context_answer",
     description="Answer using DataPoints only (no SQL).",
@@ -82,18 +91,17 @@ async def run_sql(query: str, ctx: ToolContext | None = None) -> dict[str, Any]:
             database_url=ctx.metadata.get("database_url") if ctx else None,
         )
     )
-
-    validated = await validator.execute(
-        ValidatorAgentInput(
-            generated_sql=sql_output.generated_sql,
-            investigation_memory=context_output.investigation_memory,
-        )
-    )
-
     database_type = ctx.metadata.get("database_type") if ctx else None
     database_url = ctx.metadata.get("database_url") if ctx else None
     if not database_type:
         database_type = "postgresql"
+
+    validated = await validator.execute(
+        ValidatorAgentInput(
+            generated_sql=sql_output.generated_sql,
+            target_database=_normalize_validator_database(database_type),
+        )
+    )
     exec_output = await executor.execute(
         ExecutorAgentInput(
             validated_sql=validated.validated_sql,

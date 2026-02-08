@@ -249,6 +249,10 @@ class ToolExecuteRequest(BaseModel):
 
     name: str = Field(..., description="Tool name")
     arguments: dict = Field(default_factory=dict, description="Tool arguments")
+    target_database: str | None = Field(
+        default=None,
+        description="Optional database connection ID to use for this tool call",
+    )
     approved: bool = Field(default=False, description="Whether tool execution is approved")
     user_id: str | None = Field(default=None, description="Optional user ID")
     correlation_id: str | None = Field(

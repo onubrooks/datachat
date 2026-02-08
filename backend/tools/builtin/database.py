@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -44,14 +45,59 @@ async def _get_default_connector() -> BaseConnector:
         await manager.close()
 
 
+def _build_connector_from_context(database_url: str, database_type: str | None) -> BaseConnector:
+    parsed = urlparse(database_url.replace("postgresql+asyncpg://", "postgresql://"))
+    scheme = parsed.scheme.split("+")[0]
+    resolved_type = (database_type or "").lower()
+    if not resolved_type:
+        resolved_type = "clickhouse" if scheme == "clickhouse" else "postgresql"
+
+    if resolved_type == "clickhouse" or scheme == "clickhouse":
+        return ClickHouseConnector(
+            host=parsed.hostname or "localhost",
+            port=parsed.port or 8123,
+            database=parsed.path.lstrip("/") if parsed.path else "default",
+            user=parsed.username or "default",
+            password=parsed.password or "",
+        )
+
+    return PostgresConnector(
+        host=parsed.hostname or "localhost",
+        port=parsed.port or 5432,
+        database=parsed.path.lstrip("/") if parsed.path else "datachat",
+        user=parsed.username or "postgres",
+        password=parsed.password or "",
+    )
+
+
+async def _get_connector_from_context(ctx: ToolContext | None) -> BaseConnector:
+    if ctx:
+        database_url = ctx.metadata.get("database_url")
+        database_type = ctx.metadata.get("database_type")
+        if database_url:
+            connector = _build_connector_from_context(database_url, database_type)
+            await connector.connect()
+            return connector
+    return await _get_default_connector()
+
+
+def _safe_identifier(name: str) -> str:
+    value = name.strip().strip('"')
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+        raise ValueError(f"Invalid identifier: {name}")
+    return value
+
+
 @tool(
     name="list_tables",
     description="List tables available in the target database.",
     category=ToolCategory.DATABASE,
 )
 async def list_tables(schema: str | None = None, ctx: ToolContext | None = None) -> dict[str, Any]:
-    connector = await _get_default_connector()
+    connector = await _get_connector_from_context(ctx)
     try:
+        if schema:
+            schema = _safe_identifier(schema)
         schema_rows = await connector.get_schema(schema_name=schema)
         return {
             "tables": [
@@ -76,8 +122,15 @@ async def list_tables(schema: str | None = None, ctx: ToolContext | None = None)
 async def list_columns(
     table: str, schema: str | None = None, ctx: ToolContext | None = None
 ) -> dict[str, Any]:
-    connector = await _get_default_connector()
+    connector = await _get_connector_from_context(ctx)
     try:
+        if "." in table and not schema:
+            maybe_schema, maybe_table = table.split(".", 1)
+            schema = maybe_schema
+            table = maybe_table
+        table = _safe_identifier(table)
+        if schema:
+            schema = _safe_identifier(schema)
         schema_rows = await connector.get_schema(schema_name=schema)
         match = None
         for table_info in schema_rows:
@@ -112,15 +165,24 @@ async def get_table_sample(
     limit: int = 5,
     ctx: ToolContext | None = None,
 ) -> dict[str, Any]:
-    connector = await _get_default_connector()
+    connector = await _get_connector_from_context(ctx)
     try:
+        if "." in table and not schema:
+            maybe_schema, maybe_table = table.split(".", 1)
+            schema = maybe_schema
+            table = maybe_table
+        table = _safe_identifier(table)
+        if schema:
+            schema = _safe_identifier(schema)
+        bounded_limit = max(1, min(limit, 100))
         schema_prefix = f"{schema}." if schema else ""
-        query = f"SELECT * FROM {schema_prefix}{table} LIMIT {limit}"
+        query = f"SELECT * FROM {schema_prefix}{table} LIMIT {bounded_limit}"
         result = await connector.execute(query)
         return {
             "columns": result.columns,
             "rows": result.rows,
             "row_count": result.row_count,
+            "limit": bounded_limit,
         }
     finally:
         await connector.close()

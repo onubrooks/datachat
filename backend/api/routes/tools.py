@@ -15,6 +15,59 @@ from backend.tools.policy import ToolPolicyError
 router = APIRouter()
 
 
+async def _resolve_database_context(
+    target_database: str | None,
+) -> tuple[str | None, str | None]:
+    from backend.api.main import app_state
+    from backend.config import get_settings
+
+    manager = app_state.get("database_manager")
+    if manager is not None:
+        try:
+            if target_database:
+                connection = await manager.get_connection(target_database)
+            else:
+                connection = await manager.get_default_connection()
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        if connection is not None:
+            return connection.database_type, connection.database_url.get_secret_value()
+
+    settings = get_settings()
+    if settings.database.url:
+        return settings.database.db_type, str(settings.database.url)
+    return None, None
+
+
+async def _build_tool_metadata(payload: ToolExecuteRequest) -> dict:
+    from backend.api.main import app_state
+
+    pipeline = app_state.get("pipeline")
+    retriever = getattr(pipeline, "retriever", None) if pipeline else None
+    connector = app_state.get("connector")
+    manager = app_state.get("database_manager")
+    database_type, database_url = await _resolve_database_context(payload.target_database)
+
+    metadata = {
+        "requested_at": time.time(),
+        "retriever": retriever,
+        "connector": connector,
+        "database_manager": manager,
+        "database_type": database_type,
+        "database_url": database_url,
+        "target_database": payload.target_database,
+    }
+    return metadata
+
+
 @router.get("/tools", response_model=list[ToolInfo])
 async def list_tools() -> list[ToolInfo]:
     initialize_tools()
@@ -38,13 +91,12 @@ async def execute_tool(payload: ToolExecuteRequest) -> ToolExecuteResponse:
     initialize_tools()
     executor = ToolExecutor()
     correlation_id = payload.correlation_id or f"tool-{uuid4()}"
+    metadata = await _build_tool_metadata(payload)
     ctx = ToolContext(
         user_id=payload.user_id or "api-user",
         correlation_id=correlation_id,
         approved=payload.approved,
-        metadata={
-            "requested_at": time.time(),
-        },
+        metadata=metadata,
     )
     try:
         result = await executor.execute(payload.name, payload.arguments, ctx)
