@@ -1,16 +1,25 @@
 # Multi-Database Guide
 
-DataChat can manage multiple database connections and route queries to a specific
-target database. Connections are stored in the system database with encrypted
-credentials.
+This document covers currently implemented multi-database behavior.
+
+## What Is Supported Now
+
+- Store multiple DB connections in the system database.
+- Mark one default connection.
+- Route chat requests to a specific connection with `target_database`.
+- Route tool execution to a specific connection with `target_database`.
+- Encrypted URL storage using `DATABASE_CREDENTIALS_KEY`.
 
 ## Prerequisites
 
-- Set `DATABASE_CREDENTIALS_KEY` in your environment (32 url-safe base64 bytes).
-- Ensure the system database is running (PostgreSQL for registry storage).
-- Set `SYSTEM_DATABASE_URL` in your environment.
+Set both:
 
-Example:
+```env
+SYSTEM_DATABASE_URL=postgresql://user:password@host:5432/datachat
+DATABASE_CREDENTIALS_KEY=<fernet-key>
+```
+
+Generate key:
 
 ```bash
 python - <<'PY'
@@ -19,18 +28,21 @@ print(Fernet.generate_key().decode())
 PY
 ```
 
-```env
-DATABASE_CREDENTIALS_KEY=your-generated-key
-```
+## Database Types (Registry Validation)
 
-## Add a Connection
+Accepted today:
+- `postgresql`
+- `clickhouse`
 
-### Web UI
+Rejected today:
+- `mysql` (returns validation error: not supported yet)
 
-Use the Database Management page to add a connection and optionally set it as
-default.
+Notes:
+- Credentials-only catalog templates exist for MySQL/BigQuery/Redshift, but runtime connectors are not yet wired for those engines.
 
-### API
+## Add / List / Set Default / Delete
+
+Add:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/databases \
@@ -44,24 +56,29 @@ curl -X POST http://localhost:8000/api/v1/databases \
   }'
 ```
 
-## List, Set Default, and Remove
+List:
 
 ```bash
-# List all connections
 curl http://localhost:8000/api/v1/databases
+```
 
-# Set a default connection
+Set default:
+
+```bash
 curl -X PUT http://localhost:8000/api/v1/databases/<id>/default \
   -H "Content-Type: application/json" \
   -d '{"is_default": true}'
+```
 
-# Remove a connection
+Delete:
+
+```bash
 curl -X DELETE http://localhost:8000/api/v1/databases/<id>
 ```
 
-## Query a Specific Database
+## Per-Request Routing
 
-Send `target_database` in your chat request to override the default connection:
+### Chat endpoint
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/chat \
@@ -72,14 +89,25 @@ curl -X POST http://localhost:8000/api/v1/chat \
   }'
 ```
 
-If `target_database` is omitted, DataChat uses the default connection.
+### Tools endpoint
 
-Notes:
-- SQL generation and live schema lookups respect the `target_database` selection.
-- When DataPoints are not loaded, DataChat runs in live schema mode using the
-  selected database's catalog metadata and query results.
+```bash
+curl -X POST http://localhost:8000/api/v1/tools/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "list_tables",
+    "arguments": {"schema": "public"},
+    "target_database": "<connection-id>"
+  }'
+```
 
-When `target_database` is provided, DataChat now applies that connection for:
-- SQL execution
-- SQL generation dialect/context
-- Live schema snapshot used by SQL generation fallback/correction
+## Behavior Guarantees
+
+- If `target_database` is present and valid, that connection is used.
+- If `target_database` is omitted, the default connection is used when available.
+- If `target_database` is provided but registry is unavailable, request fails (no silent fallback).
+- If `target_database` is invalid/unknown, request fails with `400/404`.
+
+## Operational Recommendation
+
+Use registry mode for team environments and any setup where accidental default-db execution is risky.
