@@ -22,6 +22,15 @@ async def _resolve_database_context(
     from backend.config import get_settings
 
     manager = app_state.get("database_manager")
+    if target_database and manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "target_database requires an active database registry. "
+                "Configure SYSTEM_DATABASE_URL and DATABASE_CREDENTIALS_KEY."
+            ),
+        )
+
     if manager is not None:
         try:
             if target_database:
@@ -38,6 +47,11 @@ async def _resolve_database_context(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(exc),
             ) from exc
+        if target_database and connection is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Database connection not found: {target_database}",
+            )
         if connection is not None:
             return connection.database_type, connection.database_url.get_secret_value()
 

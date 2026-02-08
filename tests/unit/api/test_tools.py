@@ -87,3 +87,23 @@ class TestToolsEndpoint:
         _, _, ctx = executor_mock.await_args.args
         assert ctx.metadata["target_database"] == "db-123"
         assert ctx.metadata["database_type"] == "postgresql"
+
+    def test_execute_tool_target_database_requires_registry(self):
+        executor_mock = AsyncMock(return_value={"result": {"ok": True}})
+
+        with patch(
+            "backend.api.main.app_state",
+            {"pipeline": None, "database_manager": None, "connector": None},
+        ), patch("backend.api.routes.tools.ToolExecutor.execute", new=executor_mock):
+            response = self.client.post(
+                "/api/v1/tools/execute",
+                json={
+                    "name": "list_tables",
+                    "arguments": {},
+                    "target_database": "db-123",
+                },
+            )
+
+        assert response.status_code == 400
+        assert "target_database requires an active database registry" in response.json()["detail"]
+        assert executor_mock.await_count == 0
