@@ -8,6 +8,35 @@ DataChat is a data-native agent operating system that enables natural language i
 
 ---
 
+## Implementation Status Snapshot (February 2026)
+
+This section is the source of truth for shipped vs planned architecture scope.
+
+Implemented now:
+
+- Intent gate before the main pipeline, with clarification loops and max-turn limits
+- Deterministic catalog flows for schema-shape intents (tables/columns/sample rows/row count)
+- Credentials-only live schema mode as a first-class path
+- Multi-database routing via `target_database` with strict override resolution
+- Tooling reliability upgrades:
+  - `/api/v1/tools` typed parameter schemas
+  - `/api/v1/tools/execute` target-database propagation
+  - runtime context injection for built-in tools
+  - planner argument coercion to schema types
+- DataPoint-driven retrieval and synthesis enhancements
+
+Planned (not yet implemented in runtime):
+
+- Workspace index/status/search APIs and full filesystem retrieval workflows
+- Runtime connectors for MySQL, BigQuery, and Redshift
+- Levels 3-5 as fully productized automation tiers
+
+Note:
+
+- Catalog/profiling templates may exist for additional engines, but templates alone do not imply runtime connector support.
+
+---
+
 ## Architecture Overview
 
 ### The Three-Layer Model

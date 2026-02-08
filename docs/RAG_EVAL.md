@@ -83,6 +83,7 @@ python scripts/eval_runner.py --mode intent --dataset eval/intent_credentials.js
 ```
 
 Notes:
+
 - Retrieval mode infers hits from `sources` returned by `/api/v1/chat`.
 - Answer type checks support both columnar API payloads and row-list payloads.
 - Intent mode tracks source accuracy, clarification behavior, SQL pattern checks,

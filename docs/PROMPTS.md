@@ -10,12 +10,14 @@ This document defines the prompt architecture, best practices, and versioning st
 ## Why Prompts Matter
 
 **Problem:** Hardcoded prompts in code are:
+
 - Hard to iterate and improve
 - Difficult to version and track
 - Impossible to A/B test
 - Not observable in production
 
 **Solution:** Treat prompts as first-class artifacts:
+
 - Stored in version control
 - Versioned and tracked
 - Testable and measurable
@@ -106,6 +108,7 @@ Always respond in JSON format:
 - Confidence < 0.7: Low confidence, ask clarifying questions
 
 Remember: Accuracy is more important than speed. If unsure, ask.
+
 ```
 
 ### Safety Constraints (`system/safety.md`)
@@ -123,6 +126,7 @@ sql = f"SELECT * FROM users WHERE id = {user_input}"
 ```
 
 ✅ **CORRECT:**
+
 ```python
 sql = "SELECT * FROM users WHERE id = ?"
 params = [user_input]
@@ -156,6 +160,7 @@ params = [user_input]
 - Personal health information
 
 If sensitive data is detected, mask it in responses:
+
 - Email: j***@example.com
 - SSN: ***-**-1234
 - Credit card: ****-****-****-1234
@@ -165,11 +170,13 @@ If sensitive data is detected, mask it in responses:
 **NEVER** reveal internal errors to users:
 
 ❌ **WRONG:**
+
 ```
 Error: Invalid credentials for postgres://admin:secret123@internal-db.local
 ```
 
 ✅ **CORRECT:**
+
 ```
 Error: Database connection failed. Please check your credentials.
 ```
@@ -183,6 +190,7 @@ Before returning ANY query, verify:
 - [ ] Has LIMIT clause
 - [ ] No hardcoded credentials
 - [ ] No sensitive data in logs
+
 ```
 
 ---
@@ -253,6 +261,7 @@ You receive:
 ### Example 1: Simple query with DataPoint
 
 **Input:**
+
 ```json
 {
   "user_query": "What was revenue last month?",
@@ -269,6 +278,7 @@ You receive:
 ```
 
 **Output:**
+
 ```json
 {
   "query": "SELECT SUM(amount) as revenue FROM transactions WHERE status = 'completed' AND type = 'sale' AND transaction_time >= '2026-01-01' AND transaction_time < '2026-02-01'",
@@ -283,6 +293,7 @@ You receive:
 ### Example 2: Query without DataPoint (lower confidence)
 
 **Input:**
+
 ```json
 {
   "user_query": "Show me customers in Texas",
@@ -299,6 +310,7 @@ You receive:
 ```
 
 **Output:**
+
 ```json
 {
   "query": "SELECT * FROM customers WHERE state = 'TX' LIMIT 10000",
@@ -313,6 +325,7 @@ You receive:
 ### Example 3: Ambiguous query (ask for clarification)
 
 **Input:**
+
 ```json
 {
   "user_query": "Show me the data",
@@ -323,6 +336,7 @@ You receive:
 ```
 
 **Output:**
+
 ```json
 {
   "query": null,
@@ -359,6 +373,7 @@ If you can't generate a valid query:
 4. Provide specific questions to help user clarify
 
 **Never** return a query you're not confident about. Better to ask than to hallucinate.
+
 ```
 
 ### Query Validator (`agents/validator.md`)
@@ -406,6 +421,7 @@ except SyntaxError as e:
 Check for prohibited operations:
 
 **Prohibited:**
+
 - INSERT, UPDATE, DELETE, TRUNCATE (data modification)
 - DROP, ALTER, CREATE (schema changes)
 - GRANT, REVOKE (permission changes)
@@ -413,6 +429,7 @@ Check for prohibited operations:
 - System procedures
 
 **Example checks:**
+
 ```python
 dangerous_keywords = ["INSERT", "UPDATE", "DELETE", "DROP", "TRUNCATE", "ALTER"]
 for keyword in dangerous_keywords:
@@ -438,11 +455,13 @@ Verify all references exist:
 Check for performance issues:
 
 **Required:**
+
 - LIMIT clause (if not aggregation)
 - Indexes on WHERE/JOIN columns (warn if missing)
 - Reasonable time range (warn if >1 year of data)
 
 **Warnings:**
+
 - Full table scans (missing WHERE clause)
 - Cartesian products (missing JOIN condition)
 - Too many JOINs (>5)
@@ -568,6 +587,7 @@ Before approving a query:
 - [ ] Has LIMIT clause (or is aggregation)
 - [ ] Estimated cost within limits
 - [ ] No SQL injection vulnerabilities
+
 ```
 
 ---
@@ -961,6 +981,7 @@ Always respond in JSON:
 
 <!-- agents/sql_generator.md -->
 {{% include "templates/output_format.md" %}}
+
 ```
 
 ### 2. Version Critical Changes
@@ -1022,16 +1043,19 @@ If you cannot generate a valid query:
 ## Maintenance Schedule
 
 ### Weekly
+
 - Review prompt metrics
 - Identify low-confidence queries
 - Update examples with real user queries
 
 ### Monthly
+
 - A/B test prompt improvements
 - Archive old versions
 - Update documentation
 
 ### Quarterly
+
 - Major prompt refactoring
 - Incorporate user feedback
 - Benchmark against competitors
@@ -1069,11 +1093,13 @@ If you cannot generate a valid query:
 ## Resources
 
 ### Prompt Engineering Guides
+
 - [OpenAI Best Practices](https://platform.openai.com/docs/guides/prompt-engineering)
 - [Anthropic Claude Prompting](https://docs.anthropic.com/claude/docs/prompt-engineering)
 - [Prompt Engineering Guide](https://www.promptingguide.ai/)
 
 ### Tools
+
 - [LangSmith](https://smith.langchain.com/) - Prompt versioning and testing
 - [PromptLayer](https://promptlayer.com/) - Prompt management
 - [Helicone](https://www.helicone.ai/) - LLM observability

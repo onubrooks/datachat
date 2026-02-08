@@ -5,6 +5,7 @@ This directory contains product and engineering documentation for DataChat.
 ## Implementation Snapshot (February 2026)
 
 Implemented now:
+
 - credentials-only querying with deterministic catalog intelligence
 - DataPoint-enhanced retrieval and answer synthesis
 - multi-database registry with `target_database` routing
@@ -12,6 +13,7 @@ Implemented now:
 - profiling pipeline that generates pending DataPoints for review
 
 Planned (not yet implemented as full product features):
+
 - workspace/folder indexing and codebase understanding workflows
 - runtime connectors for MySQL/BigQuery/Redshift
 - Levels 3-5 automation features
@@ -24,7 +26,6 @@ Planned (not yet implemented as full product features):
 - `CREDENTIALS_ONLY_MODE.md` - capabilities/limits for credentials-only mode.
 - `MULTI_DATABASE.md` - connection registry and per-request routing.
 - `LEVELS.md` - maturity model with implementation status.
-- `V2_SPEC.md` - v2 status and roadmap split.
 - `PRD.md` - delivery-tracking PRD (shipped vs planned).
 - `OPERATIONS.md` - deployment and operational guidance.
 - `DEMO_PLAYBOOK.md` - demo setup and persona flows.

@@ -156,7 +156,7 @@ See [`docs/API.md`](docs/API.md).
 - [`docs/CREDENTIALS_ONLY_MODE.md`](docs/CREDENTIALS_ONLY_MODE.md)
 - [`docs/MULTI_DATABASE.md`](docs/MULTI_DATABASE.md)
 - [`docs/LEVELS.md`](docs/LEVELS.md)
-- [`docs/V2_SPEC.md`](docs/V2_SPEC.md)
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - [`docs/PRD.md`](docs/PRD.md)
 
 ---
