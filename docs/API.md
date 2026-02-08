@@ -100,6 +100,33 @@ Approve payload supports optional edits:
 - `PUT /datapoints/{id}` - Update a DataPoint.
 - `DELETE /datapoints/{id}` - Delete a DataPoint.
 
+## Tools
+
+- `GET /tools` - List available tools and typed parameter schemas.
+- `POST /tools/execute` - Execute a tool call.
+
+Tool execute request:
+```json
+{
+  "name": "get_table_sample",
+  "arguments": {
+    "table": "orders",
+    "schema": "public",
+    "limit": 5
+  },
+  "target_database": "optional-connection-id",
+  "approved": false,
+  "user_id": "optional-user-id",
+  "correlation_id": "optional-correlation-id"
+}
+```
+
+Notes:
+- `target_database` is optional; when provided, tool execution uses that connection's database type/URL context.
+- If `target_database` is omitted, the default connection context is used when available.
+- `/tools/execute` injects runtime metadata for built-ins (`retriever`, `database_type`, `database_url`, registry/connector handles) so `context_answer`, `run_sql`, `list_tables`, `list_columns`, and `get_table_sample` work consistently from API calls.
+- Tool parameter schemas are typed from Python annotations (for example `integer`, `boolean`, `number`, `array`, `object`) instead of all-string placeholders.
+
 ## Health
 
 - `GET /health` - Health check.

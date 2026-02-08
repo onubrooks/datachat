@@ -50,6 +50,7 @@ class ToolPlannerAgent(BaseAgent):
             )
         )
         plan = self._parse_plan(response.content)
+        plan = self._coerce_arguments_to_tool_schemas(plan, input.available_tools)
 
         metadata = self._create_metadata()
         metadata.llm_calls = 1
@@ -64,6 +65,83 @@ class ToolPlannerAgent(BaseAgent):
                 logger.debug("ToolPlannerAgent payload failed validation")
 
         return ToolPlan(tool_calls=[], rationale="Fallback to pipeline.", fallback="pipeline")
+
+    def _coerce_arguments_to_tool_schemas(
+        self, plan: ToolPlan, available_tools: list[dict[str, Any]]
+    ) -> ToolPlan:
+        schema_by_tool = {}
+        for tool in available_tools:
+            name = tool.get("name")
+            if not name:
+                continue
+            schema_by_tool[name] = tool.get("parameters_schema") or {}
+
+        for call in plan.tool_calls:
+            schema = schema_by_tool.get(call.name) or {}
+            properties = schema.get("properties") or {}
+            coerced: dict[str, Any] = {}
+            for arg_name, arg_value in call.arguments.items():
+                field_schema = properties.get(arg_name) or {}
+                coerced[arg_name] = self._coerce_argument_value(arg_value, field_schema)
+            call.arguments = coerced
+
+        return plan
+
+    def _coerce_argument_value(self, value: Any, schema: dict[str, Any]) -> Any:
+        if value is None:
+            return None
+        expected_type = schema.get("type")
+        if not expected_type and "anyOf" in schema:
+            for variant in schema.get("anyOf", []):
+                if variant.get("type") == "null":
+                    continue
+                expected_type = variant.get("type")
+                if expected_type:
+                    break
+
+        try:
+            if expected_type == "integer":
+                if isinstance(value, bool):
+                    return value
+                return int(value)
+            if expected_type == "number":
+                if isinstance(value, bool):
+                    return value
+                return float(value)
+            if expected_type == "boolean":
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, str):
+                    lowered = value.strip().lower()
+                    if lowered in {"true", "1", "yes", "y"}:
+                        return True
+                    if lowered in {"false", "0", "no", "n"}:
+                        return False
+                return value
+            if expected_type == "array":
+                if isinstance(value, list):
+                    return value
+                if isinstance(value, str):
+                    raw = value.strip()
+                    if raw.startswith("[") and raw.endswith("]"):
+                        parsed = json.loads(raw)
+                        if isinstance(parsed, list):
+                            return parsed
+                    if "," in raw:
+                        return [item.strip() for item in raw.split(",") if item.strip()]
+                    return [raw] if raw else []
+            if expected_type == "object":
+                if isinstance(value, dict):
+                    return value
+                if isinstance(value, str):
+                    raw = value.strip()
+                    if raw.startswith("{") and raw.endswith("}"):
+                        parsed = json.loads(raw)
+                        if isinstance(parsed, dict):
+                            return parsed
+        except Exception:
+            logger.debug("ToolPlannerAgent argument coercion failed; leaving value unchanged")
+        return value
 
     @staticmethod
     def _extract_json(content: str) -> dict[str, Any] | None:
