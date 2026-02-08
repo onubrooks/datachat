@@ -84,9 +84,19 @@ python scripts/eval_runner.py --mode intent --dataset eval/intent_credentials.js
 
 Notes:
 - Retrieval mode infers hits from `sources` returned by `/api/v1/chat`.
-- Answer type checks use a simple heuristic (single value vs table vs time series).
+- Answer type checks support both columnar API payloads and row-list payloads.
 - Intent mode tracks source accuracy, clarification behavior, SQL pattern checks,
   and latency/LLM-call averages for credentials-only flows.
+
+Optional thresholds (non-zero exit on failure):
+
+```bash
+python scripts/eval_runner.py --mode retrieval --dataset eval/retrieval.json \
+  --min-hit-rate 0.6 --min-recall 0.5 --min-mrr 0.4
+
+python scripts/eval_runner.py --mode qa --dataset eval/qa.json \
+  --min-sql-match-rate 0.6 --min-answer-type-rate 0.6
+```
 
 ---
 
@@ -115,3 +125,5 @@ Keep a tiny set (5-10 queries) for quick regression checks before demos.
 
 - `eval/retrieval.json` - expected DataPoint IDs per query.
 - `eval/qa.json` - SQL pattern + answer type checks.
+- `eval/grocery/retrieval.json` - grocery DataPoint retrieval checks.
+- `eval/grocery/qa.json` - grocery end-to-end SQL/answer checks.

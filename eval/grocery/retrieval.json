@@ -1,0 +1,51 @@
+[
+  {
+    "query": "Which stores are available and what regions do they belong to?",
+    "expected_datapoint_ids": [
+      "table_grocery_stores_001"
+    ],
+    "notes": "Store dimension lookup"
+  },
+  {
+    "query": "What is total grocery revenue this week?",
+    "expected_datapoint_ids": [
+      "metric_total_revenue_grocery_001",
+      "table_grocery_sales_transactions_001"
+    ],
+    "notes": "Revenue should use metric definition plus sales table"
+  },
+  {
+    "query": "How do we compute gross margin?",
+    "expected_datapoint_ids": [
+      "metric_gross_margin_grocery_001",
+      "table_grocery_products_001",
+      "table_grocery_sales_transactions_001"
+    ],
+    "notes": "Margin requires unit cost + net sales"
+  },
+  {
+    "query": "Show current stockout rate by store",
+    "expected_datapoint_ids": [
+      "metric_stockout_rate_grocery_001",
+      "table_grocery_inventory_snapshots_001",
+      "table_grocery_stores_001"
+    ],
+    "notes": "Stockout metric should map to inventory snapshots"
+  },
+  {
+    "query": "How much did we lose to waste in the last 7 days?",
+    "expected_datapoint_ids": [
+      "metric_waste_cost_grocery_001",
+      "table_grocery_waste_events_001"
+    ],
+    "notes": "Waste cost should ground in waste events"
+  },
+  {
+    "query": "Which suppliers are currently delayed on purchase orders?",
+    "expected_datapoint_ids": [
+      "table_grocery_purchase_orders_001",
+      "table_grocery_suppliers_001"
+    ],
+    "notes": "Supplier and PO linkage"
+  }
+]

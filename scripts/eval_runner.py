@@ -42,48 +42,134 @@ def _post_chat(
     return response.json()
 
 
+def _columnar_to_rows(data: Any) -> list[dict[str, Any]]:
+    """
+    Normalize API response data into row-oriented dictionaries.
+
+    `/api/v1/chat` returns columnar payloads (`{column: [values...]}`), while
+    legacy callers may still provide row lists (`[{...}, {...}]`).
+    """
+    if not data:
+        return []
+
+    if isinstance(data, list):
+        if data and all(isinstance(row, dict) for row in data):
+            return data
+        return []
+
+    if isinstance(data, dict):
+        columns = list(data.keys())
+        if not columns:
+            return []
+        lengths = [
+            len(values)
+            for values in data.values()
+            if isinstance(values, list)
+        ]
+        if not lengths:
+            return []
+        row_count = max(lengths)
+        rows: list[dict[str, Any]] = []
+        for idx in range(row_count):
+            row = {}
+            for col in columns:
+                values = data.get(col)
+                if isinstance(values, list):
+                    row[col] = values[idx] if idx < len(values) else None
+                else:
+                    row[col] = None
+            rows.append(row)
+        return rows
+
+    return []
+
+
 def _infer_answer_type(data: Any) -> str | None:
-    if not data or not isinstance(data, list):
+    rows = _columnar_to_rows(data)
+    if not rows:
         return None
-    if len(data) == 1 and isinstance(data[0], dict) and len(data[0]) == 1:
+    if len(rows) == 1 and len(rows[0]) == 1:
         return "single_value"
-    if len(data) > 1 and isinstance(data[0], dict):
-        cols = [str(col).lower() for col in data[0].keys()]
-        if any(token in col for col in cols for token in ("date", "time", "day")):
-            return "time_series"
-        return "table"
-    return None
+
+    cols = [str(col).lower() for col in rows[0].keys()]
+    if any(token in col for col in cols for token in ("date", "time", "day")):
+        return "time_series"
+    return "table"
 
 
-def run_retrieval(api_base: str, dataset: list[dict[str, Any]]) -> int:
+def run_retrieval(
+    api_base: str,
+    dataset: list[dict[str, Any]],
+    min_hit_rate: float | None = None,
+    min_recall: float | None = None,
+    min_mrr: float | None = None,
+) -> int:
     total = len(dataset)
     hits = 0
     recall_sum = 0.0
+    mrr_sum = 0.0
+    coverage_hits = 0
 
     for item in dataset:
         query = item["query"]
         expected = set(item["expected_datapoint_ids"])
         response = _post_chat(api_base, query)
         sources = response.get("sources") or []
-        retrieved = {src.get("datapoint_id") for src in sources if src.get("datapoint_id")}
+        retrieved_ranked = [
+            src.get("datapoint_id")
+            for src in sources
+            if src.get("datapoint_id")
+        ]
+        retrieved = set(retrieved_ranked)
 
         hit = 1 if expected & retrieved else 0
         hits += hit
+        coverage_hits += hit
         recall = len(expected & retrieved) / len(expected) if expected else 0.0
         recall_sum += recall
+        reciprocal_rank = 0.0
+        for rank, datapoint_id in enumerate(retrieved_ranked, start=1):
+            if datapoint_id in expected:
+                reciprocal_rank = 1.0 / rank
+                break
+        mrr_sum += reciprocal_rank
 
         print(f"- {query}")
         print(f"  expected: {sorted(expected)}")
-        print(f"  retrieved: {sorted(retrieved)}")
-        print(f"  hit: {hit}  recall: {recall:.2f}")
+        print(f"  retrieved: {retrieved_ranked}")
+        print(f"  hit: {hit}  recall: {recall:.2f}  rr: {reciprocal_rank:.2f}")
 
     hit_rate = hits / total if total else 0.0
     avg_recall = recall_sum / total if total else 0.0
-    print(f"\nHit rate: {hit_rate:.2f}  Avg recall: {avg_recall:.2f}")
+    avg_mrr = mrr_sum / total if total else 0.0
+    coverage = coverage_hits / total if total else 0.0
+    print(
+        f"\nHit rate: {hit_rate:.2f}  Avg recall@K: {avg_recall:.2f}  "
+        f"MRR: {avg_mrr:.2f}  Coverage: {coverage:.2f}"
+    )
+
+    failures: list[str] = []
+    if min_hit_rate is not None and hit_rate < min_hit_rate:
+        failures.append(f"hit_rate {hit_rate:.2f} < {min_hit_rate:.2f}")
+    if min_recall is not None and avg_recall < min_recall:
+        failures.append(f"recall {avg_recall:.2f} < {min_recall:.2f}")
+    if min_mrr is not None and avg_mrr < min_mrr:
+        failures.append(f"mrr {avg_mrr:.2f} < {min_mrr:.2f}")
+
+    if failures:
+        print("Threshold failures:")
+        for failure in failures:
+            print(f"  - {failure}")
+        return 1
     return 0
 
 
-def run_qa(api_base: str, dataset: list[dict[str, Any]]) -> int:
+def run_qa(
+    api_base: str,
+    dataset: list[dict[str, Any]],
+    min_sql_match_rate: float | None = None,
+    min_answer_type_rate: float | None = None,
+) -> int:
     total = len(dataset)
     sql_matches = 0
     answer_matches = 0
@@ -114,9 +200,25 @@ def run_qa(api_base: str, dataset: list[dict[str, Any]]) -> int:
         if errors:
             print(f"  validation_errors: {len(errors)}")
 
-    print(f"\nSQL match rate: {sql_matches}/{total}")
-    print(f"Answer type match: {answer_matches}/{total}")
+    sql_match_rate = (sql_matches / total) if total else 0.0
+    answer_type_rate = (answer_matches / total) if total else 0.0
+    print(f"\nSQL match rate: {sql_matches}/{total} ({sql_match_rate:.2f})")
+    print(f"Answer type match: {answer_matches}/{total} ({answer_type_rate:.2f})")
     print(f"Validation errors: {validation_errors}/{total}")
+
+    failures: list[str] = []
+    if min_sql_match_rate is not None and sql_match_rate < min_sql_match_rate:
+        failures.append(f"sql_match_rate {sql_match_rate:.2f} < {min_sql_match_rate:.2f}")
+    if min_answer_type_rate is not None and answer_type_rate < min_answer_type_rate:
+        failures.append(
+            f"answer_type_rate {answer_type_rate:.2f} < {min_answer_type_rate:.2f}"
+        )
+
+    if failures:
+        print("Threshold failures:")
+        for failure in failures:
+            print(f"  - {failure}")
+        return 1
     return 0
 
 
@@ -199,6 +301,36 @@ def main() -> int:
     parser.add_argument("--mode", choices=["retrieval", "qa", "intent"], required=True)
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--api-base", default="http://localhost:8000")
+    parser.add_argument(
+        "--min-hit-rate",
+        type=float,
+        default=None,
+        help="Optional minimum hit-rate threshold for retrieval mode.",
+    )
+    parser.add_argument(
+        "--min-recall",
+        type=float,
+        default=None,
+        help="Optional minimum average recall@K threshold for retrieval mode.",
+    )
+    parser.add_argument(
+        "--min-mrr",
+        type=float,
+        default=None,
+        help="Optional minimum MRR threshold for retrieval mode.",
+    )
+    parser.add_argument(
+        "--min-sql-match-rate",
+        type=float,
+        default=None,
+        help="Optional minimum SQL match rate threshold for QA mode.",
+    )
+    parser.add_argument(
+        "--min-answer-type-rate",
+        type=float,
+        default=None,
+        help="Optional minimum answer-type match threshold for QA mode.",
+    )
     args = parser.parse_args()
 
     try:
@@ -209,9 +341,20 @@ def main() -> int:
         return 1
 
     if args.mode == "retrieval":
-        return run_retrieval(args.api_base, dataset)
+        return run_retrieval(
+            args.api_base,
+            dataset,
+            min_hit_rate=args.min_hit_rate,
+            min_recall=args.min_recall,
+            min_mrr=args.min_mrr,
+        )
     if args.mode == "qa":
-        return run_qa(args.api_base, dataset)
+        return run_qa(
+            args.api_base,
+            dataset,
+            min_sql_match_rate=args.min_sql_match_rate,
+            min_answer_type_rate=args.min_answer_type_rate,
+        )
     if args.mode == "intent":
         return run_intent(args.api_base, dataset)
     return 1

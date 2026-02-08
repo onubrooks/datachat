@@ -16,6 +16,7 @@ The SQLAgent:
 import json
 import logging
 import re
+from typing import Any
 from urllib.parse import urlparse
 
 from backend.agents.base import BaseAgent
@@ -1455,27 +1456,33 @@ class SQLAgent(BaseAgent):
                     schema_parts.append(f"Purpose: {business_purpose}")
 
                 # Add columns
-                columns = metadata.get("key_columns", [])
+                columns = self._coerce_metadata_list(metadata.get("key_columns", []))
                 if columns:
                     schema_parts.append("Columns:")
                     for col in columns:
-                        col_name = col.get("name", "unknown")
-                        col_type = col.get("type", "unknown")
-                        col_meaning = col.get("business_meaning", "")
-                        schema_parts.append(f"  - {col_name} ({col_type}): {col_meaning}")
+                        if isinstance(col, dict):
+                            col_name = col.get("name", "unknown")
+                            col_type = col.get("type", "unknown")
+                            col_meaning = col.get("business_meaning", "")
+                            schema_parts.append(f"  - {col_name} ({col_type}): {col_meaning}")
+                        elif isinstance(col, str):
+                            schema_parts.append(f"  - {col}")
 
                 # Add relationships
-                relationships = metadata.get("relationships", [])
+                relationships = self._coerce_metadata_list(metadata.get("relationships", []))
                 if relationships:
                     schema_parts.append("Relationships:")
                     for rel in relationships:
-                        target = rel.get("target_table", "unknown")
-                        join_col = rel.get("join_column", "unknown")
-                        cardinality = rel.get("cardinality", "")
-                        schema_parts.append(f"  - JOIN {target} ON {join_col} ({cardinality})")
+                        if isinstance(rel, dict):
+                            target = rel.get("target_table", "unknown")
+                            join_col = rel.get("join_column", "unknown")
+                            cardinality = rel.get("cardinality", "")
+                            schema_parts.append(f"  - JOIN {target} ON {join_col} ({cardinality})")
+                        elif isinstance(rel, str):
+                            schema_parts.append(f"  - {rel}")
 
                 # Add gotchas/common queries
-                gotchas = metadata.get("gotchas", [])
+                gotchas = self._coerce_string_list(metadata.get("gotchas", []))
                 if gotchas:
                     schema_parts.append(f"Important Notes: {'; '.join(gotchas)}")
 
@@ -1500,8 +1507,8 @@ class SQLAgent(BaseAgent):
 
                 name = dp.name
                 calculation = metadata.get("calculation", "")
-                synonyms = metadata.get("synonyms", [])
-                business_rules = metadata.get("business_rules", [])
+                synonyms = self._coerce_string_list(metadata.get("synonyms", []))
+                business_rules = self._coerce_string_list(metadata.get("business_rules", []))
 
                 business_parts.append(f"\n**Metric: {name}**")
                 if calculation:
@@ -1514,6 +1521,39 @@ class SQLAgent(BaseAgent):
                         business_parts.append(f"  - {rule}")
 
         return "\n".join(business_parts) if business_parts else "No business rules available"
+
+    def _coerce_metadata_list(self, value: Any) -> list[Any]:
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, list):
+                        return parsed
+                except json.JSONDecodeError:
+                    return []
+        return []
+
+    def _coerce_string_list(self, value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item) for item in value if str(item).strip()]
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("[") and stripped.endswith("]"):
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, list):
+                        return [str(item) for item in parsed if str(item).strip()]
+                except json.JSONDecodeError:
+                    pass
+            if "," in stripped:
+                return [part.strip() for part in stripped.split(",") if part.strip()]
+            return [stripped]
+        return []
 
     def _format_conversation_context(self, history: list[dict] | list) -> str:
         if not history:

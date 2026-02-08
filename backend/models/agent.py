@@ -255,6 +255,7 @@ class RetrievedDataPoint(BaseModel):
     score: float = Field(..., ge=0.0, le=1.0, description="Relevance score (0-1, higher is better)")
     source: str = Field(..., description="Retrieval source (vector/graph/hybrid)")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Full DataPoint metadata")
+    content: str | None = Field(default=None, description="Optional retrieved content snippet")
 
     model_config = ConfigDict(frozen=True)
 

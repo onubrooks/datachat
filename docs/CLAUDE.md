@@ -12,7 +12,7 @@ DataChat is a data-native agent operating system that enables natural language i
 
 ### The Three-Layer Model
 
-```
+```txt
 Layer 1: Database (structured data)
          ↓
 Layer 2: Business Logic & Metrics (semantic meaning via DataPoints)
@@ -57,12 +57,14 @@ User Query (Natural Language)
 ### Level 1: Schema-Aware Querying (Zero Setup)
 
 **What it does:**
+
 - Connects with only target database credentials
 - Uses live schema snapshots (tables + columns) for SQL generation context
 - Enables immediate natural language querying without DataPoints
 - Optionally adds ManagedDataPoints via profiling for higher answer quality
 
 **Technical Implementation:**
+
 - Live metadata path:
   - SQL agent fetches a schema snapshot from the active target database
   - Snapshot is injected into SQL generation and correction prompts
@@ -71,6 +73,7 @@ User Query (Natural Language)
   - ManagedDataPoints are stored in `datapoints/managed/` and indexed for retrieval
 
 **User Experience:**
+
 ```
 User connects to database → DataChat can immediately query in live schema mode
 "Show me top 10 customers by revenue" → Works instantly
@@ -83,11 +86,13 @@ User connects to database → DataChat can immediately query in live schema mode
 ### Level 2: Context-Enhanced Querying (User Adds DataPoints)
 
 **What it does:**
+
 - Users create Type 1 DataPoints (context only) in `datapoints/user/`
 - System merges user context with ManagedDataPoints
 - LLM gets both schema metadata AND business semantics
 
 **DataPoint Type 1 Schema:**
+
 ```yaml
 # datapoints/user/sales/revenue.yaml
 datapoint:
@@ -117,6 +122,7 @@ datapoint:
 ```
 
 **Context Merging:**
+
 ```python
 # System combines ManagedDataPoint + UserDataPoint
 merged_context = {
@@ -128,6 +134,7 @@ merged_context = {
 ```
 
 **User Experience:**
+
 ```
 User asks: "What was revenue last month?"
 → System knows: revenue = sum(transactions.amount) where status='completed'
@@ -140,11 +147,13 @@ User asks: "What was revenue last month?"
 ### Level 3: Executable Metrics (SQL Templates)
 
 **What it does:**
+
 - Users upgrade DataPoints to Type 2 (add execution block)
 - System uses pre-defined SQL templates instead of LLM generation
 - Ensures consistency and performance for known metrics
 
 **DataPoint Type 2 Schema:**
+
 ```yaml
 # datapoints/user/sales/revenue.yaml
 datapoint:
@@ -205,6 +214,7 @@ datapoint:
 ```
 
 **Query Execution Flow:**
+
 ```
 User: "What was revenue last month?"
     ↓
@@ -220,6 +230,7 @@ Execute query → Return results
 ```
 
 **User Experience:**
+
 - 3-5x faster (no LLM generation)
 - 100% consistent (same SQL every time)
 - Auditable (Git tracks metric definition changes)
@@ -229,11 +240,13 @@ Execute query → Return results
 ### Level 4: Performance Layer (Adaptive Materialization)
 
 **What it does:**
+
 - System monitors query patterns
 - Automatically creates materialized views for frequent queries
 - Routes queries to pre-aggregated tables transparently
 
 **DataPoint Type 3 Schema (Materialization Hints):**
+
 ```yaml
 datapoint:
   id: daily_revenue
@@ -271,6 +284,7 @@ datapoint:
 ```
 
 **Materialization Manager:**
+
 ```python
 class MaterializationManager:
     """
@@ -314,6 +328,7 @@ class MaterializationManager:
 ```
 
 **User Experience:**
+
 ```
 Week 1: User queries "daily revenue" frequently
 Week 2: System detects pattern, shows suggestion in UI
@@ -322,6 +337,7 @@ Week 4: Query time drops from 3.2s → 160ms (20x faster)
 ```
 
 **CLI User Experience:**
+
 ```bash
 # System notifies via CLI
 $ datachat query "daily revenue last 30 days"
@@ -344,12 +360,14 @@ Result: ... (executed in 160ms, from materialized view)
 ### Level 5: Intelligence Layer (Knowledge Graph + AI Diagnostics)
 
 **What it does:**
+
 - Builds knowledge graph from DataPoint relationships
 - Monitors for anomalies automatically
 - Provides root cause analysis via graph traversal
 - Enables auto-remediation workflows
 
 **DataPoint Type 4 Schema (Full Intelligence):**
+
 ```yaml
 datapoint:
   id: revenue
@@ -421,6 +439,7 @@ datapoint:
 ```
 
 **Knowledge Graph Schema (Neo4j):**
+
 ```cypher
 // DataPoint node
 (:DataPoint {
@@ -446,6 +465,7 @@ datapoint:
 ```
 
 **Root Cause Analysis Example:**
+
 ```
 User: "Why did revenue drop 15% yesterday?"
     ↓
@@ -477,6 +497,7 @@ Related metrics also affected:
 ```
 
 **User Experience:**
+
 - AI proactively monitors metrics
 - Alerts when anomalies detected
 - Explains root causes without human investigation
@@ -508,12 +529,14 @@ datachat/
 ```
 
 **Design Principles:**
+
 1. **Modular:** APEX can be imported independently of DataChat's NLQ layer
 2. **Backend-agnostic:** Works with any SQL database
 3. **Configuration-driven:** All behavior defined via DataPoint YAML
 4. **Observable:** Full instrumentation and audit logging
 
 **Future Extraction Path:**
+
 ```python
 # Today (embedded in DataChat)
 from datachat.apex import APEXEngine
@@ -645,6 +668,7 @@ workspace:
 ### Tool Categories & Policies
 
 **Tier 1: Read-Only Database Tools (Always Enabled)**
+
 ```yaml
 tools:
   query_database:
@@ -656,6 +680,7 @@ tools:
 ```
 
 **Tier 2: Filesystem Tools (Sandboxed)**
+
 ```yaml
 tools:
   read_file:
@@ -671,6 +696,7 @@ tools:
 ```
 
 **Tier 3: Analysis Tools (No Side Effects)**
+
 ```yaml
 tools:
   detect_anomaly:
@@ -683,6 +709,7 @@ tools:
 ```
 
 **Tier 4: Write Operations (Requires Approval)**
+
 ```yaml
 tools:
   create_materialized_view:
@@ -698,6 +725,7 @@ tools:
 ```
 
 **Tier 5: Custom Tools (User-Installed)**
+
 ```yaml
 tools:
   custom_tools:
@@ -710,6 +738,7 @@ tools:
 ### Custom Tool API
 
 **Option A: Python Plugin**
+
 ```python
 # ~/.datachat/tools/query_crm.py
 from datachat.tools import tool, ToolContext
@@ -740,6 +769,7 @@ def query_crm(query: str, ctx: ToolContext) -> dict:
 ```
 
 **Option B: YAML + HTTP API**
+
 ```yaml
 # ~/.datachat/tools/crm.yaml
 name: query_crm
@@ -776,6 +806,7 @@ response_schema:
 **Mitigations:**
 
 **A. Multi-Agent Validation Pipeline**
+
 ```
 SQLAgent generates query
     ↓
@@ -789,6 +820,7 @@ If validation fails: Regenerate with error feedback (max 3 attempts)
 ```
 
 **B. Confidence Scoring**
+
 ```python
 class QueryConfidence:
     """Track confidence in generated query."""
@@ -809,6 +841,7 @@ class QueryConfidence:
 ```
 
 **C. User Review for Low Confidence**
+
 ```
 Confidence < 0.7:
   "I generated this query but I'm not confident. Please review:
@@ -819,6 +852,7 @@ Confidence < 0.7:
 ```
 
 **D. Query Result Validation**
+
 ```python
 class ResultValidator:
     """Validate query results make sense."""
@@ -835,6 +869,7 @@ class ResultValidator:
 ```
 
 **E. Feedback Loop**
+
 ```
 User marks query as incorrect
     ↓
@@ -852,6 +887,7 @@ Periodically fine-tune prompts based on failure patterns
 **Mitigations:**
 
 **A. Query Caching**
+
 ```python
 class QueryCache:
     """Cache query results and generation artifacts."""
@@ -875,6 +911,7 @@ class QueryCache:
 ```
 
 **B. Query Optimization**
+
 ```python
 class QueryOptimizer:
     """Optimize generated SQL before execution."""
@@ -891,6 +928,7 @@ class QueryOptimizer:
 ```
 
 **C. Rate Limiting**
+
 ```python
 class RateLimiter:
     """Prevent database overload."""
@@ -907,6 +945,7 @@ class RateLimiter:
 ```
 
 **D. Background Execution for Expensive Queries**
+
 ```
 Query estimated cost > threshold:
   → Execute in background
@@ -915,6 +954,7 @@ Query estimated cost > threshold:
 ```
 
 **E. Materialization (Level 4)**
+
 - Pre-compute expensive aggregations
 - Route frequent queries to materialized views
 - 10-50x speedup for common patterns
@@ -928,6 +968,7 @@ Query estimated cost > threshold:
 **Mitigations:**
 
 **A. Parameterized Queries**
+
 ```python
 # NEVER string concatenation
 sql = f"SELECT * FROM users WHERE id = {user_input}"  # ❌ VULNERABLE
@@ -938,6 +979,7 @@ params = [user_input]  # ✅ SAFE
 ```
 
 **B. SQL Injection Detection**
+
 ```python
 class SQLInjectionDetector:
     """Detect SQL injection attempts in generated queries."""
@@ -959,6 +1001,7 @@ class SQLInjectionDetector:
 ```
 
 **C. Row-Level Security**
+
 ```yaml
 # User access policy
 access_control:
@@ -978,6 +1021,7 @@ access_control:
 ```
 
 **D. Query Audit Logging**
+
 ```python
 class AuditLogger:
     """Log all queries for compliance and security review."""
@@ -996,6 +1040,7 @@ class AuditLogger:
 ```
 
 **E. Data Masking**
+
 ```python
 class DataMasker:
     """Mask PII in query results."""
@@ -1011,6 +1056,7 @@ class DataMasker:
 ```
 
 **F. Network Isolation**
+
 ```yaml
 # Database connection config
 databases:
@@ -1109,6 +1155,7 @@ datachat/
 **Goal:** Ship working product, establish foundation.
 
 **Features:**
+
 - ✅ Multi-agent NLQ → SQL pipeline
 - ✅ Level 1: Schema profiling → ManagedDataPoints
 - ✅ Level 2: User DataPoints (context only)
@@ -1118,6 +1165,7 @@ datachat/
 - ✅ Performance: Query caching, rate limiting
 
 **Success Criteria:**
+
 - User can query any database without configuration
 - User can add context DataPoints to improve accuracy
 - Zero security vulnerabilities in penetration test
@@ -1131,6 +1179,7 @@ datachat/
 **Goal:** Support sophisticated users, improve performance.
 
 **Features:**
+
 - ✅ Level 3: Executable DataPoints (SQL templates)
 - ✅ Level 4: Basic materialization (manual configuration)
 - ✅ Advanced workspace indexing (Python, Airflow)
@@ -1139,6 +1188,7 @@ datachat/
 - ✅ Query optimization hints
 
 **Success Criteria:**
+
 - 50% of queries use templates (faster, consistent)
 - 10+ materialized views improve performance 10x+
 - Users can install custom tools
@@ -1151,6 +1201,7 @@ datachat/
 **Goal:** Category-defining capabilities, AI diagnostics.
 
 **Features:**
+
 - ✅ Level 4: Adaptive materialization (learns patterns)
 - ✅ Level 5: Knowledge graph + Neo4j
 - ✅ Anomaly detection and alerting
@@ -1159,6 +1210,7 @@ datachat/
 - ✅ Predictive analytics
 
 **Success Criteria:**
+
 - System automatically optimizes 80%+ of slow queries
 - Root cause analysis provides actionable insights 90%+ of time
 - Anomaly detection catches issues before users notice
@@ -1169,9 +1221,11 @@ datachat/
 ## Key Decisions & Rationale
 
 ### ManagedDataPoint Storage
+
 **Decision:** YAML files in `datapoints/managed/` (read-only)
 
 **Rationale:**
+
 - Transparency: Users can inspect what DataChat learned
 - Version control: Git tracks schema evolution
 - Simplicity: No additional database needed for v1.0
@@ -1182,14 +1236,17 @@ datachat/
 ---
 
 ### Materialization Strategy
+
 **Decision:** Start with manual (Level 4), add adaptive in v2.0
 
 **Rationale:**
+
 - User learns system before automation
 - Manual gives better understanding of trade-offs
 - Adaptive requires query pattern data (need time to collect)
 
 **CLI Experience:**
+
 ```bash
 # Manual materialization (v1.1)
 $ datachat materialize enable revenue --granularity day --refresh 1h
@@ -1203,14 +1260,17 @@ Run: datachat materialize enable daily_revenue --auto
 ---
 
 ### Filesystem Scope
+
 **Decision:** Start narrow (data/metrics code), allow expansion
 
 **Rationale:**
+
 - Focus: Most value from understanding data logic
 - Performance: Indexing everything is slow and noisy
 - Privacy: Avoid accidentally indexing secrets/credentials
 
 **Configuration:**
+
 ```yaml
 workspace:
   scope: narrow  # narrow | medium | broad
@@ -1223,15 +1283,18 @@ workspace:
 ---
 
 ### Neo4j for Knowledge Graph
+
 **Decision:** Use Neo4j unless better alternative emerges
 
 **Rationale:**
+
 - Industry standard for graph databases
 - Excellent Cypher query language for graph traversal
 - Good Python client (neo4j-driver)
 - Can be embedded (Neo4j Community Edition)
 
 **Alternative Considered:** NetworkX (Python library)
+
 - Pro: No separate database, simpler deployment
 - Con: In-memory only, doesn't scale beyond 10K nodes
 - Decision: Use NetworkX for v1.0 (simple), migrate to Neo4j in v2.0 (scale)
@@ -1241,12 +1304,14 @@ workspace:
 ## Getting Started (For Claude Code)
 
 ### Prerequisites
+
 - Python 3.11+
 - PostgreSQL (for user database)
 - Neo4j (for Level 5, optional in v1.0)
 - ClickHouse or BigQuery (test databases)
 
 ### Setup
+
 ```bash
 # Install dependencies
 poetry install
@@ -1267,6 +1332,7 @@ datachat serve
 ```
 
 ### First Query
+
 ```bash
 # CLI
 datachat query "Show me top 10 customers by revenue"
@@ -1284,11 +1350,13 @@ curl -X POST http://localhost:8000/api/chat \
 **Timeline:** Build internally first (4-6 months), then open source
 
 **Rationale:**
+
 - Focus: Avoid distraction of community management during core development
 - Quality: Ship something excellent, not rushed
 - Validation: Test with real users (Moniepoint) before public launch
 
 **Pre-Launch Checklist:**
+
 - [ ] Documentation complete (user guide, API docs, tutorials)
 - [ ] Security audit passed
 - [ ] Performance benchmarks published
@@ -1303,17 +1371,20 @@ curl -X POST http://localhost:8000/api/chat \
 ## Success Metrics
 
 ### Technical Metrics
+
 - Query success rate: >95%
 - Average query time: <2s (generation) + <5s (execution)
 - Cache hit rate: >40%
 - Uptime: >99.5%
 
 ### User Metrics
+
 - Time to first successful query: <5 minutes
 - Daily active users: Target 50+ by end of internal testing
 - User satisfaction: >4.5/5 in surveys
 
 ### Business Metrics
+
 - GitHub stars: 1000+ within 3 months of launch
 - Contributors: 10+ within 6 months
 - Enterprise inquiries: 5+ per month

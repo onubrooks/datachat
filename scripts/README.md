@@ -16,6 +16,29 @@ psql "$SYSTEM_DATABASE_URL" -f scripts/demo_seed.sql
 
 **Related DataPoints**: `datapoints/demo/*.json`
 
+### 0b. `grocery_seed.sql` - Grocery Business Seed
+
+**Purpose**: Create grocery operations tables with realistic sample data for DataPoint-driven evaluation.
+
+Tables created:
+- `grocery_stores`
+- `grocery_suppliers`
+- `grocery_products`
+- `grocery_inventory_snapshots`
+- `grocery_sales_transactions`
+- `grocery_purchase_orders`
+- `grocery_waste_events`
+
+**Usage**:
+
+```bash
+createdb datachat_grocery
+psql "postgresql://postgres:@localhost:5432/datachat_grocery" -f scripts/grocery_seed.sql
+```
+
+**Related DataPoints**: `datapoints/examples/grocery_store/*.json`
+**Related eval datasets**: `eval/grocery/*.json`
+
 ### 1. `test_sql_agent.py` - Comprehensive SQLAgent Testing
 
 **Purpose**: Test SQLAgent with predefined sample queries to verify SQL generation, self-correction, and metadata.
@@ -144,12 +167,15 @@ Query: _
 ```bash
 python scripts/eval_runner.py --mode retrieval --dataset eval/retrieval.json
 python scripts/eval_runner.py --mode qa --dataset eval/qa.json
+python scripts/eval_runner.py --mode retrieval --dataset eval/grocery/retrieval.json --min-hit-rate 0.6 --min-recall 0.5 --min-mrr 0.4
+python scripts/eval_runner.py --mode qa --dataset eval/grocery/qa.json --min-sql-match-rate 0.6 --min-answer-type-rate 0.6
 ```
 
 **Notes**:
 
 - Retrieval mode uses `sources` from `/api/v1/chat` as proxies for retrieved DataPoints.
-- Answer types are inferred with a simple heuristic (single value vs table vs time series).
+- Answer types support both API columnar payloads and row-oriented payloads.
+- Optional thresholds return non-zero exit codes to support CI gating.
 
 ## Common Issues & Solutions
 

@@ -149,19 +149,57 @@ class ContextAnswerAgent(BaseAgent):
                 purpose = metadata.get("business_purpose")
                 if purpose:
                     lines.append(f"  Purpose: {purpose}")
-                columns = metadata.get("key_columns") or []
+                columns = self._coerce_metadata_list(metadata.get("key_columns") or [])
                 if columns:
-                    col_names = [col.get("name", "unknown") for col in columns[:8]]
+                    col_names = []
+                    for col in columns[:8]:
+                        if isinstance(col, dict):
+                            col_names.append(col.get("name", "unknown"))
+                        elif isinstance(col, str):
+                            col_names.append(col)
                     lines.append(f"  Columns: {', '.join(col_names)}")
             elif dp.datapoint_type == "Business":
                 calculation = metadata.get("calculation")
                 if calculation:
                     lines.append(f"  Calculation: {calculation}")
-                synonyms = metadata.get("synonyms") or []
+                synonyms = self._coerce_string_list(metadata.get("synonyms") or [])
                 if synonyms:
                     lines.append(f"  Synonyms: {', '.join(synonyms[:5])}")
 
         return "\n".join(lines) if lines else "No DataPoints available."
+
+    def _coerce_metadata_list(self, value: Any) -> list[Any]:
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, list):
+                        return parsed
+                except json.JSONDecodeError:
+                    return []
+        return []
+
+    def _coerce_string_list(self, value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item) for item in value if str(item).strip()]
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("[") and stripped.endswith("]"):
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, list):
+                        return [str(item) for item in parsed if str(item).strip()]
+                except json.JSONDecodeError:
+                    pass
+            if "," in stripped:
+                return [part.strip() for part in stripped.split(",") if part.strip()]
+            return [stripped]
+        return []
 
     def _parse_response(
         self, content: str, input: ContextAnswerAgentInput
@@ -284,8 +322,13 @@ class ContextAnswerAgent(BaseAgent):
         schema = metadata.get("schema") or metadata.get("schema_name")
         full_name = f"{schema}.{table}" if schema and table else table
         purpose = metadata.get("business_purpose")
-        columns = metadata.get("key_columns") or []
-        column_names = [col.get("name", "unknown") for col in columns[:5]]
+        columns = self._coerce_metadata_list(metadata.get("key_columns") or [])
+        column_names = []
+        for col in columns[:5]:
+            if isinstance(col, dict):
+                column_names.append(col.get("name", "unknown"))
+            elif isinstance(col, str):
+                column_names.append(col)
 
         parts = []
         if full_name:
