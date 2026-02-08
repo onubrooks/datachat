@@ -274,6 +274,6 @@ After manual testing, consider:
 
 ## Related Documentation
 
-- [CLAUDE.md](../CLAUDE.md) - Full development guide
+- [ARCHITECTURE.md](../ARCHITECTURE.md) - Full development guide
 - [Backend Agents](../backend/agents/) - Agent implementations
 - [Tests](../tests/) - Unit and integration tests

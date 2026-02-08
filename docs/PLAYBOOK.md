@@ -7,35 +7,45 @@ This playbook contains implementation patterns, coding standards, and developmen
 ## Core Development Principles
 
 ### 1. Security First
+
 Every feature must pass security review before merging:
+
 - SQL injection prevention (parameterized queries only)
 - Input validation at every boundary
 - Principle of least privilege (read-only by default)
 - Audit logging for all data access
 
 ### 2. Performance by Default
+
 Assume scale from day one:
+
 - Cache aggressively (query results, LLM responses, schema metadata)
 - Implement rate limiting (prevent abuse)
 - Use background jobs for expensive operations
 - Monitor query execution times
 
 ### 3. Fail Gracefully
+
 Never crash on user input:
+
 - Validate all inputs with Pydantic models
 - Return structured errors with helpful messages
 - Log failures with full context for debugging
 - Retry transient failures (LLM timeouts, DB connection issues)
 
 ### 4. Observable Systems
+
 Instrument everything:
+
 - Structured logging (JSON format)
 - Correlation IDs across components
 - Performance metrics (latency, throughput, errors)
 - User analytics (feature usage, success rates)
 
 ### 5. Deterministic-First Catalog Flows
+
 For schema/shape intents, do not start with LLM generation:
+
 - Detect deterministic intents first: list tables, list columns, sample rows, row counts.
 - Use system-catalog query templates per engine (`postgresql/mysql/clickhouse/bigquery/redshift`).
 - Only call the SQL-generation LLM when deterministic planning is not applicable.
@@ -949,7 +959,7 @@ git push origin feature/level-4-materialization
 - [ ] Integration tests added for critical paths
 - [ ] Error handling implemented with structured errors
 - [ ] Logging/metrics added for observability
-- [ ] Documentation updated (docstrings, CLAUDE.md, etc.)
+- [ ] Documentation updated (docstrings, ARCHITECTURE.md, etc.)
 
 ### 3. Testing Strategy
 
@@ -1094,12 +1104,14 @@ def detect_anomalies(datapoint: DataPoint, values: List[float]) -> List[Anomaly]
 ## Quick Reference
 
 ### Key Files
-- `CLAUDE.md` - Architecture & system design
+
+- `ARCHITECTURE.md` - Architecture & system design
 - `PLAYBOOK.md` - Implementation patterns (this file)
 - `PRD.md` - Product requirements
 - `DATAPOINT_SCHEMA.md` - DataPoint specification
 
 ### Important Commands
+
 ```bash
 # Development
 datachat serve                        # Start server
@@ -1117,6 +1129,7 @@ docker logs -f datachat               # View logs
 ```
 
 ### Code Locations
+
 - Agents: `datachat/backend/agents/`
 - DataPoints: `datachat/backend/knowledge/`
 - APEX Engine: `datachat/backend/apex/`

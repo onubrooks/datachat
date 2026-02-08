@@ -92,10 +92,10 @@ node_modules/
 EOF
 ```text
 
-### 4. Add CLAUDE.md
+### 4. Add ARCHITECTURE.md
 
 ```textbash
-# Copy CLAUDE.md content (from the file I created above)
+# Copy ARCHITECTURE.md content (from the file I created above)
 # This is your primary reference for Claude Code
 ```text
 
@@ -152,7 +152,7 @@ git push
 **Claude Code Command:**
 
 ```text
-Read CLAUDE.md thoroughly. Then create the base agent framework:
+Read ARCHITECTURE.md thoroughly. Then create the base agent framework:
 1. backend/agents/base.py - BaseAgent ABC with execute() method, timing, logging
 2. backend/models/agent.py - Pydantic models for AgentInput, AgentOutput, AgentError
 3. Include proper async support, error handling, and type hints
@@ -217,7 +217,7 @@ Create backend/models/datapoint.py with Pydantic models:
 4. ProcessDataPoint for ETL/freshness info
 5. Use discriminated unions for type field
 6. Add validators for datapoint_id format
-Reference the DataPoint schemas in CLAUDE.md
+Reference the DataPoint schemas in ARCHITECTURE.md
 ```text
 
 **Test Command:**
@@ -1959,10 +1959,10 @@ For each integration:
 After every major feature, run /compact to free context
 ```text
 
-### 2. Reference CLAUDE.md
+### 2. Reference ARCHITECTURE.md
 
 ```text
-Always start sessions with: "Read CLAUDE.md, then..."
+Always start sessions with: "Read ARCHITECTURE.md, then..."
 ```text
 
 ### 3. Work in Vertical Slices
@@ -2001,7 +2001,7 @@ After Claude generates code:
 ### 7. Keep Context Updated
 
 ```text
-Update CLAUDE.md "Current Development Focus" section
+Update ARCHITECTURE.md "Current Development Focus" section
 after each PR merge
 ```text
 
@@ -2013,7 +2013,7 @@ after each PR merge
 
 - Review week's goals
 - Plan Claude Code sessions
-- Update CLAUDE.md focus section
+- Update ARCHITECTURE.md focus section
 
 ### Tuesday-Thursday
 
@@ -2036,7 +2036,7 @@ after each PR merge
 ### Claude Code Lost Context
 
 ```text
-"Read CLAUDE.md. I'm working on [feature]. 
+"Read ARCHITECTURE.md. I'm working on [feature]. 
 Here's what's already done: [summary].
 Continue with: [next step]"
 ```text

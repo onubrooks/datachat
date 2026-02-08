@@ -19,6 +19,7 @@ Planned (not yet implemented as full product features):
 ## Document Map
 
 - `../GETTING_STARTED.md` - setup paths and first-run flow.
+- `ARCHITECTURE.md` - system architecture and engineering design guide.
 - `API.md` - API endpoints and payloads.
 - `CREDENTIALS_ONLY_MODE.md` - capabilities/limits for credentials-only mode.
 - `MULTI_DATABASE.md` - connection registry and per-request routing.
