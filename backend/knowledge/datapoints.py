@@ -61,12 +61,18 @@ class DataPointLoader:
     def _infer_source_tier(file_path: Path) -> str:
         """Infer DataPoint source tier from file path."""
         path_parts = [part.lower() for part in file_path.resolve().parts]
-        if "datapoints" in path_parts:
-            if "user" in path_parts:
+        datapoints_index = -1
+        for idx, part in enumerate(path_parts):
+            if part == "datapoints":
+                datapoints_index = idx
+
+        if datapoints_index >= 0 and datapoints_index + 1 < len(path_parts):
+            tier_segment = path_parts[datapoints_index + 1]
+            if tier_segment == "user":
                 return "user"
-            if "managed" in path_parts:
+            if tier_segment == "managed":
                 return "managed"
-            if "examples" in path_parts:
+            if tier_segment == "examples":
                 return "example"
         return "custom"
 

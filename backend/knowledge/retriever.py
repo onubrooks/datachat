@@ -106,6 +106,7 @@ class Retriever:
             "unknown": 2,
             "example": 1,
         }
+        self._precedence_pool_multiplier = 3
 
         logger.info(f"Retriever initialized with RRF k={rrf_k}")
 
@@ -138,16 +139,17 @@ class Retriever:
             RetrieverError: If retrieval fails
         """
         try:
+            retrieval_top_k = max(top_k, top_k * self._precedence_pool_multiplier)
             if mode == RetrievalMode.LOCAL:
-                items = await self._retrieve_local(query, top_k, metadata_filter)
+                items = await self._retrieve_local(query, retrieval_top_k, metadata_filter)
             elif mode == RetrievalMode.GLOBAL:
-                items = await self._retrieve_global(query, top_k, graph_max_depth)
+                items = await self._retrieve_global(query, retrieval_top_k, graph_max_depth)
             elif mode == RetrievalMode.HYBRID:
                 items = await self._retrieve_hybrid(
                     query,
-                    top_k,
-                    vector_top_k or top_k * 2,
-                    graph_top_k or top_k * 2,
+                    retrieval_top_k,
+                    vector_top_k or retrieval_top_k * 2,
+                    graph_top_k or retrieval_top_k * 2,
                     graph_max_depth,
                     metadata_filter,
                 )
@@ -155,17 +157,18 @@ class Retriever:
                 raise RetrieverError(f"Unknown retrieval mode: {mode}")
 
             prioritized_items = self._apply_source_precedence(items)
+            final_items = prioritized_items[:top_k]
 
             logger.info(
                 "Retrieved %s items using %s mode for query: '%s...'",
-                len(prioritized_items),
+                len(final_items),
                 mode,
                 query[:50],
             )
 
             return RetrievalResult(
-                items=prioritized_items,
-                total_count=len(prioritized_items),
+                items=final_items,
+                total_count=len(final_items),
                 mode=mode,
                 query=query,
             )

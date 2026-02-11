@@ -124,9 +124,11 @@ class TestLocalMode:
         result = await retriever.retrieve("sales data", mode=RetrievalMode.LOCAL, top_k=3)
 
         # Should call vector search
-        mock_vector_store.search.assert_called_once_with(
-            "sales data", top_k=3, filter_metadata=None
-        )
+        mock_vector_store.search.assert_called_once()
+        args, kwargs = mock_vector_store.search.call_args
+        assert args[0] == "sales data"
+        assert kwargs["filter_metadata"] is None
+        assert kwargs["top_k"] == 3 * retriever._precedence_pool_multiplier
 
         # Should not call graph
         assert retriever.knowledge_graph.get_related.call_count == 0
@@ -179,9 +181,11 @@ class TestLocalMode:
             metadata_filter=metadata_filter,
         )
 
-        mock_vector_store.search.assert_called_once_with(
-            "sales data", top_k=3, filter_metadata=metadata_filter
-        )
+        mock_vector_store.search.assert_called_once()
+        args, kwargs = mock_vector_store.search.call_args
+        assert args[0] == "sales data"
+        assert kwargs["filter_metadata"] == metadata_filter
+        assert kwargs["top_k"] == 3 * retriever._precedence_pool_multiplier
 
     @pytest.mark.asyncio
     async def test_local_mode_enriches_metadata_from_graph(
@@ -197,14 +201,64 @@ class TestLocalMode:
 
         result = await retriever.retrieve("sales data", mode=RetrievalMode.LOCAL, top_k=1)
 
-        assert len(result.items) == 3
-        sales_item = next(item for item in result.items if item.datapoint_id == "table_sales_001")
+        assert len(result.items) == 1
+        sales_item = result.items[0]
+        assert sales_item.datapoint_id == "table_sales_001"
         metadata = sales_item.metadata
         assert metadata["business_purpose"] == "Canonical sales facts"
         assert metadata["name"] == "Sales Table"
         assert metadata["schema"] == "analytics"
         mock_knowledge_graph.get_node_metadata.assert_any_call("table_sales_001")
         assert mock_knowledge_graph.get_node_metadata.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_local_mode_applies_source_precedence_before_final_top_k(
+        self, retriever, mock_vector_store
+    ):
+        """When top_k is small, retrieval should still consider deeper candidates for precedence."""
+        mock_vector_store.search.return_value = [
+            {
+                "datapoint_id": "table_orders_managed_001",
+                "distance": 0.01,
+                "metadata": {
+                    "name": "Orders (Managed)",
+                    "type": "Schema",
+                    "schema": "public",
+                    "table_name": "orders",
+                    "source_tier": "managed",
+                },
+                "document": "managed orders context",
+            },
+            {
+                "datapoint_id": "table_orders_user_001",
+                "distance": 0.03,
+                "metadata": {
+                    "name": "Orders (User)",
+                    "type": "Schema",
+                    "schema": "public",
+                    "table_name": "orders",
+                    "source_tier": "user",
+                },
+                "document": "user orders context",
+            },
+            {
+                "datapoint_id": "table_customers_001",
+                "distance": 0.05,
+                "metadata": {
+                    "name": "Customers",
+                    "type": "Schema",
+                    "schema": "public",
+                    "table_name": "customers",
+                    "source_tier": "managed",
+                },
+                "document": "customers context",
+            },
+        ]
+
+        result = await retriever.retrieve("orders", mode=RetrievalMode.LOCAL, top_k=1)
+
+        assert len(result.items) == 1
+        assert result.items[0].datapoint_id == "table_orders_user_001"
 
     @pytest.mark.asyncio
     async def test_local_mode_prefers_managed_over_example_for_same_table(

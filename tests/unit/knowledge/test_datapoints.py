@@ -155,6 +155,7 @@ class TestLoadFile:
             ("datapoints/user/table_fact_sales_001.json", "user"),
             ("datapoints/managed/table_fact_sales_001.json", "managed"),
             ("datapoints/examples/table_fact_sales_001.json", "example"),
+            ("home/user/project/datapoints/managed/table_fact_sales_001.json", "managed"),
             ("fixtures/table_fact_sales_001.json", "custom"),
         ],
     )
