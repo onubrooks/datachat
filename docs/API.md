@@ -8,6 +8,7 @@ Base URL: `http://localhost:8000/api/v1`
 - `POST /system/initialize` - Initialize with a database URL and optional auto-profiling.
 
 Request body:
+
 ```json
 {
   "database_url": "postgresql://user:pass@host:5432/db",
@@ -17,6 +18,7 @@ Request body:
 ```
 
 Notes:
+
 - When provided, `database_url` and `system_database_url` are persisted to `~/.datachat/config.json`.
 - `is_initialized=true` means a target database is connected and chat can run.
 - DataPoints are optional enrichment; when absent, chat runs in live schema mode.
@@ -27,6 +29,7 @@ Notes:
 - `WS /ws/chat` - WebSocket streaming for agent updates and answer chunks.
 
 Request body:
+
 ```json
 {
   "message": "What was revenue last quarter?",
@@ -36,6 +39,7 @@ Request body:
 ```
 
 Notes:
+
 - If `target_database` is provided, SQL generation and execution both use that
   connection's database type and URL.
 - If `target_database` is omitted, the default registry connection is used when set.
@@ -60,6 +64,7 @@ Notes:
 - `POST /datapoints/pending/bulk-approve` - Approve all pending DataPoints.
 
 Profiling request payload (bounded/safe by default):
+
 ```json
 {
   "sample_size": 100,
@@ -74,17 +79,20 @@ Profiling request payload (bounded/safe by default):
 ```
 
 Profiling progress now includes partial coverage metadata:
+
 - `total_tables`
 - `tables_completed`
 - `tables_failed`
 - `tables_skipped`
 
 Notes:
+
 - Profiling is resilient to per-table failures and timeouts; a job can complete with partial coverage.
 - Lightweight profiling snapshots are cached locally and used to enrich credentials-only SQL prompts.
 - Query templates are available for `postgresql`, `mysql`, `bigquery`, `clickhouse`, and `redshift`; runtime execution is currently PostgreSQL-only until additional connectors land.
 
 Approve payload supports optional edits:
+
 ```json
 {
   "review_note": "optional",
@@ -96,9 +104,24 @@ Approve payload supports optional edits:
 
 - `POST /sync` - Trigger a full sync.
 - `GET /sync/status` - Get sync job status.
+- `GET /datapoints` - List locally available DataPoints.
 - `POST /datapoints` - Create a DataPoint.
 - `PUT /datapoints/{id}` - Update a DataPoint.
 - `DELETE /datapoints/{id}` - Delete a DataPoint.
+
+`GET /datapoints` returns DataPoints currently loaded in the vector store
+(the same effective set used during retrieval/chat), deduplicated by
+`datapoint_id` with priority:
+
+- `user` > `managed` > `custom`/`unknown` > `example`
+
+List item shape includes:
+
+- `datapoint_id`
+- `type`
+- `name`
+- `source_tier` (for example `managed`, `example`, `custom`)
+- `source_path` (source file path when available)
 
 ## Tools
 
@@ -106,6 +129,7 @@ Approve payload supports optional edits:
 - `POST /tools/execute` - Execute a tool call.
 
 Tool execute request:
+
 ```json
 {
   "name": "get_table_sample",
@@ -122,6 +146,7 @@ Tool execute request:
 ```
 
 Notes:
+
 - `target_database` is optional; when provided, tool execution uses that connection's database type/URL context.
 - If `target_database` is omitted, the default connection context is used when available.
 - `/tools/execute` injects runtime metadata for built-ins (`retriever`, `database_type`, `database_url`, registry/connector handles) so `context_answer`, `run_sql`, `list_tables`, `list_columns`, and `get_table_sample` work consistently from API calls.

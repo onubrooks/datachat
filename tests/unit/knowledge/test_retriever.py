@@ -31,6 +31,7 @@ def mock_vector_store():
 def mock_knowledge_graph():
     """Create mock KnowledgeGraph."""
     mock = Mock(spec=KnowledgeGraph)
+    mock.get_node_metadata.return_value = None
     return mock
 
 
@@ -181,6 +182,29 @@ class TestLocalMode:
         mock_vector_store.search.assert_called_once_with(
             "sales data", top_k=3, filter_metadata=metadata_filter
         )
+
+    @pytest.mark.asyncio
+    async def test_local_mode_enriches_metadata_from_graph(
+        self, retriever, mock_vector_store, mock_knowledge_graph, sample_vector_results
+    ):
+        """Test vector metadata is enriched with graph node metadata when available."""
+        mock_vector_store.search.return_value = sample_vector_results
+        mock_knowledge_graph.get_node_metadata.return_value = {
+            "business_purpose": "Canonical sales facts",
+            "schema": "analytics",
+            "key_columns": [{"name": "amount", "type": "numeric"}],
+        }
+
+        result = await retriever.retrieve("sales data", mode=RetrievalMode.LOCAL, top_k=1)
+
+        assert len(result.items) == 3
+        sales_item = next(item for item in result.items if item.datapoint_id == "table_sales_001")
+        metadata = sales_item.metadata
+        assert metadata["business_purpose"] == "Canonical sales facts"
+        assert metadata["name"] == "Sales Table"
+        assert metadata["schema"] == "analytics"
+        mock_knowledge_graph.get_node_metadata.assert_any_call("table_sales_001")
+        assert mock_knowledge_graph.get_node_metadata.call_count == 3
 
 
 class TestGlobalMode:

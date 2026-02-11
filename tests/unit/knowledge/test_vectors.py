@@ -250,6 +250,23 @@ class TestAddDataPoints:
         assert results[0]["metadata"]["type"] == "Schema"
         assert results[0]["metadata"]["name"] == "Test Sales Table"
         assert results[0]["metadata"]["table_name"] == "test.sales"
+        assert "key_columns" in results[0]["metadata"]
+        assert "sale_id" in results[0]["metadata"]["key_columns"]
+
+    @pytest.mark.asyncio
+    async def test_business_metadata_includes_metric_fields(
+        self, test_vector_store, sample_business_datapoint
+    ):
+        """Business datapoint metadata should persist calculation and semantic hints."""
+        await test_vector_store.add_datapoints([sample_business_datapoint])
+
+        results = await test_vector_store.search("revenue", top_k=1)
+
+        assert len(results) == 1
+        metadata = results[0]["metadata"]
+        assert metadata["calculation"] == "SUM(sales.amount)"
+        assert "total sales" in metadata["synonyms"]
+        assert "Exclude refunds" in metadata["business_rules"]
 
 
 class TestSearch:

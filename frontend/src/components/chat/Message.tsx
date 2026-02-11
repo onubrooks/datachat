@@ -30,6 +30,92 @@ interface MessageProps {
   onClarifyingAnswer?: (question: string) => void;
 }
 
+function renderInlineMarkdown(text: string): React.ReactNode[] {
+  const tokens = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean);
+  return tokens.map((token, index) => {
+    if (token.startsWith("**") && token.endsWith("**") && token.length >= 4) {
+      return <strong key={`b-${index}`}>{token.slice(2, -2)}</strong>;
+    }
+    if (token.startsWith("`") && token.endsWith("`") && token.length >= 3) {
+      return (
+        <code
+          key={`c-${index}`}
+          className="rounded bg-secondary/70 px-1 py-0.5 text-xs"
+        >
+          {token.slice(1, -1)}
+        </code>
+      );
+    }
+    return <React.Fragment key={`t-${index}`}>{token}</React.Fragment>;
+  });
+}
+
+function renderMarkdownish(text: string): React.ReactNode {
+  if (!text) {
+    return null;
+  }
+
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const blocks: React.ReactNode[] = [];
+  const listItems: string[] = [];
+  let paragraphBuffer: string[] = [];
+
+  const flushParagraph = () => {
+    if (!paragraphBuffer.length) {
+      return;
+    }
+    const paragraph = paragraphBuffer.join("\n").trim();
+    paragraphBuffer = [];
+    if (!paragraph) {
+      return;
+    }
+    blocks.push(
+      <p key={`p-${blocks.length}`} className="whitespace-pre-wrap leading-relaxed">
+        {renderInlineMarkdown(paragraph)}
+      </p>
+    );
+  };
+
+  const flushList = () => {
+    if (!listItems.length) {
+      return;
+    }
+    blocks.push(
+      <ul key={`l-${blocks.length}`} className="list-disc space-y-1 pl-5">
+        {listItems.map((item, index) => (
+          <li key={`li-${index}`}>{renderInlineMarkdown(item)}</li>
+        ))}
+      </ul>
+    );
+    listItems.length = 0;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    const bulletMatch = line.match(/^\s*[*-]\s+(.+)$/);
+
+    if (bulletMatch) {
+      flushParagraph();
+      listItems.push(bulletMatch[1].trim());
+      continue;
+    }
+
+    if (line.trim() === "") {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    flushList();
+    paragraphBuffer.push(line);
+  }
+
+  flushParagraph();
+  flushList();
+
+  return <div className="space-y-2">{blocks}</div>;
+}
+
 export function Message({ message, onClarifyingAnswer }: MessageProps) {
   const isUser = message.role === "user";
   const columnNames = message.data ? Object.keys(message.data) : [];
@@ -101,7 +187,7 @@ export function Message({ message, onClarifyingAnswer }: MessageProps) {
             </div>
           )}
           {/* Main message text */}
-          <div className="whitespace-pre-wrap">{message.content}</div>
+          {renderMarkdownish(message.content)}
 
           {message.clarifying_questions &&
             message.clarifying_questions.length > 0 && (

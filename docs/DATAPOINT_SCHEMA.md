@@ -38,34 +38,40 @@ datapoint:
 ### Field Specifications
 
 #### `id` (required)
+
 - **Format:** Lowercase alphanumeric with underscores
 - **Examples:** `revenue`, `customer_lifetime_value`, `pool_match_rate`
 - **Validation:** Regex `^[a-z0-9_]+$`
 - **Uniqueness:** Must be unique across all DataPoints
 
 #### `type` (required)
+
 - **concept:** Abstract business concept (e.g., "Revenue", "Customer Churn")
 - **metric:** Measurable quantity with formula (e.g., "Monthly Recurring Revenue")
 - **dimension:** Attribute for grouping (e.g., "Product Category", "Region")
 - **entity:** Business object (e.g., "Customer", "Transaction")
 
 #### `definition` (required)
+
 - **Format:** Markdown text
 - **Purpose:** Explain what this DataPoint means in business terms
 - **Length:** Recommended 1-3 paragraphs
 - **Example:**
-  ```
+
+  ```txt
   Total value of completed sales transactions, excluding refunds and taxes.
   Finance team's canonical definition as of 2024-Q4. Used for monthly
   reporting and executive dashboards.
   ```
 
 #### `owner` (required)
+
 - **Format:** Team name or email
 - **Examples:** `finance-team`, `data-platform`, `sarah@company.com`
 - **Purpose:** Who to contact about this DataPoint
 
 #### `tags` (optional)
+
 - **Format:** Array of lowercase strings
 - **Examples:** `[sales, finance, critical]`, `[experimental]`
 - **Purpose:** Categorization, searchability, filtering
@@ -150,12 +156,14 @@ datapoint:
 ### Field Specifications
 
 #### `sql_template` (required)
+
 - **Format:** SQL string with `{parameter}` placeholders
 - **Constraints:**
   - Must be SELECT only (no INSERT/UPDATE/DELETE)
   - Must include GROUP BY if aggregation used
   - Should include ORDER BY for consistency
 - **Example:**
+
   ```sql
   SELECT 
     SUM(amount) as value,
@@ -170,6 +178,7 @@ datapoint:
   ```
 
 #### `parameters` (required)
+
 - **Format:** Map of parameter names to specifications
 - **Required fields per parameter:**
   - `type`: Data type (string | integer | float | timestamp | enum)
@@ -181,6 +190,7 @@ datapoint:
   - `values`: Allowed values (for enum type)
 
 #### `backend_variants` (optional)
+
 - **Purpose:** Handle SQL dialect differences
 - **Format:** Map of backend names to SQL templates
 - **Supported backends:** `postgres`, `clickhouse`, `bigquery`, `snowflake`
@@ -306,24 +316,29 @@ datapoint:
 ### Field Specifications
 
 #### `strategy` (required)
+
 - **adaptive:** System decides when/how to materialize based on query patterns
 - **manual:** User explicitly configures materialization
 
 #### `granularity` (manual only)
+
 - **Format:** Time unit string
 - **Values:** `hour`, `day`, `week`, `month`, `quarter`, `year`
 - **Purpose:** Pre-aggregate at this time bucket
 
 #### `refresh_interval` (manual only)
+
 - **Format:** Duration string (e.g., "10 minutes", "1 hour", "1 day")
 - **Purpose:** How often to update materialized data
 
 #### `incremental` (manual only)
+
 - **Type:** Boolean
 - **true:** Only refresh recent data (uses `lookback_window`)
 - **false:** Full refresh every time (slower but simpler)
 
 #### `lookback_window` (incremental only)
+
 - **Format:** Duration string (e.g., "7 days", "1 month")
 - **Purpose:** How much recent data to re-process on refresh
 
@@ -434,25 +449,30 @@ datapoint:
 #### SLA Configuration
 
 **`target`**: Expected value for the metric
+
 - Examples: `1000000` (revenue target $1M), `0.95` (95% match rate)
 
 **`warning_threshold`**: Percentage below target to alert
+
 - Format: 0.0-1.0 (0.9 = alert at 10% below target)
 - Triggers investigation workflow
 
 **`critical_threshold`**: Percentage below target to escalate
+
 - Format: 0.0-1.0 (0.8 = escalate at 20% below target)
 - Triggers high-priority alert and auto-remediation
 
 #### Anomaly Detection
 
 **`algorithm`**: Detection method
+
 - **spc**: Statistical Process Control (3-sigma, fast, interpretable)
 - **prophet**: Facebook's time series forecasting (trend-aware)
 - **isolation_forest**: ML-based outlier detection (unsupervised)
 - **ensemble**: Combine multiple algorithms (require 2+ to agree)
 
 **`sensitivity`**: How aggressive to detect anomalies
+
 - Format: 0.01-0.10 (0.05 = alert on 5% deviation)
 - Lower = fewer alerts but might miss issues
 - Higher = more alerts but might have false positives
@@ -460,10 +480,12 @@ datapoint:
 #### Auto-Remediation
 
 **`condition`**: Python expression (evaluated with metric context)
+
 - Variables available: `value`, `target`, `warning_threshold`, `critical_threshold`
 - Example: `"value < sla.warning_threshold AND pricing_coverage < 0.95"`
 
 **`action`**: What to do when condition triggers
+
 - **trigger_dag**: Run Airflow DAG (specify `dag_id` in config)
 - **page_oncall**: Alert via PagerDuty (specify `service` in config)
 - **send_alert**: Post to Slack/email (specify `channel` in config)
@@ -471,15 +493,18 @@ datapoint:
 #### Knowledge Graph Relationships
 
 **`depends_on`**: What this metric relies on
+
 - **input_metric**: Another metric that feeds into this calculation
 - **data_quality**: Data quality check that affects accuracy
 - **system_dependency**: External system whose health impacts this metric
 
 **`impact_coefficient`**: How much variance explained
+
 - Format: 0.0-1.0 (0.8 = 80% of variance from this dependency)
 - Used to prioritize root cause investigation
 
 **`impacts`**: What this metric affects
+
 - **downstream_metric**: Metrics calculated from this one
 - **derived_metric**: Metrics that reference this one
 - **operational_cost**: Business costs impacted by this metric
@@ -603,6 +628,7 @@ datapoint:
 DataChat validates DataPoints on load. Here are the rules:
 
 ### Required Field Validation
+
 - `id`, `name`, `type`, `definition`, `owner` must be present
 - `id` must match regex `^[a-z0-9_]+$`
 - `type` must be one of: `concept`, `metric`, `dimension`, `entity`
@@ -610,26 +636,31 @@ DataChat validates DataPoints on load. Here are the rules:
 ### Level-Specific Validation
 
 **Level 2:**
+
 - If `data_sources` present, each must have `table` and `columns`
 - `related_concepts` must reference valid DataPoint IDs
 
 **Level 3:**
+
 - `execution.sql_template` must be valid SQL
 - `execution.sql_template` must be SELECT only
 - `execution.parameters` must define all template placeholders
 - Each parameter must have `type` and `required` fields
 
 **Level 4:**
+
 - If `materialization.enabled = true`, must have `strategy`
 - If `strategy = manual`, must have `granularity` and `refresh_interval`
 - If `incremental = true`, must have `lookback_window`
 
 **Level 5:**
+
 - All DataPoint IDs in `relationships` must exist
 - `impact_coefficient` must be 0.0-1.0
 - `auto_remediation.condition` must be valid Python expression
 
 ### Cross-Field Validation
+
 - If `type = metric`, should have `execution` block (Level 3+)
 - If `materialization.enabled`, must have `execution` block
 - If `intelligence` present, must have `execution` and `materialization`
@@ -688,6 +719,7 @@ datachat materialize enable revenue
 ### 1. Start Simple, Add Complexity
 
 ❌ **Don't:** Create Level 5 DataPoint on day 1
+
 ```yaml
 datapoint:
   id: new_metric
@@ -699,6 +731,7 @@ datapoint:
 ```
 
 ✅ **Do:** Start with Level 2, upgrade incrementally
+
 ```yaml
 # Week 1: Level 2
 datapoint:
@@ -719,12 +752,14 @@ datapoint:
 ### 2. Keep SQL Templates Readable
 
 ❌ **Don't:** Complex, unreadable SQL
+
 ```sql
 SELECT SUM(CASE WHEN a='x' THEN b*c ELSE d END) AS v,DATE_TRUNC('d',t) 
 FROM t1 LEFT JOIN t2 ON t1.id=t2.fk WHERE t>=NOW()-INTERVAL 7 DAY
 ```
 
 ✅ **Do:** Formatted, documented SQL
+
 ```sql
 SELECT 
   SUM(
@@ -745,6 +780,7 @@ ORDER BY date
 ### 3. Use Descriptive Names and Tags
 
 ❌ **Don't:** Cryptic names
+
 ```yaml
 datapoint:
   id: m1
@@ -753,6 +789,7 @@ datapoint:
 ```
 
 ✅ **Do:** Clear, searchable names
+
 ```yaml
 datapoint:
   id: monthly_recurring_revenue
@@ -763,11 +800,13 @@ datapoint:
 ### 4. Document Edge Cases
 
 ❌ **Don't:** Assume definition is obvious
+
 ```yaml
 definition: Total revenue
 ```
 
 ✅ **Do:** Explain nuances
+
 ```yaml
 definition: |
   Total revenue from completed sales transactions.
@@ -790,6 +829,7 @@ definition: |
 If you have existing metric definitions (in dbt, Looker, etc.), here's how to migrate:
 
 **1. Inventory existing metrics**
+
 ```bash
 # List metrics from dbt
 cat dbt_project.yml | grep -A 5 "metrics:"
@@ -801,6 +841,7 @@ looker-cli metrics list
 **2. Convert to DataPoint format**
 
 **From dbt metric:**
+
 ```yaml
 # dbt_project.yml
 metrics:
@@ -815,6 +856,7 @@ metrics:
 ```
 
 **To DataPoint:**
+
 ```yaml
 datapoint:
   id: revenue
@@ -836,6 +878,7 @@ datapoint:
 ```
 
 **3. Validate migration**
+
 ```bash
 # Compare results
 datachat query "revenue last month" > new_results.csv
@@ -885,11 +928,13 @@ For programmatic validation, here's the JSON Schema:
 ## Support
 
 **Questions?**
+
 - File issue: GitHub Issues
 - Discuss: #datachat Slack channel
 
 **Found a schema bug?**
 Please report with:
+
 - DataPoint YAML that fails validation
 - Expected vs actual behavior
 - DataChat version

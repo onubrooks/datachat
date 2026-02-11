@@ -114,6 +114,7 @@ class ContextAgent(BaseAgent):
                     score=item.score,
                     source=item.source,
                     metadata=item.metadata,
+                    content=item.content,
                 )
 
                 datapoints.append(retrieved_dp)

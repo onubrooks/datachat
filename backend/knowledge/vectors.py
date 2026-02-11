@@ -6,6 +6,7 @@ Supports semantic search, persistence, and metadata storage.
 """
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -399,6 +400,26 @@ class VectorStore:
         # Add type-specific fields
         if hasattr(datapoint, "business_purpose"):
             parts.append(f"Purpose: {datapoint.business_purpose}")
+        if hasattr(datapoint, "key_columns") and datapoint.key_columns:
+            column_summaries = []
+            for col in datapoint.key_columns[:12]:
+                meaning = col.business_meaning if col.business_meaning else ""
+                segment = f"{col.name} ({col.type})"
+                if meaning:
+                    segment = f"{segment}: {meaning}"
+                column_summaries.append(segment)
+            if column_summaries:
+                parts.append(f"Key Columns: {'; '.join(column_summaries)}")
+        if hasattr(datapoint, "relationships") and datapoint.relationships:
+            rels = [
+                f"{rel.join_column}->{rel.target_table} ({rel.cardinality})"
+                for rel in datapoint.relationships[:8]
+            ]
+            parts.append(f"Relationships: {'; '.join(rels)}")
+        if hasattr(datapoint, "common_queries") and datapoint.common_queries:
+            parts.append(f"Common Queries: {'; '.join(datapoint.common_queries[:5])}")
+        if hasattr(datapoint, "gotchas") and datapoint.gotchas:
+            parts.append(f"Gotchas: {'; '.join(datapoint.gotchas[:5])}")
 
         if hasattr(datapoint, "calculation"):
             parts.append(f"Calculation: {datapoint.calculation}")
@@ -414,6 +435,12 @@ class VectorStore:
 
         if hasattr(datapoint, "schedule"):
             parts.append(f"Schedule: {datapoint.schedule}")
+        if hasattr(datapoint, "data_freshness"):
+            parts.append(f"Data Freshness: {datapoint.data_freshness}")
+        if hasattr(datapoint, "target_tables") and datapoint.target_tables:
+            parts.append(f"Target Tables: {', '.join(datapoint.target_tables[:10])}")
+        if hasattr(datapoint, "dependencies") and datapoint.dependencies:
+            parts.append(f"Dependencies: {', '.join(datapoint.dependencies[:10])}")
 
         # Add tags
         if datapoint.tags:
@@ -442,9 +469,58 @@ class VectorStore:
         if hasattr(datapoint, "table_name"):
             metadata["table_name"] = datapoint.table_name
             metadata["schema"] = datapoint.schema_name
+        if hasattr(datapoint, "business_purpose") and datapoint.business_purpose:
+            metadata["business_purpose"] = datapoint.business_purpose
+        if hasattr(datapoint, "key_columns") and datapoint.key_columns:
+            metadata["key_columns"] = json.dumps(
+                [
+                    {
+                        "name": col.name,
+                        "type": col.type,
+                        "business_meaning": col.business_meaning,
+                    }
+                    for col in datapoint.key_columns[:20]
+                ]
+            )
+        if hasattr(datapoint, "relationships") and datapoint.relationships:
+            metadata["relationships"] = json.dumps(
+                [
+                    {
+                        "target_table": rel.target_table,
+                        "join_column": rel.join_column,
+                        "cardinality": rel.cardinality,
+                    }
+                    for rel in datapoint.relationships[:20]
+                ]
+            )
+        if hasattr(datapoint, "common_queries") and datapoint.common_queries:
+            metadata["common_queries"] = json.dumps(datapoint.common_queries[:20])
+        if hasattr(datapoint, "gotchas") and datapoint.gotchas:
+            metadata["gotchas"] = json.dumps(datapoint.gotchas[:20])
+        if hasattr(datapoint, "freshness") and datapoint.freshness:
+            metadata["freshness"] = datapoint.freshness
 
         if hasattr(datapoint, "related_tables") and datapoint.related_tables:
             metadata["related_tables"] = ",".join(datapoint.related_tables)
+        if hasattr(datapoint, "calculation") and datapoint.calculation:
+            metadata["calculation"] = datapoint.calculation
+        if hasattr(datapoint, "synonyms") and datapoint.synonyms:
+            metadata["synonyms"] = json.dumps(datapoint.synonyms[:20])
+        if hasattr(datapoint, "business_rules") and datapoint.business_rules:
+            metadata["business_rules"] = json.dumps(datapoint.business_rules[:20])
+        if hasattr(datapoint, "unit") and datapoint.unit:
+            metadata["unit"] = datapoint.unit
+        if hasattr(datapoint, "aggregation") and datapoint.aggregation:
+            metadata["aggregation"] = datapoint.aggregation
+
+        if hasattr(datapoint, "schedule") and datapoint.schedule:
+            metadata["schedule"] = datapoint.schedule
+        if hasattr(datapoint, "data_freshness") and datapoint.data_freshness:
+            metadata["data_freshness"] = datapoint.data_freshness
+        if hasattr(datapoint, "target_tables") and datapoint.target_tables:
+            metadata["target_tables"] = ",".join(datapoint.target_tables)
+        if hasattr(datapoint, "dependencies") and datapoint.dependencies:
+            metadata["dependencies"] = ",".join(datapoint.dependencies)
 
         if datapoint.tags:
             metadata["tags"] = ",".join(datapoint.tags)

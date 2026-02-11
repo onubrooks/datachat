@@ -436,6 +436,21 @@ class KnowledgeGraph:
 
         return dict(self.graph.nodes[node_id])
 
+    def get_node_metadata(self, node_id: str) -> dict[str, Any] | None:
+        """
+        Return a copy of node metadata for a DataPoint/node ID.
+
+        Args:
+            node_id: Node identifier
+
+        Returns:
+            Node metadata dictionary or None if node does not exist.
+        """
+        node = self.get_node(node_id)
+        if node is None:
+            return None
+        return dict(node)
+
     def get_stats(self) -> dict[str, Any]:
         """
         Get graph statistics.

@@ -27,6 +27,7 @@ and live metadata, without loading DataPoints.
 | Redshift | Yes | Not yet | Templates ready; execution will work after connector integration. |
 
 Important:
+
 - "Catalog query templates" means DataChat can generate correct system-catalog SQL.
 - "Live connector execution" means DataChat can connect and execute those queries today.
 

@@ -7,6 +7,7 @@ Status: Active (delivery-tracking)
 ## Product Vision
 
 DataChat provides a natural-language interface for operational and analytics databases, with progressive enhancement:
+
 - credentials-only querying first
 - richer business accuracy via DataPoints
 - future expansion into deeper intelligence and workspace awareness
@@ -50,6 +51,7 @@ DataChat provides a natural-language interface for operational and analytics dat
 ### Workspace/Code Understanding
 
 Planned but not released as a product feature:
+
 - indexing arbitrary folders/workspaces
 - code-aware retrieval across dbt/SQL/docs/code assets
 - workspace search/status API and CLI workflows
@@ -57,6 +59,7 @@ Planned but not released as a product feature:
 ### Advanced Levels (3-5)
 
 Planned but not released:
+
 - executable metric template layer (Level 3)
 - performance/materialization automation (Level 4)
 - anomaly + root-cause automation (Level 5)
@@ -78,6 +81,7 @@ Planned but not released:
 ## Documentation Contract
 
 A feature can only be marked "supported" when:
+
 - code path exists,
 - behavior is test-covered,
 - user docs explain operational preconditions.

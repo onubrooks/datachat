@@ -631,6 +631,7 @@ class DataChatPipeline:
                         "score": dp.score,
                         "source": dp.source,
                         "metadata": dp.metadata,
+                        "content": dp.content,
                     }
                     for dp in output.investigation_memory.datapoints
                 ],
@@ -684,6 +685,7 @@ class DataChatPipeline:
                     score=dp["score"],
                     source=dp["source"],
                     metadata=dp["metadata"],
+                    content=dp.get("content"),
                 )
                 for dp in state.get("retrieved_datapoints", [])
             ]
@@ -946,6 +948,7 @@ class DataChatPipeline:
                     score=dp["score"],
                     source=dp["source"],
                     metadata=dp["metadata"],
+                    content=dp.get("content"),
                 )
                 for dp in state.get("retrieved_datapoints", [])
             ]

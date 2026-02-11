@@ -13,6 +13,7 @@ This file is the source of truth for level maturity.
 Status: `Implemented`
 
 Delivered today:
+
 - Credentials-only querying with live schema context.
 - Deterministic catalog handling for:
   - list tables
@@ -23,10 +24,12 @@ Delivered today:
 - Clarification flow for ambiguous prompts.
 
 Database runtime support:
+
 - PostgreSQL
 - ClickHouse
 
 Notes:
+
 - MySQL/BigQuery/Redshift catalog templates exist, but runtime connector execution is pending.
 
 ## Level 2: Context Enhancement (DataPoints)
@@ -34,12 +37,14 @@ Notes:
 Status: `Partial`
 
 Delivered today:
+
 - DataPoint ingestion/sync.
 - Retrieval from vectors/graph as query context.
 - Context-only answers and evidence metadata.
 - Auto-profiling to generate pending DataPoints (with review/approval workflow).
 
 Still limited:
+
 - Deep domain semantics still depend on DataPoint quality/coverage.
 - No fully managed ontology lifecycle.
 
@@ -48,6 +53,7 @@ Still limited:
 Status: `Planned`
 
 Target outcome:
+
 - Deterministic metric templates and parameterized execution path for stable KPI answers.
 
 Not shipped yet as a dedicated level.
@@ -57,6 +63,7 @@ Not shipped yet as a dedicated level.
 Status: `Planned`
 
 Target outcome:
+
 - Materialization/caching strategies, adaptive query routing, and refresh policies.
 
 Not shipped yet.
@@ -66,6 +73,7 @@ Not shipped yet.
 Status: `Planned`
 
 Target outcome:
+
 - Automated anomaly detection, dependency-aware diagnosis, and remediation workflows.
 
 Not shipped yet.
@@ -73,6 +81,7 @@ Not shipped yet.
 ## Practical Guidance
 
 For production use now:
+
 1. Start with Level 1 credentials-only to validate connectivity and query quality.
 2. Add Level 2 DataPoints for critical business metrics and terms.
 3. Treat Levels 3-5 as roadmap items, not current guarantees.

@@ -1,0 +1,32 @@
+[
+  {
+    "query": "List all grocery stores",
+    "expected_sql_contains": ["grocery_stores"],
+    "expected_answer_type": "table"
+  },
+  {
+    "query": "What is total grocery revenue?",
+    "expected_sql_contains": ["sum", "total_amount", "grocery_sales_transactions"],
+    "expected_answer_type": "single_value"
+  },
+  {
+    "query": "Show gross margin by category",
+    "expected_sql_contains": ["grocery_products", "category", "unit_cost", "group by"],
+    "expected_answer_type": "table"
+  },
+  {
+    "query": "Daily waste cost trend",
+    "expected_sql_contains": ["grocery_waste_events", "event_date", "sum", "group by"],
+    "expected_answer_type": "time_series"
+  },
+  {
+    "query": "Top 5 products by revenue",
+    "expected_sql_contains": ["grocery_sales_transactions", "product_id", "sum", "limit 5"],
+    "expected_answer_type": "table"
+  },
+  {
+    "query": "How many purchase orders are in transit?",
+    "expected_sql_contains": ["grocery_purchase_orders", "status", "in_transit", "count"],
+    "expected_answer_type": "single_value"
+  }
+]

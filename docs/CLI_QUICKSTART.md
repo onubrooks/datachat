@@ -114,6 +114,7 @@ datachat ask "tell me a joke"
 ```
 
 Expected:
+
 - No SQL is generated.
 - Response source is system/intent, not clarification/sql.
 
@@ -124,6 +125,7 @@ datachat ask --max-clarifications 3 "Show me the first 5 rows"
 ```
 
 When prompted:
+
 - Reply with a table name (for example `public.orders`).
 - Confirm the next answer returns SQL and rows.
 
@@ -136,6 +138,7 @@ datachat ask "Show me the first 2 rows from information_schema.tables"
 ```
 
 Expected:
+
 - Deterministic SQL should be produced without clarification loops.
 - Results should execute successfully on a connected Postgres target.
 
@@ -146,5 +149,6 @@ datachat chat --max-clarifications 3
 ```
 
 Inside chat:
+
 - `ok` should ask for clarification (not run full SQL pipeline).
 - `exit`, `no further questions`, or `talk later` should end the session cleanly.

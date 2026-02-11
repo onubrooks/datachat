@@ -171,13 +171,17 @@ class Retriever:
             # Score = 1 / (1 + distance), normalized to 0-1 range
             distance = result["distance"]
             score = 1.0 / (1.0 + abs(distance))
+            metadata = self._enrich_with_graph_metadata(
+                result["datapoint_id"],
+                result["metadata"],
+            )
 
             items.append(
                 RetrievedItem(
                     datapoint_id=result["datapoint_id"],
                     score=score,
                     source="vector",
-                    metadata=result["metadata"],
+                    metadata=metadata,
                     content=result.get("document"),
                 )
             )
@@ -232,11 +236,15 @@ class Retriever:
             datapoint_id = result["datapoint_id"]
             distance = result["distance"]
             score = 1.0 / (1.0 + abs(distance))
+            metadata = self._enrich_with_graph_metadata(
+                datapoint_id,
+                result["metadata"],
+            )
 
             vector_items[datapoint_id] = {
                 "rank": rank,
                 "score": score,
-                "metadata": result["metadata"],
+                "metadata": metadata,
                 "content": result.get("document"),
             }
 
@@ -297,8 +305,9 @@ class Retriever:
             seen_ids.add(datapoint_id)
 
             # Get metadata from either source
-            metadata = vector_items.get(datapoint_id, {}).get(
-                "metadata", graph_items.get(datapoint_id, {}).get("metadata", {})
+            metadata = self._merge_metadata(
+                graph_items.get(datapoint_id, {}).get("metadata", {}),
+                vector_items.get(datapoint_id, {}).get("metadata", {}),
             )
             content = vector_items.get(datapoint_id, {}).get("content")
 
@@ -323,6 +332,28 @@ class Retriever:
         )
 
         return items
+
+    def _enrich_with_graph_metadata(
+        self,
+        datapoint_id: str,
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Merge vector metadata with graph node metadata when available."""
+        base = metadata if isinstance(metadata, dict) else {}
+        graph_metadata = self.knowledge_graph.get_node_metadata(datapoint_id) or {}
+        return self._merge_metadata(graph_metadata, base)
+
+    @staticmethod
+    def _merge_metadata(
+        primary: dict[str, Any] | None,
+        secondary: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        if isinstance(primary, dict):
+            merged.update(primary)
+        if isinstance(secondary, dict):
+            merged.update(secondary)
+        return merged
 
     def _apply_rrf(
         self,

@@ -342,7 +342,7 @@ datachat/
 ├── docker-compose.yml
 ├── Dockerfile
 ├── pyproject.toml
-├── CLAUDE.md                    # This file
+├── ARCHITECTURE.md              # This file
 ├── README.md
 └── .env.example
 ```
@@ -697,8 +697,8 @@ Status: v1.0 scope is implemented; focus shifts to v2 workspace ingestion and to
   - 24 unit tests with 99% coverage (includes fallback seed test)
   - 274 total tests passing, 85% overall backend coverage
 - [x] Git workflow improvement (PR #8)
-  - Untracked CLAUDE.md from repository (was causing stash issues)
-  - File remains local for development notes
+  - Untracked ARCHITECTURE.md from repository (was causing stash issues)
+  - File remained local for development notes
   - Clean git pull without stashing required
 - [x] ContextAgent - Pure retrieval agent (PR #10)
   - NO LLM calls - pure knowledge retrieval only

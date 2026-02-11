@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from uuid import UUID
 
@@ -14,7 +13,15 @@ from backend.sync.orchestrator import save_datapoint_to_disk
 
 router = APIRouter()
 
-DATA_DIR = Path("datapoints") / "managed"
+DATA_ROOT = Path("datapoints")
+DATA_DIR = DATA_ROOT / "managed"
+SOURCE_PRIORITY = {
+    "user": 4,
+    "managed": 3,
+    "custom": 2,
+    "unknown": 2,
+    "example": 1,
+}
 
 
 class SyncStatusResponse(BaseModel):
@@ -36,10 +43,24 @@ class DataPointSummary(BaseModel):
     datapoint_id: str
     type: str
     name: str | None
+    source_tier: str | None = None
+    source_path: str | None = None
 
 
 class DataPointListResponse(BaseModel):
     datapoints: list[DataPointSummary]
+
+
+def _get_vector_store():
+    from backend.api.main import app_state
+
+    vector_store = app_state.get("vector_store")
+    if vector_store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Vector store unavailable",
+        )
+    return vector_store
 
 
 def _get_orchestrator():
@@ -120,23 +141,49 @@ async def trigger_sync() -> SyncTriggerResponse:
 
 @router.get("/datapoints", response_model=DataPointListResponse)
 async def list_datapoints() -> DataPointListResponse:
-    if not DATA_DIR.exists():
-        return DataPointListResponse(datapoints=[])
-    datapoints: list[DataPointSummary] = []
-    for path in DATA_DIR.glob("*.json"):
-        try:
-            with path.open() as handle:
-                payload = json.load(handle)
-        except (OSError, json.JSONDecodeError):
+    vector_store = _get_vector_store()
+    try:
+        items = await vector_store.list_datapoints(limit=10000)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list datapoints: {exc}",
+        ) from exc
+
+    deduped: dict[str, DataPointSummary] = {}
+    for item in items:
+        datapoint_id = str(item.get("datapoint_id", ""))
+        if not datapoint_id:
             continue
-        datapoints.append(
-            DataPointSummary(
-                datapoint_id=str(payload.get("datapoint_id", path.stem)),
-                type=str(payload.get("type", "Unknown")),
-                name=payload.get("name"),
-            )
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        source_tier_raw = metadata.get("source_tier")
+        source_tier = str(source_tier_raw) if source_tier_raw is not None else "unknown"
+        source_path_raw = metadata.get("source_path")
+        source_path = str(source_path_raw) if source_path_raw else None
+        summary = DataPointSummary(
+            datapoint_id=datapoint_id,
+            type=str(metadata.get("type", "Unknown")),
+            name=str(metadata["name"]) if metadata.get("name") is not None else None,
+            source_tier=source_tier,
+            source_path=source_path,
         )
-    datapoints.sort(key=lambda item: (item.type, item.name or item.datapoint_id))
+        existing = deduped.get(datapoint_id)
+        if existing is None:
+            deduped[datapoint_id] = summary
+            continue
+        existing_priority = SOURCE_PRIORITY.get(existing.source_tier or "unknown", 0)
+        candidate_priority = SOURCE_PRIORITY.get(summary.source_tier or "unknown", 0)
+        if candidate_priority > existing_priority:
+            deduped[datapoint_id] = summary
+
+    datapoints = sorted(
+        deduped.values(),
+        key=lambda item: (
+            -(SOURCE_PRIORITY.get(item.source_tier or "unknown", 0)),
+            item.type,
+            item.name or item.datapoint_id,
+        ),
+    )
     return DataPointListResponse(datapoints=datapoints)
 
 

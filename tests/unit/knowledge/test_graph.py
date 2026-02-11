@@ -147,6 +147,10 @@ class TestInitialization:
         assert stats["datapoints_added"] == 0
         assert stats["is_connected"] is False
 
+    def test_get_node_metadata_returns_none_for_missing_node(self, knowledge_graph):
+        """Missing nodes should return None metadata."""
+        assert knowledge_graph.get_node_metadata("missing_node") is None
+
 
 class TestAddSchemaDataPoint:
     """Test adding Schema DataPoints to graph."""
