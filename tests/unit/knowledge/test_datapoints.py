@@ -149,6 +149,28 @@ class TestLoadFile:
         assert loader.loaded_count == 2
         assert loader.failed_count == 0
 
+    @pytest.mark.parametrize(
+        ("relative_path", "expected_tier"),
+        [
+            ("datapoints/user/table_fact_sales_001.json", "user"),
+            ("datapoints/managed/table_fact_sales_001.json", "managed"),
+            ("datapoints/examples/table_fact_sales_001.json", "example"),
+            ("fixtures/table_fact_sales_001.json", "custom"),
+        ],
+    )
+    def test_load_file_annotates_source_tier(
+        self, loader, valid_schema_file, tmp_path, relative_path, expected_tier
+    ):
+        """Loader should annotate source tier based on file path."""
+        destination = tmp_path / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(valid_schema_file.read_text(), encoding="utf-8")
+
+        datapoint = loader.load_file(destination)
+
+        assert datapoint.metadata["source_tier"] == expected_tier
+        assert datapoint.metadata["source_path"].endswith(destination.name)
+
 
 class TestLoadDirectory:
     """Test loading DataPoints from directories."""

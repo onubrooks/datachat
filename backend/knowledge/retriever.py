@@ -99,6 +99,13 @@ class Retriever:
         self.vector_store = vector_store
         self.knowledge_graph = knowledge_graph
         self.rrf_k = rrf_k
+        self._source_tier_priority = {
+            "user": 4,
+            "managed": 3,
+            "custom": 2,
+            "unknown": 2,
+            "example": 1,
+        }
 
         logger.info(f"Retriever initialized with RRF k={rrf_k}")
 
@@ -147,11 +154,21 @@ class Retriever:
             else:
                 raise RetrieverError(f"Unknown retrieval mode: {mode}")
 
+            prioritized_items = self._apply_source_precedence(items)
+
             logger.info(
-                f"Retrieved {len(items)} items using {mode} mode for query: '{query[:50]}...'"
+                "Retrieved %s items using %s mode for query: '%s...'",
+                len(prioritized_items),
+                mode,
+                query[:50],
             )
 
-            return RetrievalResult(items=items, total_count=len(items), mode=mode, query=query)
+            return RetrievalResult(
+                items=prioritized_items,
+                total_count=len(prioritized_items),
+                mode=mode,
+                query=query,
+            )
 
         except Exception as e:
             logger.error(f"Retrieval failed: {e}")
@@ -394,3 +411,95 @@ class Retriever:
             rrf_scores[datapoint_id] = rrf_score
 
         return rrf_scores
+
+    def _apply_source_precedence(self, items: list[RetrievedItem]) -> list[RetrievedItem]:
+        """
+        Resolve conflicting DataPoints by source tier, then keep rank-based ordering.
+
+        Conflict resolution:
+        - If multiple items map to the same table/metric conflict key, keep the item from the
+          highest-precedence source tier (`user` > `managed` > `custom`/`unknown` > `example`).
+        - If source tiers are equal, keep the higher score item.
+        - Items without a conflict key are kept as-is.
+        """
+        if not items:
+            return []
+
+        resolved_by_key: dict[str, RetrievedItem] = {}
+        passthrough: list[RetrievedItem] = []
+
+        for item in items:
+            conflict_key = self._build_conflict_key(item)
+            if not conflict_key:
+                passthrough.append(item)
+                continue
+
+            existing = resolved_by_key.get(conflict_key)
+            if existing is None:
+                resolved_by_key[conflict_key] = item
+                continue
+
+            existing_priority = self._source_priority(existing.metadata)
+            candidate_priority = self._source_priority(item.metadata)
+            if candidate_priority > existing_priority:
+                resolved_by_key[conflict_key] = item
+                continue
+            if candidate_priority == existing_priority and item.score > existing.score:
+                resolved_by_key[conflict_key] = item
+
+        combined = passthrough + list(resolved_by_key.values())
+        combined.sort(
+            key=lambda entry: (
+                entry.score,
+                self._source_priority(entry.metadata),
+            ),
+            reverse=True,
+        )
+        return combined
+
+    def _build_conflict_key(self, item: RetrievedItem) -> str | None:
+        """Build a coarse conflict key for precedence handling."""
+        metadata = item.metadata if isinstance(item.metadata, dict) else {}
+
+        table_name = metadata.get("table_name") or metadata.get("table") or metadata.get("table_key")
+        schema_name = metadata.get("schema") or metadata.get("schema_name")
+        if table_name:
+            table_key = str(table_name).strip().lower()
+            if "." not in table_key and schema_name:
+                table_key = f"{str(schema_name).strip().lower()}.{table_key}"
+            return f"table::{table_key}"
+
+        # Metric/business fallback key: metric name + related tables.
+        related_tables = self._coerce_string_list(metadata.get("related_tables"))
+        metric_name = str(metadata.get("name", "")).strip().lower()
+        if metric_name and related_tables:
+            return f"metric::{metric_name}::{'|'.join(sorted(related_tables))}"
+        return None
+
+    def _source_priority(self, metadata: dict[str, Any] | None) -> int:
+        tier = self._source_tier(metadata)
+        return self._source_tier_priority.get(tier, self._source_tier_priority["unknown"])
+
+    def _source_tier(self, metadata: dict[str, Any] | None) -> str:
+        if not isinstance(metadata, dict):
+            return "unknown"
+        raw = metadata.get("source_tier")
+        if not isinstance(raw, str):
+            return "unknown"
+        normalized = raw.strip().lower()
+        if not normalized:
+            return "unknown"
+        return normalized
+
+    @staticmethod
+    def _coerce_string_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip().lower() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if "," in stripped:
+                return [part.strip().lower() for part in stripped.split(",") if part.strip()]
+            return [stripped.lower()]
+        return []

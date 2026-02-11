@@ -57,6 +57,29 @@ class DataPointLoader:
 
         logger.info("DataPointLoader initialized")
 
+    @staticmethod
+    def _infer_source_tier(file_path: Path) -> str:
+        """Infer DataPoint source tier from file path."""
+        path_parts = [part.lower() for part in file_path.resolve().parts]
+        if "datapoints" in path_parts:
+            if "user" in path_parts:
+                return "user"
+            if "managed" in path_parts:
+                return "managed"
+            if "examples" in path_parts:
+                return "example"
+        return "custom"
+
+    @classmethod
+    def _annotate_source_metadata(cls, datapoint: DataPoint, file_path: Path) -> None:
+        """Add internal source metadata used for retrieval precedence."""
+        source_tier = cls._infer_source_tier(file_path)
+        source_path = str(file_path.resolve())
+        if datapoint.metadata is None:
+            datapoint.metadata = {}
+        datapoint.metadata["source_tier"] = source_tier
+        datapoint.metadata["source_path"] = source_path
+
     def load_file(self, file_path: str | Path) -> DataPoint:
         """
         Load and validate a single DataPoint from a JSON file.
@@ -81,6 +104,7 @@ class DataPointLoader:
 
             # Validate against Pydantic model using TypeAdapter
             datapoint = datapoint_adapter.validate_python(data)
+            self._annotate_source_metadata(datapoint, file_path)
 
             self.loaded_count += 1
             logger.info(

@@ -252,6 +252,49 @@ class VectorStore:
             return formatted_results
 
         except Exception as e:
+            if self._is_recoverable_index_error(e):
+                logger.warning(
+                    "Vector index appears unavailable on disk; attempting automatic recovery."
+                )
+                recovered = await self._recover_from_storage_error()
+                if recovered:
+                    try:
+                        results = await asyncio.to_thread(
+                            self.collection.query,
+                            query_texts=[query],
+                            n_results=top_k,
+                            where=filter_metadata,
+                        )
+                        formatted_results = []
+                        if results["ids"] and results["ids"][0]:
+                            for i in range(len(results["ids"][0])):
+                                formatted_results.append(
+                                    {
+                                        "datapoint_id": results["ids"][0][i],
+                                        "distance": results["distances"][0][i]
+                                        if results["distances"]
+                                        else None,
+                                        "metadata": results["metadatas"][0][i]
+                                        if results["metadatas"]
+                                        else {},
+                                        "document": results["documents"][0][i]
+                                        if results["documents"]
+                                        else "",
+                                    }
+                                )
+                        logger.info(
+                            "Vector search recovered after index repair (results=%s).",
+                            len(formatted_results),
+                        )
+                        return formatted_results
+                    except Exception as retry_error:
+                        logger.warning(
+                            "Vector search retry failed after recovery: %s", retry_error
+                        )
+                logger.warning(
+                    "Falling back to empty vector results due to recoverable index error: %s", e
+                )
+                return []
             logger.error(f"Search failed: {e}")
             raise VectorStoreError(f"Search failed: {e}") from e
 
@@ -379,6 +422,63 @@ class VectorStore:
             logger.error(f"Failed to clear vector store: {e}")
             raise VectorStoreError(f"Failed to clear: {e}") from e
 
+    def _is_recoverable_index_error(self, error: Exception) -> bool:
+        """Return True for known on-disk index corruption/missing-segment errors."""
+        message = str(error).lower()
+        recoverable_markers = (
+            "nothing found on disk",
+            "hnsw segment reader",
+            "no such file or directory",
+            "segment metadata",
+            "segment index",
+            "segment not found",
+        )
+        return any(marker in message for marker in recoverable_markers)
+
+    async def _recover_from_storage_error(self) -> bool:
+        """
+        Try to recover from broken/externally-reset vector persistence.
+
+        Strategy:
+        1) Re-open client/collection.
+        2) If still broken, recreate collection and optionally repopulate from local datapoint files.
+        """
+        try:
+            await asyncio.to_thread(self._init_client)
+            await asyncio.to_thread(self.collection.count)
+            return True
+        except Exception as reconnect_error:
+            logger.warning("Vector reconnect failed, trying full rebuild: %s", reconnect_error)
+
+        try:
+            if self.client is not None:
+                try:
+                    await asyncio.to_thread(
+                        self.client.delete_collection,
+                        name=self.collection_name,
+                    )
+                except Exception:
+                    # Collection may already be missing/corrupted; continue rebuild path.
+                    pass
+
+            await asyncio.to_thread(self._init_client)
+
+            datapoints_root = Path("datapoints")
+            if not datapoints_root.exists():
+                return True
+
+            from backend.knowledge.datapoints import DataPointLoader
+
+            loader = DataPointLoader()
+            datapoints = loader.load_directory(datapoints_root, recursive=True, skip_errors=True)
+            if datapoints:
+                await self.add_datapoints(datapoints)
+                logger.info("Rebuilt vector index from local datapoint files (%s).", len(datapoints))
+            return True
+        except Exception as rebuild_error:
+            logger.warning("Vector rebuild failed: %s", rebuild_error)
+            return False
+
     def _create_document(self, datapoint: DataPoint) -> str:
         """
         Create searchable document text from a DataPoint.
@@ -464,6 +564,14 @@ class VectorStore:
             "name": datapoint.name,
             "owner": datapoint.owner,
         }
+
+        if datapoint.metadata:
+            source_tier = datapoint.metadata.get("source_tier")
+            source_path = datapoint.metadata.get("source_path")
+            if source_tier:
+                metadata["source_tier"] = str(source_tier)
+            if source_path:
+                metadata["source_path"] = str(source_path)
 
         # Add type-specific metadata
         if hasattr(datapoint, "table_name"):

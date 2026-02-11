@@ -961,6 +961,64 @@ class TestErrorHandling:
         )
         assert merged == "Show 2 rows from petra_campuses"
 
+    def test_parse_llm_response_caps_implicit_limit_to_default(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(update={"query": "List all grocery stores"})
+        content = json.dumps(
+            {"sql": "SELECT * FROM public.grocery_stores LIMIT 10000", "confidence": 0.9}
+        )
+
+        generated = sql_agent._parse_llm_response(content, sql_input)
+
+        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 5"
+
+    def test_parse_llm_response_caps_explicit_limit_to_ten(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(
+            update={"query": "Show me the first 50 rows from public.grocery_stores"}
+        )
+        content = json.dumps(
+            {"sql": "SELECT * FROM public.grocery_stores LIMIT 10000", "confidence": 0.9}
+        )
+
+        generated = sql_agent._parse_llm_response(content, sql_input)
+
+        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 10"
+
+    def test_parse_llm_response_adds_default_limit_when_missing(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(
+            update={"query": "Show rows from public.grocery_stores"}
+        )
+        content = json.dumps({"sql": "SELECT * FROM public.grocery_stores", "confidence": 0.9})
+
+        generated = sql_agent._parse_llm_response(content, sql_input)
+
+        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 5"
+
+    def test_parse_llm_response_does_not_force_limit_on_single_aggregate(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(update={"query": "What is total revenue?"})
+        content = json.dumps(
+            {
+                "sql": (
+                    "SELECT SUM(total_amount) AS total_revenue "
+                    "FROM public.grocery_sales_transactions"
+                ),
+                "confidence": 0.9,
+            }
+        )
+
+        generated = sql_agent._parse_llm_response(content, sql_input)
+
+        assert generated.sql == (
+            "SELECT SUM(total_amount) AS total_revenue FROM public.grocery_sales_transactions"
+        )
+
 
 class TestInputValidation:
     """Test input validation."""

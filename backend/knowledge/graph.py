@@ -138,6 +138,8 @@ class KnowledgeGraph:
             business_purpose=datapoint.business_purpose,
             owner=datapoint.owner,
             tags=datapoint.tags or [],
+            source_tier=(datapoint.metadata or {}).get("source_tier"),
+            source_path=(datapoint.metadata or {}).get("source_path"),
             freshness=getattr(datapoint, "freshness", None),
             row_count=getattr(datapoint, "row_count", None),
         )
@@ -192,6 +194,8 @@ class KnowledgeGraph:
             business_rules=datapoint.business_rules or [],
             owner=datapoint.owner,
             tags=datapoint.tags or [],
+            source_tier=(datapoint.metadata or {}).get("source_tier"),
+            source_path=(datapoint.metadata or {}).get("source_path"),
         )
         nodes_added += 1
 
@@ -242,6 +246,8 @@ class KnowledgeGraph:
             data_freshness=datapoint.data_freshness,
             owner=datapoint.owner,
             tags=datapoint.tags or [],
+            source_tier=(datapoint.metadata or {}).get("source_tier"),
+            source_path=(datapoint.metadata or {}).get("source_path"),
         )
         nodes_added += 1
 
