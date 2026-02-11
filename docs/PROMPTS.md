@@ -146,7 +146,7 @@ params = [user_input]
 
 **ALWAYS** include limits to prevent resource exhaustion:
 
-- Default LIMIT: 10,000 rows
+- Default LIMIT: 10 rows
 - Maximum execution time: 30 seconds
 - Maximum result size: 100 MB
 

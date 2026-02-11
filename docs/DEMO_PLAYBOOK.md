@@ -59,26 +59,29 @@ workspace_demo/
 
 ## Demo Setup Command (Spec)
 
-Use the CLI entrypoint to prepare a persona-specific demo:
+Use the CLI entrypoint to prepare a demo:
 
 ```text
 datachat demo --persona analyst --reset
+datachat demo --dataset grocery --reset
 ```
 
 ### Expected behavior
 
-- Seeds demo database using `SYSTEM_DATABASE_URL` (`scripts/demo_seed.sql` + persona variant if present).
-- Loads DataPoints from `datapoints/demo/<persona>/`.
-- Optionally indexes workspace from `workspace_demo/<persona>/`.
+- Seeds demo tables into the target database (`DATABASE_URL` or saved `datachat connect` URL).
+- `--dataset core` seeds `public.users` and `public.orders`.
+- `--dataset grocery` seeds the grocery sample schema from `scripts/grocery_seed.sql`.
+- Loads DataPoints from `datapoints/demo/<persona>/` (`core`) or `datapoints/examples/grocery_store` (`grocery`).
+- Optionally indexes workspace from `workspace_demo/<persona>` for `core` and `workspace_demo/grocery` for `grocery`.
 - Prints a short “demo script” of suggested questions.
 
 ### Flags
 
 ```text
+--dataset <core|grocery>
 --persona <analyst|engineer|platform|executive>
 --reset          # Drops and re-seeds demo data
 --no-workspace   # Skip workspace indexing
---open           # (Optional) open UI after setup
 ```
 
 ---

@@ -12,8 +12,11 @@ import os
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 CONFIG_DIR = Path.home() / ".datachat"
 CONFIG_PATH = CONFIG_DIR / "config.json"
+DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 TARGET_DB_KEY = "target_database_url"
 SYSTEM_DB_KEY = "system_database_url"
@@ -55,14 +58,19 @@ def apply_config_defaults() -> None:
     """
     Persist env values into config (one-time) and apply config to env when missing.
     """
+    env_source = os.getenv("DATA_CHAT_ENV_SOURCE", "dotenv").lower()
+    if env_source in {"dotenv", "envfile", "file"} and DOTENV_PATH.exists():
+        # Project-local .env should be authoritative for CLI defaults.
+        load_dotenv(DOTENV_PATH, override=True)
+
     config = load_config()
 
     env_target = os.getenv("DATABASE_URL")
     env_system = os.getenv("SYSTEM_DATABASE_URL")
 
-    if env_target and TARGET_DB_KEY not in config:
+    if env_target and config.get(TARGET_DB_KEY) != env_target:
         config[TARGET_DB_KEY] = env_target
-    if env_system and SYSTEM_DB_KEY not in config:
+    if env_system and config.get(SYSTEM_DB_KEY) != env_system:
         config[SYSTEM_DB_KEY] = env_system
 
     if config:

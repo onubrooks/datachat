@@ -206,6 +206,82 @@ class TestLocalMode:
         mock_knowledge_graph.get_node_metadata.assert_any_call("table_sales_001")
         assert mock_knowledge_graph.get_node_metadata.call_count == 3
 
+    @pytest.mark.asyncio
+    async def test_local_mode_prefers_managed_over_example_for_same_table(
+        self, retriever, mock_vector_store
+    ):
+        """For conflicting table context, managed should win over example."""
+        mock_vector_store.search.return_value = [
+            {
+                "datapoint_id": "table_grocery_stores_example_001",
+                "distance": 0.01,
+                "metadata": {
+                    "name": "Grocery Stores (Example)",
+                    "type": "Schema",
+                    "schema": "public",
+                    "table_name": "grocery_stores",
+                    "source_tier": "example",
+                },
+                "document": "example table context",
+            },
+            {
+                "datapoint_id": "table_grocery_stores_managed_001",
+                "distance": 0.45,
+                "metadata": {
+                    "name": "Grocery Stores (Managed)",
+                    "type": "Schema",
+                    "schema": "public",
+                    "table_name": "grocery_stores",
+                    "source_tier": "managed",
+                },
+                "document": "managed table context",
+            },
+        ]
+
+        result = await retriever.retrieve("list grocery stores", mode=RetrievalMode.LOCAL, top_k=5)
+
+        ids = [item.datapoint_id for item in result.items]
+        assert "table_grocery_stores_managed_001" in ids
+        assert "table_grocery_stores_example_001" not in ids
+
+    @pytest.mark.asyncio
+    async def test_local_mode_prefers_user_over_managed_for_same_table(
+        self, retriever, mock_vector_store
+    ):
+        """User-authored context should override managed context for same table key."""
+        mock_vector_store.search.return_value = [
+            {
+                "datapoint_id": "table_grocery_products_managed_001",
+                "distance": 0.05,
+                "metadata": {
+                    "name": "Products (Managed)",
+                    "type": "Schema",
+                    "schema": "public",
+                    "table_name": "grocery_products",
+                    "source_tier": "managed",
+                },
+                "document": "managed products context",
+            },
+            {
+                "datapoint_id": "table_grocery_products_user_001",
+                "distance": 0.40,
+                "metadata": {
+                    "name": "Products (User)",
+                    "type": "Schema",
+                    "schema": "public",
+                    "table_name": "grocery_products",
+                    "source_tier": "user",
+                },
+                "document": "user products context",
+            },
+        ]
+
+        result = await retriever.retrieve("product details", mode=RetrievalMode.LOCAL, top_k=5)
+
+        ids = [item.datapoint_id for item in result.items]
+        assert "table_grocery_products_user_001" in ids
+        assert "table_grocery_products_managed_001" not in ids
+
 
 class TestGlobalMode:
     """Test global (graph-only) retrieval mode."""

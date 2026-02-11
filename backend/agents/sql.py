@@ -107,6 +107,8 @@ class SQLAgent(BaseAgent):
         self._live_schema_cache: dict[str, str] = {}
         self._live_schema_tables_cache: dict[str, set[str]] = {}
         self._live_profile_cache: dict[str, dict[str, dict[str, object]]] = {}
+        self._max_safe_row_limit = 10
+        self._default_row_limit = 5
 
     async def execute(self, input: SQLAgentInput) -> SQLAgentOutput:
         """
@@ -267,7 +269,7 @@ class SQLAgent(BaseAgent):
             raise SQLClarificationNeeded(catalog_plan.clarifying_questions)
 
         if catalog_plan and catalog_plan.sql:
-            return GeneratedSQL(
+            generated = GeneratedSQL(
                 sql=catalog_plan.sql,
                 explanation=catalog_plan.explanation,
                 used_datapoints=[],
@@ -275,6 +277,7 @@ class SQLAgent(BaseAgent):
                 assumptions=[],
                 clarifying_questions=[],
             )
+            return self._apply_row_limit_policy(generated, input.query)
 
         # Build prompt with context
         prompt = await self._build_generation_prompt(input)
@@ -1610,7 +1613,7 @@ class SQLAgent(BaseAgent):
                         or data.get("rationale")
                         or ""
                     )
-                    return GeneratedSQL(
+                    generated = GeneratedSQL(
                         sql=sql_value,
                         explanation=explanation,
                         used_datapoints=data.get("used_datapoints", []),
@@ -1618,13 +1621,14 @@ class SQLAgent(BaseAgent):
                         assumptions=data.get("assumptions", []),
                         clarifying_questions=data.get("clarifying_questions", []),
                     )
+                    return self._apply_row_limit_policy(generated, input.query)
             except json.JSONDecodeError as e:
                 logger.debug(f"Invalid JSON in LLM response: {e}")
 
         # Fallback: extract SQL from markdown/code/text output.
         sql_text = self._extract_sql_from_response(content)
         if sql_text:
-            return GeneratedSQL(
+            generated = GeneratedSQL(
                 sql=sql_text,
                 explanation="Generated SQL",
                 used_datapoints=[],
@@ -1632,10 +1636,104 @@ class SQLAgent(BaseAgent):
                 assumptions=[],
                 clarifying_questions=[],
             )
+            return self._apply_row_limit_policy(generated, input.query)
 
         logger.warning("Failed to parse LLM response: Response missing 'sql' field")
         logger.debug(f"LLM response content: {content}")
         raise ValueError("Failed to parse LLM response: Response missing 'sql' field")
+
+    def _apply_row_limit_policy(self, generated: GeneratedSQL, query: str) -> GeneratedSQL:
+        """Normalize SQL limits for safe interactive responses."""
+        sql = generated.sql.strip()
+        if not sql:
+            return generated
+
+        sql_upper = sql.upper()
+        if sql_upper.startswith("SHOW") or sql_upper.startswith("DESCRIBE") or sql_upper.startswith("DESC"):
+            return generated
+        if not (sql_upper.startswith("SELECT") or sql_upper.startswith("WITH")):
+            return generated
+        if self._is_single_value_query(sql_upper):
+            return generated
+
+        requested_limit = self._extract_requested_limit(query)
+        if requested_limit is not None:
+            target_limit = max(1, min(requested_limit, self._max_safe_row_limit))
+            force_limit = True
+        else:
+            target_limit = self._default_row_limit
+            if self.catalog.is_list_tables_query(query.lower()) or self._is_catalog_metadata_query(sql_upper):
+                target_limit = self._max_safe_row_limit
+            force_limit = False
+
+        rewritten = self._rewrite_sql_limit(sql, target_limit, force_limit=force_limit)
+        if rewritten == sql:
+            return generated
+        return generated.model_copy(update={"sql": rewritten})
+
+    def _extract_requested_limit(self, query: str) -> int | None:
+        """Extract explicit row limit requested by the user."""
+        text = (query or "").lower()
+        if not text:
+            return None
+
+        patterns = (
+            r"\b(first|top|limit)\s+(\d+)\b",
+            r"\bshow\s+(\d+)\s+rows?\b",
+            r"\b(\d+)\s+rows?\b",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            numbers = [group for group in match.groups() if group and group.isdigit()]
+            if not numbers:
+                continue
+            try:
+                return int(numbers[0])
+            except ValueError:
+                continue
+        return None
+
+    def _rewrite_sql_limit(self, sql: str, target_limit: int, *, force_limit: bool) -> str:
+        """Rewrite SQL LIMIT to enforce bounded row returns."""
+        numeric_limit_matches = list(re.finditer(r"\bLIMIT\s+(\d+)\b", sql, re.IGNORECASE))
+        if numeric_limit_matches:
+            last = numeric_limit_matches[-1]
+            current_limit = int(last.group(1))
+            new_limit = target_limit if force_limit else min(current_limit, target_limit)
+            if new_limit == current_limit:
+                return sql
+            return f"{sql[:last.start(1)]}{new_limit}{sql[last.end(1):]}"
+
+        # Avoid appending a second LIMIT when a non-numeric variant already exists (e.g. LIMIT $1).
+        if re.search(r"\bLIMIT\s+\S+", sql, re.IGNORECASE):
+            return sql
+
+        stripped = sql.rstrip()
+        if stripped.endswith(";"):
+            stripped = stripped[:-1].rstrip()
+            return f"{stripped} LIMIT {target_limit};"
+        return f"{stripped} LIMIT {target_limit}"
+
+    def _is_single_value_query(self, sql_upper: str) -> bool:
+        """Heuristic: single aggregate queries usually return one row and don't need LIMIT."""
+        if "GROUP BY" in sql_upper:
+            return False
+        aggregate_tokens = ("COUNT(", "SUM(", "AVG(", "MIN(", "MAX(", "BOOL_OR(", "BOOL_AND(")
+        return any(token in sql_upper for token in aggregate_tokens)
+
+    def _is_catalog_metadata_query(self, sql_upper: str) -> bool:
+        """Detect catalog/system metadata SQL where a larger default preview is acceptable."""
+        catalog_markers = (
+            "INFORMATION_SCHEMA.TABLES",
+            "INFORMATION_SCHEMA.COLUMNS",
+            "PG_CATALOG.",
+            "SYSTEM.TABLES",
+            "SVV_TABLES",
+            "PG_TABLE_DEF",
+        )
+        return any(marker in sql_upper for marker in catalog_markers)
 
     def _extract_sql_from_response(self, content: str) -> str | None:
         """Extract SQL from non-JSON LLM output."""

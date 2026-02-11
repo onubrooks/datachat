@@ -4,7 +4,7 @@ Tests for Vector Store.
 Tests Chroma-based vector store operations with DataPoints.
 """
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -375,6 +375,68 @@ class TestSearch:
 
         with pytest.raises(VectorStoreError, match="not initialized"):
             await store.search("test")
+
+    @pytest.mark.asyncio
+    async def test_search_returns_empty_on_recoverable_storage_error(self, test_vector_store):
+        """Recoverable index errors should not fail the request path."""
+        with (
+            patch.object(
+                test_vector_store.collection,
+                "query",
+                side_effect=Exception("Error creating hnsw segment reader: Nothing found on disk"),
+            ),
+            patch.object(
+                test_vector_store,
+                "_recover_from_storage_error",
+                new=AsyncMock(return_value=False),
+            ) as recover_mock,
+        ):
+            results = await test_vector_store.search("sales", top_k=3)
+
+        assert results == []
+        recover_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_search_retries_after_recovery(self, test_vector_store):
+        """If recovery succeeds, search should retry and return formatted results."""
+        successful_payload = {
+            "ids": [["table_test_sales_001"]],
+            "distances": [[0.1]],
+            "metadatas": [[{"type": "Schema"}]],
+            "documents": [["sample"]],
+        }
+
+        with (
+            patch.object(
+                test_vector_store.collection,
+                "query",
+                side_effect=[
+                    Exception("Error creating hnsw segment reader: Nothing found on disk"),
+                    successful_payload,
+                ],
+            ),
+            patch.object(
+                test_vector_store,
+                "_recover_from_storage_error",
+                new=AsyncMock(return_value=True),
+            ) as recover_mock,
+        ):
+            results = await test_vector_store.search("sales", top_k=1)
+
+        assert len(results) == 1
+        assert results[0]["datapoint_id"] == "table_test_sales_001"
+        recover_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_search_raises_on_non_recoverable_error(self, test_vector_store):
+        """Non-recoverable search failures should still bubble as VectorStoreError."""
+        with patch.object(
+            test_vector_store.collection,
+            "query",
+            side_effect=Exception("embedding provider unavailable"),
+        ):
+            with pytest.raises(VectorStoreError, match="Search failed"):
+                await test_vector_store.search("sales", top_k=3)
 
 
 class TestDelete:
