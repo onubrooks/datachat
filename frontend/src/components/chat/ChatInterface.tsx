@@ -14,7 +14,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Send, Trash2, AlertCircle } from "lucide-react";
+import { Send, Trash2, AlertCircle, Loader2 } from "lucide-react";
 import { Message } from "./Message";
 import { AgentStatus } from "../agents/AgentStatus";
 import { Button } from "../ui/button";
@@ -23,7 +23,13 @@ import { Card } from "../ui/card";
 import { useChatStore } from "@/lib/stores/chat";
 import { apiClient, wsClient, type SetupStep } from "@/lib/api";
 import { SystemSetup } from "../system/SystemSetup";
-import { getWaitingUxMode, type WaitingUxMode } from "@/lib/settings";
+import {
+  getResultLayoutMode,
+  getWaitingUxMode,
+  type ResultLayoutMode,
+  type WaitingUxMode,
+} from "@/lib/settings";
+import { formatWaitingChipLabel } from "./loadingUx";
 
 export function ChatInterface() {
   const router = useRouter();
@@ -53,6 +59,9 @@ export function ChatInterface() {
   const [isInitializing, setIsInitializing] = useState(false);
   const [isBackendReachable, setIsBackendReachable] = useState(false);
   const [waitingMode, setWaitingMode] = useState<WaitingUxMode>("animated");
+  const [resultLayoutMode, setResultLayoutMode] =
+    useState<ResultLayoutMode>("stacked");
+  const [loadingElapsedSeconds, setLoadingElapsedSeconds] = useState(0);
   const [toolApprovalOpen, setToolApprovalOpen] = useState(false);
   const [toolApprovalCalls, setToolApprovalCalls] = useState<
     { name: string; arguments?: Record<string, unknown> }[]
@@ -90,14 +99,33 @@ export function ChatInterface() {
 
   useEffect(() => {
     setWaitingMode(getWaitingUxMode());
+    setResultLayoutMode(getResultLayoutMode());
     const handleStorage = () => {
       setWaitingMode(getWaitingUxMode());
+      setResultLayoutMode(getResultLayoutMode());
     };
     window.addEventListener("storage", handleStorage);
     return () => {
       window.removeEventListener("storage", handleStorage);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isLoading) {
+      setLoadingElapsedSeconds(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    setLoadingElapsedSeconds(0);
+    const interval = window.setInterval(() => {
+      setLoadingElapsedSeconds(Math.max(1, Math.floor((Date.now() - startedAt) / 1000)));
+    }, 500);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [isLoading]);
 
   // Handle send message
   const handleSend = async () => {
@@ -329,12 +357,15 @@ export function ChatInterface() {
                 isConnected || isBackendReachable ? "bg-green-500" : "bg-red-500"
               }`}
             />
+            {isLoading && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
             <span className="text-muted-foreground">
-              {isConnected
-                ? "Streaming"
-                : isBackendReachable
-                  ? "Ready"
-                  : "Disconnected"}
+              {isLoading
+                ? `Working (${loadingElapsedSeconds}s)`
+                : isConnected
+                  ? "Streaming"
+                  : isBackendReachable
+                    ? "Ready"
+                    : "Disconnected"}
             </span>
           </div>
 
@@ -391,6 +422,7 @@ export function ChatInterface() {
           <Message
             key={message.id}
             message={message}
+            displayMode={resultLayoutMode}
             onClarifyingAnswer={(question) => {
               setInput(`Regarding "${question}": `);
               inputRef.current?.focus();
@@ -400,6 +432,14 @@ export function ChatInterface() {
 
         {/* Agent Status */}
         <AgentStatus mode={waitingMode} />
+        {isLoading && (
+          <div className="mb-4 flex items-center justify-center">
+            <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/5 px-3 py-1 text-xs text-primary">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <span>{formatWaitingChipLabel(loadingElapsedSeconds)}</span>
+            </div>
+          </div>
+        )}
 
         {/* Error Display */}
         {error && (
@@ -436,7 +476,7 @@ export function ChatInterface() {
             disabled={!input.trim() || isLoading || !isInitialized}
             size="icon"
           >
-            <Send size={18} />
+            {isLoading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
           </Button>
         </div>
         <p className="text-xs text-muted-foreground mt-2">

@@ -1,6 +1,8 @@
 export type WaitingUxMode = "basic" | "animated" | "progress";
+export type ResultLayoutMode = "stacked" | "tabbed";
 
 const WAITING_UX_KEY = "datachat.waitingUxMode";
+const RESULT_LAYOUT_KEY = "datachat.resultLayoutMode";
 
 export const getWaitingUxMode = (): WaitingUxMode => {
   if (typeof window === "undefined") {
@@ -16,4 +18,20 @@ export const getWaitingUxMode = (): WaitingUxMode => {
 export const setWaitingUxMode = (mode: WaitingUxMode) => {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(WAITING_UX_KEY, mode);
+};
+
+export const getResultLayoutMode = (): ResultLayoutMode => {
+  if (typeof window === "undefined") {
+    return "stacked";
+  }
+  const value = window.localStorage.getItem(RESULT_LAYOUT_KEY);
+  if (value === "stacked" || value === "tabbed") {
+    return value;
+  }
+  return "stacked";
+};
+
+export const setResultLayoutMode = (mode: ResultLayoutMode) => {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(RESULT_LAYOUT_KEY, mode);
 };

@@ -146,7 +146,7 @@ class ExecutorAgent(BaseAgent):
                 llm_calls += 1
 
             # Suggest visualization
-            viz_hint = self._suggest_visualization(query_result)
+            viz_hint = self._suggest_visualization(query_result, input.query)
 
             # Build executed query
             executed_query = ExecutedQuery(
@@ -750,12 +750,15 @@ class ExecutorAgent(BaseAgent):
 
         return f"Found {query_result.row_count} results."
 
-    def _suggest_visualization(self, query_result: QueryResult) -> str:
+    def _suggest_visualization(
+        self, query_result: QueryResult, original_query: str | None = None
+    ) -> str:
         """
         Suggest visualization type based on query results.
 
         Args:
             query_result: Query results
+            original_query: Original user query (used for chart preference hints)
 
         Returns:
             Visualization hint
@@ -769,6 +772,20 @@ class ExecutorAgent(BaseAgent):
         # Single value
         if num_rows == 1 and num_cols == 1:
             return "none"
+
+        requested_hint = self._requested_visualization_hint(original_query)
+        if requested_hint == "none":
+            return "none"
+        if requested_hint == "table":
+            return "table"
+        if requested_hint == "line_chart" and num_cols >= 2 and num_rows >= 2:
+            return "line_chart"
+        if requested_hint == "bar_chart" and num_cols >= 2 and num_rows >= 2:
+            return "bar_chart"
+        if requested_hint == "pie_chart" and num_cols >= 2 and num_rows >= 2:
+            return "pie_chart"
+        if requested_hint == "scatter" and num_cols >= 2 and num_rows >= 2:
+            return "scatter"
 
         # Time series detection (prioritize over other 2-column logic)
         has_date = any(
@@ -794,3 +811,23 @@ class ExecutorAgent(BaseAgent):
 
         # Default
         return "table"
+
+    def _requested_visualization_hint(self, query: str | None) -> str | None:
+        """Infer user visualization preference from query text."""
+        text = (query or "").lower()
+        if not text:
+            return None
+
+        if re.search(r"\b(no chart|without chart|table only|just table)\b", text):
+            return "table"
+        if re.search(r"\b(no visualization|text only)\b", text):
+            return "none"
+        if re.search(r"\b(bar chart|bar graph|histogram)\b", text):
+            return "bar_chart"
+        if re.search(r"\bpie chart|donut\b", text):
+            return "pie_chart"
+        if re.search(r"\bscatter|correlation\b", text):
+            return "scatter"
+        if re.search(r"\b(line|trend|time series|over time)\b", text):
+            return "line_chart"
+        return None

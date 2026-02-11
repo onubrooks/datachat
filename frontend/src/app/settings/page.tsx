@@ -13,7 +13,10 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   getWaitingUxMode,
+  getResultLayoutMode,
+  setResultLayoutMode,
   setWaitingUxMode,
+  type ResultLayoutMode,
   type WaitingUxMode,
 } from "@/lib/settings";
 
@@ -41,14 +44,21 @@ const OPTIONS: Array<{
 
 export default function SettingsPage() {
   const [mode, setMode] = useState<WaitingUxMode>("animated");
+  const [resultLayout, setResultLayout] = useState<ResultLayoutMode>("stacked");
 
   useEffect(() => {
     setMode(getWaitingUxMode());
+    setResultLayout(getResultLayoutMode());
   }, []);
 
   const handleChange = (value: WaitingUxMode) => {
     setMode(value);
     setWaitingUxMode(value);
+  };
+
+  const handleLayoutChange = (value: ResultLayoutMode) => {
+    setResultLayout(value);
+    setResultLayoutMode(value);
   };
 
   return (
@@ -85,6 +95,40 @@ export default function SettingsPage() {
               </div>
             </button>
           ))}
+        </div>
+      </Card>
+
+      <Card className="p-4 space-y-4">
+        <div className="text-sm font-medium">Result Layout</div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => handleLayoutChange("stacked")}
+            className={`rounded-md border px-4 py-3 text-left text-sm transition ${
+              resultLayout === "stacked"
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/40"
+            }`}
+          >
+            <div className="font-medium">Stacked</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Current style: answer, SQL, table, and sources in one flow.
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleLayoutChange("tabbed")}
+            className={`rounded-md border px-4 py-3 text-left text-sm transition ${
+              resultLayout === "tabbed"
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/40"
+            }`}
+          >
+            <div className="font-medium">Tabbed</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Answer, SQL, table, visualization, and sources in tabs.
+            </div>
+          </button>
         </div>
       </Card>
     </main>

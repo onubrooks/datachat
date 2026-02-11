@@ -372,6 +372,54 @@ Insights:
 
         assert result.executed_query.visualization_hint == "scatter"
 
+    @pytest.mark.asyncio
+    async def test_query_can_override_default_to_bar_chart(
+        self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
+    ):
+        """When query asks for bar chart, prefer bar chart if shape is valid."""
+        time_series = [
+            {"date": "2024-01-01", "amount": 1000},
+            {"date": "2024-01-02", "amount": 1500},
+            {"date": "2024-01-03", "amount": 1300},
+        ]
+        sample_input.query = "Show trend of sales as a bar chart"
+        mock_postgres_connector.execute = AsyncMock(
+            return_value=ConnectorQueryResult(
+                rows=time_series,
+                row_count=3,
+                columns=["date", "amount"],
+                execution_time_ms=20.0,
+            )
+        )
+        mock_llm_provider.set_response("Answer: Sales trend by day.")
+
+        result = await executor_agent.execute(sample_input)
+
+        assert result.executed_query.visualization_hint == "bar_chart"
+
+    @pytest.mark.asyncio
+    async def test_query_can_disable_visualization(
+        self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
+    ):
+        """When query requests no chart, return none hint."""
+        sample_input.query = "Show sales by customer with no visualization"
+        mock_postgres_connector.execute = AsyncMock(
+            return_value=ConnectorQueryResult(
+                rows=[
+                    {"customer_id": 123, "total": 5000.0},
+                    {"customer_id": 456, "total": 3200.0},
+                ],
+                row_count=2,
+                columns=["customer_id", "total"],
+                execution_time_ms=50.0,
+            )
+        )
+        mock_llm_provider.set_response("Answer: Two customers found.")
+
+        result = await executor_agent.execute(sample_input)
+
+        assert result.executed_query.visualization_hint == "none"
+
     # ============================================================================
     # Citations Tests
     # ============================================================================
