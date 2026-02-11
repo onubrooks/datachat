@@ -5,13 +5,16 @@ Tests the DataChat CLI commands.
 """
 
 import json
-from unittest.mock import AsyncMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
 
 from backend.cli import (
+    _resolve_target_database_url,
     _should_exit_chat,
+    _split_sql_statements,
     ask,
     cli,
     connect,
@@ -74,6 +77,14 @@ class TestCLIBasics:
         assert result.exit_code == 0
         assert "Guide system initialization" in result.output
 
+    def test_reset_command_exposes_datapoint_clear_flags(self, runner):
+        """Reset command should expose datapoint clear/keep options."""
+        result = runner.invoke(cli, ["reset", "--help"])
+        assert result.exit_code == 0
+        assert "--clear-managed-datapoints" in result.output
+        assert "--clear-user-datapoints" in result.output
+        assert "--clear-example-datapoints" in result.output
+
     def test_datapoint_group_exists(self, runner):
         """Test that datapoint command group exists."""
         result = runner.invoke(cli, ["dp", "--help"])
@@ -83,6 +94,93 @@ class TestCLIBasics:
     def test_exit_phrase_detection_end_and_never_mind(self):
         assert _should_exit_chat("end") is True
         assert _should_exit_chat("never mind, i'll ask later") is True
+
+    def test_split_sql_statements_ignores_comments(self):
+        sql = """
+        -- comment
+        SELECT 1;
+        INSERT INTO test_table(id) VALUES (1); -- inline comment
+        """
+        statements = _split_sql_statements(sql)
+        assert statements == [
+            "SELECT 1",
+            "INSERT INTO test_table(id) VALUES (1)",
+        ]
+
+
+class TestDemoCommand:
+    """Test demo command behavior."""
+
+    @pytest.fixture
+    def runner(self):
+        """Create CLI test runner."""
+        return CliRunner()
+
+    @staticmethod
+    def _make_settings(database_url: str | None):
+        """Build minimal settings object for demo command tests."""
+        return type(
+            "Settings",
+            (),
+            {
+                "database": type("DatabaseSettings", (), {"url": database_url})(),
+                "system_database": type("SystemDatabaseSettings", (), {"url": None})(),
+            },
+        )()
+
+    def test_demo_requires_target_database(self, runner):
+        settings = self._make_settings(database_url=None)
+        with (
+            patch("backend.cli.apply_config_defaults"),
+            patch("backend.cli.get_settings", return_value=settings),
+            patch("backend.cli.state.get_connection_string", return_value=None),
+        ):
+            result = runner.invoke(cli, ["demo", "--dataset", "grocery", "--no-workspace"])
+
+        assert result.exit_code != 0
+        assert "DATABASE_URL" in result.output
+
+    def test_demo_grocery_uses_target_database(self, runner):
+        settings = self._make_settings("postgresql://demo:pw@demo-host:5432/datachat_grocery")
+
+        mock_connector = AsyncMock()
+        mock_connector.connect = AsyncMock()
+        mock_connector.execute = AsyncMock()
+        mock_connector.close = AsyncMock()
+
+        mock_vector_store = AsyncMock()
+        mock_vector_store.initialize = AsyncMock()
+        mock_vector_store.clear = AsyncMock()
+        mock_vector_store.add_datapoints = AsyncMock()
+
+        mock_graph = MagicMock()
+        mock_graph.add_datapoint = MagicMock()
+
+        with (
+            patch("backend.cli.apply_config_defaults"),
+            patch("backend.cli.get_settings", return_value=settings),
+            patch("backend.cli.PostgresConnector", return_value=mock_connector) as connector_cls,
+            patch("backend.cli.DataPointLoader") as loader_cls,
+            patch("backend.cli.VectorStore", return_value=mock_vector_store),
+            patch("backend.cli.KnowledgeGraph", return_value=mock_graph),
+        ):
+            loader_cls.return_value.load_directory.return_value = [MagicMock()]
+            result = runner.invoke(
+                cli, ["demo", "--dataset", "grocery", "--reset", "--no-workspace"]
+            )
+
+        assert result.exit_code == 0
+        connector_cls.assert_called_once_with(
+            host="demo-host",
+            port=5432,
+            database="datachat_grocery",
+            user="demo",
+            password="pw",
+        )
+        loader_cls.return_value.load_directory.assert_called_once_with(
+            Path("datapoints") / "examples" / "grocery_store"
+        )
+        assert "demo-host:5432/datachat_grocery" in result.output
 
 
 class TestConnectCommand:
@@ -320,6 +418,54 @@ class TestCLIState:
             # Verify it was saved
             config = state.load_config()
             assert config["connection_string"] == conn_str
+
+    def test_resolve_target_database_url_prefers_settings_over_saved_config(
+        self, temp_config_dir
+    ):
+        """Target DB resolution should prefer settings/.env over saved CLI config."""
+        from backend.cli import CLIState, state
+
+        with patch("pathlib.Path.home", return_value=temp_config_dir.parent):
+            temp_state = CLIState()
+            temp_state.set_connection_string("postgresql://saved:pw@localhost:5432/saved_db")
+            settings = type(
+                "Settings",
+                (),
+                {
+                    "database": type(
+                        "DatabaseSettings",
+                        (),
+                        {"url": "postgresql://env:pw@localhost:5432/env_db"},
+                    )()
+                },
+            )()
+            with (
+                patch.object(state, "config_dir", temp_state.config_dir),
+                patch.object(state, "config_file", temp_state.config_file),
+            ):
+                resolved_url, source = _resolve_target_database_url(settings)
+                assert resolved_url == "postgresql://env:pw@localhost:5432/env_db"
+                assert source == "settings"
+
+    def test_resolve_target_database_url_falls_back_to_saved_config(self, temp_config_dir):
+        """Saved config should be used only when settings URL is missing."""
+        from backend.cli import CLIState, state
+
+        with patch("pathlib.Path.home", return_value=temp_config_dir.parent):
+            temp_state = CLIState()
+            temp_state.set_connection_string("postgresql://saved:pw@localhost:5432/saved_db")
+            settings = type(
+                "Settings",
+                (),
+                {"database": type("DatabaseSettings", (), {"url": None})()},
+            )()
+            with (
+                patch.object(state, "config_dir", temp_state.config_dir),
+                patch.object(state, "config_file", temp_state.config_file),
+            ):
+                resolved_url, source = _resolve_target_database_url(settings)
+                assert resolved_url == "postgresql://saved:pw@localhost:5432/saved_db"
+                assert source == "saved_config"
 
 
 class TestCLIErrorHandling:

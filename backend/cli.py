@@ -149,6 +149,83 @@ state = CLIState()
 # ============================================================================
 
 
+def _resolve_target_database_url(settings) -> tuple[str | None, str]:
+    """Resolve target database URL with explicit precedence."""
+    if settings.database.url:
+        return str(settings.database.url), "settings"
+
+    stored = state.get_connection_string()
+    if stored:
+        return stored, "saved_config"
+
+    return None, "none"
+
+
+def _resolve_system_database_url(settings) -> tuple[str | None, str]:
+    """Resolve system database URL with explicit precedence."""
+    if settings.system_database.url:
+        return str(settings.system_database.url), "settings"
+
+    stored = state.get_system_database_url()
+    if stored:
+        return stored, "saved_config"
+
+    return None, "none"
+
+
+def _format_connection_target(connection_string: str) -> str:
+    """Format a connection string for status output."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(connection_string)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 5432
+    database = parsed.path.lstrip("/") if parsed.path else "datachat"
+    return f"{host}:{port}/{database}"
+
+
+def _build_postgres_connector(connection_string: str) -> PostgresConnector:
+    """Create a Postgres connector from a URL."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(connection_string)
+    return PostgresConnector(
+        host=parsed.hostname or "localhost",
+        port=parsed.port or 5432,
+        database=parsed.path.lstrip("/") if parsed.path else "datachat",
+        user=parsed.username or "postgres",
+        password=parsed.password or "",
+    )
+
+
+def _split_sql_statements(sql_text: str) -> list[str]:
+    """Split SQL script into executable statements."""
+    lines: list[str] = []
+    for line in sql_text.splitlines():
+        # Remove inline comments and blank lines.
+        no_comment = line.split("--", 1)[0].strip()
+        if no_comment:
+            lines.append(no_comment)
+
+    cleaned = "\n".join(lines)
+    statements = [stmt.strip() for stmt in cleaned.split(";") if stmt.strip()]
+    return statements
+
+
+async def _execute_sql_script(connector: PostgresConnector, script_path: Path) -> None:
+    """Execute a SQL script statement-by-statement via connector.execute."""
+    if not script_path.exists():
+        raise click.ClickException(f"SQL script not found: {script_path}")
+
+    sql_text = script_path.read_text(encoding="utf-8")
+    statements = _split_sql_statements(sql_text)
+    if not statements:
+        raise click.ClickException(f"No executable SQL statements found in {script_path}")
+
+    for statement in statements:
+        await connector.execute(statement)
+
+
 async def create_pipeline_from_config() -> DataChatPipeline:
     """Create pipeline from configuration."""
     apply_config_defaults()
@@ -169,11 +246,7 @@ async def create_pipeline_from_config() -> DataChatPipeline:
 
     # Initialize connector
     # Prefer .env / settings over persisted CLI state so local project config wins.
-    connection_string = (
-        str(settings.database.url)
-        if settings.database.url
-        else state.get_connection_string()
-    )
+    connection_string, _ = _resolve_target_database_url(settings)
     if not connection_string:
         console.print("[red]No target database configured.[/red]")
         console.print(
@@ -809,34 +882,30 @@ def status():
         # Check configuration
         settings = get_settings()
         table.add_row("Configuration", "✓", f"Environment: {settings.environment}")
-        if settings.system_database.url:
-            table.add_row("System DB", "✓", "Configured")
+        system_url, system_source = _resolve_system_database_url(settings)
+        if system_url:
+            table.add_row(
+                "System DB",
+                "✓",
+                f"{_format_connection_target(system_url)} ({system_source})",
+            )
         else:
             table.add_row("System DB", "⚠️", "SYSTEM_DATABASE_URL not set")
 
         # Check connection string
-        conn_str = state.get_connection_string()
-        if conn_str:
-            from urllib.parse import urlparse
-
-            parsed = urlparse(conn_str)
+        connection_string, source = _resolve_target_database_url(settings)
+        if connection_string:
             table.add_row(
                 "Connection",
                 "✓",
-                f"{parsed.hostname}:{parsed.port}/{parsed.path.lstrip('/')}",
+                f"{_format_connection_target(connection_string)} ({source})",
             )
-        elif settings.database.url:
-            table.add_row("Connection", "⚠️", "Using default from config")
         else:
             table.add_row("Connection", "✗", "No target database configured")
 
         # Check database connection
         try:
-            if conn_str:
-                connection_string = conn_str
-            elif settings.database.url:
-                connection_string = str(settings.database.url)
-            else:
+            if not connection_string:
                 raise RuntimeError("No target database configured")
             from urllib.parse import urlparse
 
@@ -983,9 +1052,8 @@ def setup(
     async def run_setup():
         apply_config_defaults()
         settings = get_settings()
-        default_url = state.get_connection_string() or (
-            str(settings.database.url) if settings.database.url else ""
-        )
+        resolved_default_url, _ = _resolve_target_database_url(settings)
+        default_url = resolved_default_url or ""
 
         console.print(
             Panel.fit(
@@ -1007,11 +1075,8 @@ def setup(
                 "Target Database URL", default=default_url, show_default=True
             )
 
-        resolved_system_database_url = system_database_url or (
-            str(settings.system_database.url)
-            if settings.system_database.url
-            else None
-        )
+        resolved_default_system_url, _ = _resolve_system_database_url(settings)
+        resolved_system_database_url = system_database_url or resolved_default_system_url
         if not resolved_system_database_url and not non_interactive:
             resolved_system_database_url = click.prompt(
                 "System Database URL (for demo/registry)",
@@ -1120,12 +1185,35 @@ def setup(
 )
 @click.option("--keep-config", is_flag=True, help="Keep ~/.datachat/config.json.")
 @click.option("--keep-vectors", is_flag=True, help="Keep local vector store on disk.")
+@click.option(
+    "--clear-managed-datapoints/--keep-managed-datapoints",
+    default=True,
+    show_default=True,
+    help="Clear local DataPoint files under datapoints/managed.",
+)
+@click.option(
+    "--clear-user-datapoints/--keep-user-datapoints",
+    default=True,
+    show_default=True,
+    help="Clear local DataPoint files under datapoints/user.",
+)
+@click.option(
+    "--clear-example-datapoints/--keep-example-datapoints",
+    default=False,
+    show_default=True,
+    help=(
+        "Also clear sample/reference DataPoint files under datapoints/examples and datapoints/demo."
+    ),
+)
 @click.option("--yes", is_flag=True, help="Skip confirmation prompts (use with caution).")
 def reset(
     include_target: bool,
     drop_all_target: bool,
     keep_config: bool,
     keep_vectors: bool,
+    clear_managed_datapoints: bool,
+    clear_user_datapoints: bool,
+    clear_example_datapoints: bool,
     yes: bool,
 ):
     """Reset system state for testing or clean setup."""
@@ -1141,7 +1229,8 @@ def reset(
             console.print(
                 Panel.fit(
                     "[bold red]Reset DataChat State[/bold red]\n"
-                    "This clears system registry/profiling, local vectors, and saved config.",
+                    "This clears system registry/profiling, local vectors, and saved config.\n"
+                    "By default it also clears datapoints/managed and datapoints/user.",
                     border_style="red",
                 )
             )
@@ -1149,9 +1238,7 @@ def reset(
                 console.print("[yellow]Reset cancelled.[/yellow]")
                 return
 
-        system_db_url = (
-            str(settings.system_database.url) if settings.system_database.url else None
-        )
+        system_db_url, _ = _resolve_system_database_url(settings)
         if system_db_url:
             from urllib.parse import urlparse
 
@@ -1176,10 +1263,7 @@ def reset(
             console.print("[yellow]System DB not configured; skipped registry reset.[/yellow]")
 
         if include_target:
-            target_db_url = (
-                state.get_connection_string()
-                or (str(settings.database.url) if settings.database.url else None)
-            )
+            target_db_url, _ = _resolve_target_database_url(settings)
             if not target_db_url:
                 console.print("[yellow]Target DB not configured; skipped target reset.[/yellow]")
             else:
@@ -1224,10 +1308,27 @@ def reset(
             shutil.rmtree(settings.chroma.persist_dir, ignore_errors=True)
             console.print("[green]✓ Local vector store cleared[/green]")
 
-        managed_dir = Path("datapoints") / "managed"
-        if managed_dir.exists():
-            shutil.rmtree(managed_dir, ignore_errors=True)
-            console.print("[green]✓ Managed DataPoints cleared[/green]")
+        if clear_managed_datapoints:
+            managed_dir = Path("datapoints") / "managed"
+            if managed_dir.exists():
+                shutil.rmtree(managed_dir, ignore_errors=True)
+                console.print("[green]✓ Managed DataPoints cleared[/green]")
+
+        if clear_user_datapoints:
+            user_dir = Path("datapoints") / "user"
+            if user_dir.exists():
+                shutil.rmtree(user_dir, ignore_errors=True)
+                console.print("[green]✓ User DataPoints cleared[/green]")
+
+        if clear_example_datapoints:
+            examples_dir = Path("datapoints") / "examples"
+            demo_dir = Path("datapoints") / "demo"
+            if examples_dir.exists():
+                shutil.rmtree(examples_dir, ignore_errors=True)
+                console.print("[green]✓ Example DataPoints cleared[/green]")
+            if demo_dir.exists():
+                shutil.rmtree(demo_dir, ignore_errors=True)
+                console.print("[green]✓ Demo DataPoints cleared[/green]")
 
         if not keep_config:
             state.refresh_paths()
@@ -1245,6 +1346,13 @@ def reset(
 
 @cli.command()
 @click.option(
+    "--dataset",
+    type=click.Choice(["core", "grocery"], case_sensitive=False),
+    default="core",
+    show_default=True,
+    help="Demo dataset to seed and load.",
+)
+@click.option(
     "--persona",
     type=click.Choice(["base", "analyst", "engineer", "platform", "executive"], case_sensitive=False),
     default="base",
@@ -1253,95 +1361,115 @@ def reset(
 )
 @click.option("--reset", is_flag=True, help="Drop and re-seed demo tables.")
 @click.option("--no-workspace", is_flag=True, help="Skip workspace indexing (if available).")
-def demo(persona: str, reset: bool, no_workspace: bool):
+def demo(dataset: str, persona: str, reset: bool, no_workspace: bool):
     """Seed demo tables and load demo DataPoints."""
 
     async def run_demo():
         apply_config_defaults()
         settings = get_settings()
-        if not settings.system_database.url:
-            raise click.ClickException("SYSTEM_DATABASE_URL must be set to run the demo.")
-        database_url = str(settings.system_database.url)
+        target_database_url, _ = _resolve_target_database_url(settings)
+        if not target_database_url:
+            raise click.ClickException(
+                "DATABASE_URL (or saved target connection from 'datachat connect') must be set to run the demo."
+            )
+
+        dataset_name = dataset.lower()
         persona_name = persona.lower()
+        target_desc = _format_connection_target(target_database_url)
 
-        from urllib.parse import urlparse
+        connector = _build_postgres_connector(target_database_url)
 
-        parsed = urlparse(database_url)
-        connector = PostgresConnector(
-            host=parsed.hostname or "localhost",
-            port=parsed.port or 5432,
-            database=parsed.path.lstrip("/") if parsed.path else "datachat",
-            user=parsed.username or "postgres",
-            password=parsed.password or "",
+        console.print(
+            f"[cyan]Seeding demo dataset '{dataset_name}' into target DB ({target_desc})...[/cyan]"
         )
-
-        console.print(f"[cyan]Seeding demo tables (persona: {persona_name})...[/cyan]")
         await connector.connect()
         try:
-            if reset:
-                await connector.execute("DROP TABLE IF EXISTS orders")
-                await connector.execute("DROP TABLE IF EXISTS users")
+            if dataset_name == "grocery":
+                if reset:
+                    await _execute_sql_script(connector, Path("scripts") / "grocery_seed.sql")
+                else:
+                    has_grocery = await connector.execute(
+                        "SELECT to_regclass('public.grocery_stores') IS NOT NULL AS exists"
+                    )
+                    exists = bool(has_grocery.rows and has_grocery.rows[0].get("exists"))
+                    if not exists:
+                        await _execute_sql_script(connector, Path("scripts") / "grocery_seed.sql")
+                    else:
+                        console.print(
+                            "[yellow]Grocery tables already exist. Use --reset to re-seed.[/yellow]"
+                        )
+            else:
+                if reset:
+                    await connector.execute("DROP TABLE IF EXISTS orders")
+                    await connector.execute("DROP TABLE IF EXISTS users")
 
-            await connector.execute(
-                """
-                CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY,
-                    email TEXT NOT NULL,
-                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                    is_active BOOLEAN NOT NULL DEFAULT TRUE
-                );
-                """
-            )
-            await connector.execute(
-                """
-                CREATE TABLE IF NOT EXISTS orders (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL REFERENCES users(id),
-                    amount NUMERIC(12,2) NOT NULL,
-                    status TEXT NOT NULL,
-                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                    order_date DATE NOT NULL DEFAULT CURRENT_DATE
-                );
-                """
-            )
-
-            user_count = await connector.execute("SELECT COUNT(*) AS count FROM users")
-            if user_count.rows and user_count.rows[0]["count"] == 0:
                 await connector.execute(
                     """
-                    INSERT INTO users (email, is_active)
-                    VALUES
-                        ('alice@example.com', TRUE),
-                        ('bob@example.com', TRUE),
-                        ('charlie@example.com', FALSE)
+                    CREATE TABLE IF NOT EXISTS users (
+                        id SERIAL PRIMARY KEY,
+                        email TEXT NOT NULL,
+                        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                        is_active BOOLEAN NOT NULL DEFAULT TRUE
+                    );
+                    """
+                )
+                await connector.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS orders (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        amount NUMERIC(12,2) NOT NULL,
+                        status TEXT NOT NULL,
+                        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                        order_date DATE NOT NULL DEFAULT CURRENT_DATE
+                    );
                     """
                 )
 
-            order_count = await connector.execute("SELECT COUNT(*) AS count FROM orders")
-            if order_count.rows and order_count.rows[0]["count"] == 0:
-                await connector.execute(
-                    """
-                    INSERT INTO orders (user_id, amount, status, order_date)
-                    VALUES
-                        (1, 120.50, 'completed', CURRENT_DATE - INTERVAL '12 days'),
-                        (1, 75.00, 'completed', CURRENT_DATE - INTERVAL '6 days'),
-                        (2, 200.00, 'completed', CURRENT_DATE - INTERVAL '2 days'),
-                        (3, 15.00, 'refunded', CURRENT_DATE - INTERVAL '20 days')
-                    """
-                )
+                user_count = await connector.execute("SELECT COUNT(*) AS count FROM users")
+                if user_count.rows and user_count.rows[0]["count"] == 0:
+                    await connector.execute(
+                        """
+                        INSERT INTO users (email, is_active)
+                        VALUES
+                            ('alice@example.com', TRUE),
+                            ('bob@example.com', TRUE),
+                            ('charlie@example.com', FALSE)
+                        """
+                    )
+
+                order_count = await connector.execute("SELECT COUNT(*) AS count FROM orders")
+                if order_count.rows and order_count.rows[0]["count"] == 0:
+                    await connector.execute(
+                        """
+                        INSERT INTO orders (user_id, amount, status, order_date)
+                        VALUES
+                            (1, 120.50, 'completed', CURRENT_DATE - INTERVAL '12 days'),
+                            (1, 75.00, 'completed', CURRENT_DATE - INTERVAL '6 days'),
+                            (2, 200.00, 'completed', CURRENT_DATE - INTERVAL '2 days'),
+                            (3, 15.00, 'refunded', CURRENT_DATE - INTERVAL '20 days')
+                        """
+                    )
         finally:
             await connector.close()
 
-        base_dir = Path("datapoints") / "demo"
-        datapoints_dir = base_dir
-        if persona_name != "base":
-            persona_dir = base_dir / persona_name
-            if persona_dir.exists():
-                datapoints_dir = persona_dir
-            else:
-                console.print(
-                    f"[yellow]Persona DataPoints not found at {persona_dir}. Falling back to base demo.[/yellow]"
-                )
+        if dataset_name == "grocery":
+            datapoints_dir = Path("datapoints") / "examples" / "grocery_store"
+            workspace_root = Path("workspace_demo") / "grocery"
+            suggested_query = "List all grocery stores"
+        else:
+            base_dir = Path("datapoints") / "demo"
+            datapoints_dir = base_dir
+            if persona_name != "base":
+                persona_dir = base_dir / persona_name
+                if persona_dir.exists():
+                    datapoints_dir = persona_dir
+                else:
+                    console.print(
+                        f"[yellow]Persona DataPoints not found at {persona_dir}. Falling back to base demo.[/yellow]"
+                    )
+            workspace_root = Path("workspace_demo") / persona_name
+            suggested_query = "How many users are active?"
 
         if not datapoints_dir.exists():
             console.print(f"[red]Demo DataPoints not found at {datapoints_dir}[/red]")
@@ -1363,7 +1491,6 @@ def demo(persona: str, reset: bool, no_workspace: bool):
             graph.add_datapoint(datapoint)
 
         if not no_workspace:
-            workspace_root = Path("workspace_demo") / persona_name
             if workspace_root.exists():
                 console.print(
                     "[yellow]Workspace indexing is not implemented yet. "
@@ -1374,7 +1501,9 @@ def demo(persona: str, reset: bool, no_workspace: bool):
                     f"[yellow]Workspace demo folder not found at {workspace_root} (skipping).[/yellow]"
                 )
 
-        console.print("[green]✓ Demo data loaded. Try: datachat ask \"How many users are active?\"[/green]")
+        console.print(
+            f"[green]✓ Demo data loaded. Try: datachat ask \"{suggested_query}\"[/green]"
+        )
 
     asyncio.run(run_demo())
 

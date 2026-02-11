@@ -104,9 +104,24 @@ Approve payload supports optional edits:
 
 - `POST /sync` - Trigger a full sync.
 - `GET /sync/status` - Get sync job status.
+- `GET /datapoints` - List locally available DataPoints.
 - `POST /datapoints` - Create a DataPoint.
 - `PUT /datapoints/{id}` - Update a DataPoint.
 - `DELETE /datapoints/{id}` - Delete a DataPoint.
+
+`GET /datapoints` returns DataPoints currently loaded in the vector store
+(the same effective set used during retrieval/chat), deduplicated by
+`datapoint_id` with priority:
+
+- `user` > `managed` > `custom`/`unknown` > `example`
+
+List item shape includes:
+
+- `datapoint_id`
+- `type`
+- `name`
+- `source_tier` (for example `managed`, `example`, `custom`)
+- `source_path` (source file path when available)
 
 ## Tools
 

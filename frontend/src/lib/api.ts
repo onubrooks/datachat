@@ -212,6 +212,8 @@ export interface DataPointSummary {
   datapoint_id: string;
   type: string;
   name?: string | null;
+  source_tier?: string | null;
+  source_path?: string | null;
 }
 
 export interface SyncStatusResponse {
