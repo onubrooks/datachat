@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import urlparse
 
 from backend.connectors.base import BaseConnector
-from backend.connectors.clickhouse import ClickHouseConnector
-from backend.connectors.postgres import PostgresConnector
+from backend.connectors.factory import create_connector
 from backend.database.manager import DatabaseConnectionManager
 from backend.tools.base import ToolCategory, ToolContext, tool
 
@@ -21,24 +19,10 @@ async def _get_default_connector() -> BaseConnector:
         if not connection:
             raise ValueError("No default database connection configured.")
         database_url = connection.database_url.get_secret_value()
-        parsed = urlparse(database_url)
-        scheme = parsed.scheme.split("+")[0]
-        if connection.database_type == "clickhouse" or scheme == "clickhouse":
-            connector = ClickHouseConnector(
-                host=parsed.hostname or "localhost",
-                port=parsed.port or 8123,
-                database=parsed.path.lstrip("/") if parsed.path else "default",
-                user=parsed.username or "default",
-                password=parsed.password or "",
-            )
-        else:
-            connector = PostgresConnector(
-                host=parsed.hostname or "localhost",
-                port=parsed.port or 5432,
-                database=parsed.path.lstrip("/") if parsed.path else "datachat",
-                user=parsed.username or "postgres",
-                password=parsed.password or "",
-            )
+        connector = create_connector(
+            database_url=database_url,
+            database_type=connection.database_type,
+        )
         await connector.connect()
         return connector
     finally:
@@ -46,27 +30,9 @@ async def _get_default_connector() -> BaseConnector:
 
 
 def _build_connector_from_context(database_url: str, database_type: str | None) -> BaseConnector:
-    parsed = urlparse(database_url.replace("postgresql+asyncpg://", "postgresql://"))
-    scheme = parsed.scheme.split("+")[0]
-    resolved_type = (database_type or "").lower()
-    if not resolved_type:
-        resolved_type = "clickhouse" if scheme == "clickhouse" else "postgresql"
-
-    if resolved_type == "clickhouse" or scheme == "clickhouse":
-        return ClickHouseConnector(
-            host=parsed.hostname or "localhost",
-            port=parsed.port or 8123,
-            database=parsed.path.lstrip("/") if parsed.path else "default",
-            user=parsed.username or "default",
-            password=parsed.password or "",
-        )
-
-    return PostgresConnector(
-        host=parsed.hostname or "localhost",
-        port=parsed.port or 5432,
-        database=parsed.path.lstrip("/") if parsed.path else "datachat",
-        user=parsed.username or "postgres",
-        password=parsed.password or "",
+    return create_connector(
+        database_url=database_url,
+        database_type=database_type,
     )
 
 

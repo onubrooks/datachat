@@ -34,14 +34,13 @@ Accepted today:
 
 - `postgresql`
 - `clickhouse`
-
-Rejected today:
-
-- `mysql` (returns validation error: not supported yet)
+- `mysql`
 
 Notes:
 
-- Credentials-only catalog templates exist for MySQL/BigQuery/Redshift, but runtime connectors are not yet wired for those engines.
+- Credentials-only catalog templates also exist for `bigquery` and `redshift`.
+- Runtime connectors are currently implemented for `postgresql`, `clickhouse`, and `mysql`.
+- Profiling execution still runs on PostgreSQL only.
 
 ## Add / List / Set Default / Delete
 

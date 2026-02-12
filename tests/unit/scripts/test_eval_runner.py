@@ -84,3 +84,33 @@ def test_run_retrieval_threshold_failure(monkeypatch):
     )
 
     assert rc == 1
+
+
+def test_run_catalog_thresholds(monkeypatch):
+    dataset = [
+        {
+            "query": "list tables",
+            "expected_sql_contains": ["information_schema.tables"],
+            "expected_answer_source": "sql",
+            "expect_clarification": False,
+        }
+    ]
+
+    def _mock_post_chat(api_base: str, message: str, **kwargs):
+        return {
+            "sql": "SELECT table_schema, table_name FROM information_schema.tables",
+            "answer_source": "sql",
+            "clarifying_questions": [],
+        }
+
+    monkeypatch.setattr(EVAL_RUNNER, "_post_chat", _mock_post_chat)
+
+    rc = EVAL_RUNNER.run_catalog(
+        "http://localhost:8000",
+        dataset,
+        min_sql_match_rate=1.0,
+        min_source_match_rate=1.0,
+        min_clarification_match_rate=1.0,
+    )
+
+    assert rc == 0

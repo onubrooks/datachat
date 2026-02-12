@@ -46,6 +46,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from backend.config import clear_settings_cache, get_settings
+from backend.connectors.factory import create_connector, infer_database_type
 from backend.connectors.postgres import PostgresConnector
 from backend.initialization.initializer import SystemInitializer
 from backend.knowledge.datapoints import DataPointLoader
@@ -173,14 +174,29 @@ def _resolve_system_database_url(settings) -> tuple[str | None, str]:
     return None, "none"
 
 
+def _resolve_runtime_database_context(settings) -> tuple[str, str | None]:
+    """Resolve runtime DB context, preferring URL-derived type."""
+    database_url, _ = _resolve_target_database_url(settings)
+    if database_url:
+        try:
+            return infer_database_type(database_url), database_url
+        except Exception:
+            return settings.database.db_type, database_url
+    return settings.database.db_type, None
+
+
 def _format_connection_target(connection_string: str) -> str:
     """Format a connection string for status output."""
     from urllib.parse import urlparse
 
     parsed = urlparse(connection_string)
     host = parsed.hostname or "localhost"
-    port = parsed.port or 5432
-    database = parsed.path.lstrip("/") if parsed.path else "datachat"
+    scheme = parsed.scheme.split("+")[0].lower()
+    default_ports = {"postgres": 5432, "postgresql": 5432, "mysql": 3306, "clickhouse": 8123}
+    port = parsed.port or default_ports.get(scheme, 0)
+    database = parsed.path.lstrip("/") if parsed.path else ("default" if scheme == "clickhouse" else "")
+    if not database:
+        database = "datachat"
     return f"{host}:{port}/{database}"
 
 
@@ -255,16 +271,11 @@ async def create_pipeline_from_config() -> DataChatPipeline:
         )
         raise click.ClickException("Missing target database")
 
-    # Parse connection string
-    from urllib.parse import urlparse
-
-    parsed = urlparse(connection_string)
-    connector = PostgresConnector(
-        host=parsed.hostname or "localhost",
-        port=parsed.port or 5432,
-        database=parsed.path.lstrip("/") if parsed.path else "datachat",
-        user=parsed.username or "postgres",
-        password=parsed.password or "",
+    runtime_db_type, runtime_db_url = _resolve_runtime_database_context(settings)
+    connector = create_connector(
+        database_url=runtime_db_url or connection_string,
+        database_type=runtime_db_type,
+        pool_size=settings.database.pool_size,
     )
 
     try:
@@ -639,6 +650,8 @@ def chat(
         nonlocal conversation_id
         clarification_attempts = 0
         max_clarifications_limit = max(0, max_clarifications)
+        settings = get_settings()
+        database_type, database_url = _resolve_runtime_database_context(settings)
 
         pipeline = None
         try:
@@ -664,6 +677,8 @@ def chat(
                         result = await pipeline.run(
                             query=query,
                             conversation_history=conversation_history,
+                            database_type=database_type,
+                            database_url=database_url,
                             synthesize_simple_sql=synthesize_simple_sql,
                         )
 
@@ -760,6 +775,8 @@ def ask(
     """Ask a single question and exit."""
 
     async def run_query():
+        settings = get_settings()
+        database_type, database_url = _resolve_runtime_database_context(settings)
         local_response = _maybe_local_intent_response(query)
         if local_response:
             answer, source, confidence = local_response
@@ -792,6 +809,8 @@ def ask(
                     result = await pipeline.run(
                         query=current_query,
                         conversation_history=conversation_history,
+                        database_type=database_type,
+                        database_url=database_url,
                         synthesize_simple_sql=synthesize_simple_sql,
                     )
 
@@ -933,16 +952,7 @@ def status():
         try:
             if not connection_string:
                 raise RuntimeError("No target database configured")
-            from urllib.parse import urlparse
-
-            parsed = urlparse(connection_string)
-            connector = PostgresConnector(
-                host=parsed.hostname or "localhost",
-                port=parsed.port or 5432,
-                database=parsed.path.lstrip("/") if parsed.path else "datachat",
-                user=parsed.username or "postgres",
-                password=parsed.password or "",
-            )
+            connector = create_connector(database_url=connection_string)
             await connector.connect()
             await connector.execute("SELECT 1")
             table.add_row("Database", "✓", "Connected")
@@ -1293,19 +1303,18 @@ def reset(
             if not target_db_url:
                 console.print("[yellow]Target DB not configured; skipped target reset.[/yellow]")
             else:
-                from urllib.parse import urlparse
-
-                parsed = urlparse(target_db_url)
-                connector = PostgresConnector(
-                    host=parsed.hostname or "localhost",
-                    port=parsed.port or 5432,
-                    database=parsed.path.lstrip("/") if parsed.path else "datachat",
-                    user=parsed.username or "postgres",
-                    password=parsed.password or "",
+                target_db_type = infer_database_type(target_db_url)
+                connector = create_connector(
+                    database_url=target_db_url,
+                    database_type=target_db_type,
                 )
                 await connector.connect()
                 try:
                     if drop_all_target:
+                        if target_db_type != "postgresql":
+                            raise click.ClickException(
+                                "--drop-all-target currently supports PostgreSQL only."
+                            )
                         await connector.execute(
                             """
                             DO $$

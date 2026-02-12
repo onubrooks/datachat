@@ -118,9 +118,25 @@ class TestDatabaseSettings:
 
         assert "asyncpg" in str(settings.url)
 
+    def test_mysql_url_scheme(self, monkeypatch):
+        """MySQL scheme is valid."""
+        monkeypatch.setenv("DATABASE_URL", "mysql://user:pass@localhost:3306/testdb")
+
+        settings = DatabaseSettings()
+
+        assert str(settings.url) == "mysql://user:pass@localhost:3306/testdb"
+
+    def test_clickhouse_url_scheme(self, monkeypatch):
+        """ClickHouse scheme is valid."""
+        monkeypatch.setenv("DATABASE_URL", "clickhouse://default:@localhost:8123/default")
+
+        settings = DatabaseSettings()
+
+        assert str(settings.url) == "clickhouse://default@localhost:8123/default"
+
     def test_invalid_database_scheme(self, monkeypatch):
-        """Non-PostgreSQL schemes are rejected."""
-        monkeypatch.setenv("DATABASE_URL", "mysql://user:pass@localhost/testdb")
+        """Unsupported schemes are rejected."""
+        monkeypatch.setenv("DATABASE_URL", "sqlite:///tmp/test.db")
 
         with pytest.raises(ValidationError):
             DatabaseSettings()

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -11,8 +10,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from pydantic import SecretStr
 
 from backend.config import get_settings
-from backend.connectors.clickhouse import ClickHouseConnector
-from backend.connectors.postgres import PostgresConnector
+from backend.connectors.factory import create_connector
 from backend.models.database import DatabaseConnection
 
 _CREATE_TABLE_SQL = """
@@ -268,45 +266,12 @@ class DatabaseConnectionManager:
         )
 
     async def _validate_connection(self, database_type: str, database_url: str) -> None:
-        if database_type == "postgresql":
-            connector = self._build_postgres_connector(database_url)
-        elif database_type == "clickhouse":
-            connector = self._build_clickhouse_connector(database_url)
-        elif database_type == "mysql":
-            raise ValueError("MySQL connections are not supported yet.")
-        else:
-            raise ValueError(f"Unsupported database type: {database_type}")
+        connector = create_connector(database_url=database_url, database_type=database_type)
 
         try:
             await connector.connect()
         finally:
             await connector.close()
-
-    def _build_postgres_connector(self, database_url: str) -> PostgresConnector:
-        parsed = urlparse(database_url)
-        scheme = parsed.scheme.split("+")[0]
-        if scheme not in {"postgres", "postgresql"} or not parsed.hostname:
-            raise ValueError("Invalid PostgreSQL database URL.")
-        return PostgresConnector(
-            host=parsed.hostname,
-            port=parsed.port or 5432,
-            database=parsed.path.lstrip("/") if parsed.path else "datachat",
-            user=parsed.username or "postgres",
-            password=parsed.password or "",
-        )
-
-    def _build_clickhouse_connector(self, database_url: str) -> ClickHouseConnector:
-        parsed = urlparse(database_url)
-        scheme = parsed.scheme.split("+")[0]
-        if scheme != "clickhouse" or not parsed.hostname:
-            raise ValueError("Invalid ClickHouse database URL.")
-        return ClickHouseConnector(
-            host=parsed.hostname,
-            port=parsed.port or 8123,
-            database=parsed.path.lstrip("/") if parsed.path else "default",
-            user=parsed.username or "default",
-            password=parsed.password or "",
-        )
 
     def _encrypt_url(self, database_url: str) -> str:
         cipher = self._ensure_cipher()

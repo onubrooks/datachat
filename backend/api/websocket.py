@@ -13,6 +13,8 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from fastapi.encoders import jsonable_encoder
 
+from backend.config import get_settings
+from backend.connectors.factory import infer_database_type
 from backend.initialization.initializer import SystemInitializer
 
 logger = logging.getLogger(__name__)
@@ -89,7 +91,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
-        database_type = "postgresql"
+        settings = get_settings()
+        database_type = settings.database.db_type
         database_url = None
         manager = app_state.get("database_manager")
         target_database = data.get("target_database")
@@ -126,6 +129,12 @@ async def websocket_chat(websocket: WebSocket) -> None:
             if default_connection is not None:
                 database_type = default_connection.database_type
                 database_url = default_connection.database_url.get_secret_value()
+        elif settings.database.url:
+            database_url = str(settings.database.url)
+            try:
+                database_type = infer_database_type(database_url)
+            except Exception:
+                pass
 
         # Get pipeline from app state
         pipeline = app_state.get("pipeline")

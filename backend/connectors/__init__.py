@@ -7,6 +7,7 @@ Available Connectors:
     - BaseConnector: Abstract base class
     - PostgresConnector: PostgreSQL connector (asyncpg)
     - ClickHouseConnector: ClickHouse connector (clickhouse-connect)
+    - MySQLConnector: MySQL connector (mysql-connector-python)
 
 Usage:
     from backend.connectors import PostgresConnector
@@ -35,12 +36,18 @@ from backend.connectors.base import (
     TableInfo,
 )
 from backend.connectors.clickhouse import ClickHouseConnector
+from backend.connectors.factory import create_connector, infer_database_type, resolve_database_type
+from backend.connectors.mysql import MySQLConnector
 from backend.connectors.postgres import PostgresConnector
 
 __all__ = [
     "BaseConnector",
     "PostgresConnector",
     "ClickHouseConnector",
+    "MySQLConnector",
+    "create_connector",
+    "infer_database_type",
+    "resolve_database_type",
     "ColumnInfo",
     "TableInfo",
     "QueryResult",

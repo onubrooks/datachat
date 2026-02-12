@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, status
 
+from backend.connectors.factory import infer_database_type
 from backend.models.api import ToolExecuteRequest, ToolExecuteResponse, ToolInfo
 from backend.tools import ToolExecutor, ToolRegistry, initialize_tools
 from backend.tools.base import ToolContext
@@ -57,7 +58,11 @@ async def _resolve_database_context(
 
     settings = get_settings()
     if settings.database.url:
-        return settings.database.db_type, str(settings.database.url)
+        url = str(settings.database.url)
+        try:
+            return infer_database_type(url), url
+        except Exception:
+            return settings.database.db_type, url
     return None, None
 
 

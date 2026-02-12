@@ -121,12 +121,33 @@ class TestDatabaseConnectionManager:
             await manager.remove_connection(uuid4())
 
     @pytest.mark.asyncio
-    async def test_add_connection_rejects_mysql(self, encryption_key, pool):
+    async def test_add_connection_accepts_mysql(self, encryption_key, pool):
         manager = DatabaseConnectionManager(encryption_key=encryption_key, pool=pool)
+        manager._validate_connection = AsyncMock()
+        conn = self._build_conn(pool)
 
-        with pytest.raises(ValueError):
-            await manager.add_connection(
-                name="MySQL",
-                database_url="mysql://user:pass@localhost:3306/db",
-                database_type="mysql",
-            )
+        database_url = "mysql://user:pass@localhost:3306/app"
+        encrypted_url = manager._encrypt_url(database_url)
+        row = {
+            "connection_id": uuid4(),
+            "name": "MySQL",
+            "database_url_encrypted": encrypted_url,
+            "database_type": "mysql",
+            "is_active": True,
+            "is_default": False,
+            "tags": [],
+            "description": None,
+            "created_at": "2024-01-01T00:00:00Z",
+            "last_profiled": None,
+            "datapoint_count": 0,
+        }
+        conn.fetchrow = AsyncMock(return_value=row)
+
+        connection = await manager.add_connection(
+            name="MySQL",
+            database_url=database_url,
+            database_type="mysql",
+        )
+
+        assert connection.database_type == "mysql"
+        manager._validate_connection.assert_awaited_once()

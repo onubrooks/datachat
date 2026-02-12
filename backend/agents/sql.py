@@ -18,11 +18,11 @@ import logging
 import re
 import time
 from typing import Any
-from urllib.parse import urlparse
 
 from backend.agents.base import BaseAgent
 from backend.config import get_settings
-from backend.connectors.postgres import PostgresConnector
+from backend.connectors.base import BaseConnector
+from backend.connectors.factory import create_connector
 from backend.database.catalog import CatalogIntelligence
 from backend.database.catalog_templates import (
     get_catalog_aliases,
@@ -1088,8 +1088,6 @@ class SQLAgent(BaseAgent):
         include_profile: bool = False,
     ) -> str | None:
         db_type = database_type or getattr(self.config.database, "db_type", "postgresql")
-        if db_type != "postgresql":
-            return None
 
         db_url = database_url or (
             str(self.config.database.url) if self.config.database.url else None
@@ -1103,17 +1101,15 @@ class SQLAgent(BaseAgent):
         if cached:
             return cached
 
-        parsed = urlparse(db_url.replace("postgresql+asyncpg://", "postgresql://"))
-        if not parsed.hostname:
+        try:
+            connector = create_connector(
+                database_url=db_url,
+                database_type=db_type,
+                pool_size=self.config.database.pool_size,
+                timeout=10,
+            )
+        except Exception:
             return None
-
-        connector = PostgresConnector(
-            host=parsed.hostname,
-            port=parsed.port or 5432,
-            database=parsed.path.lstrip("/") if parsed.path else "postgres",
-            user=parsed.username or "postgres",
-            password=parsed.password or "",
-        )
 
         try:
             await connector.connect()
@@ -1144,7 +1140,7 @@ class SQLAgent(BaseAgent):
 
     async def _fetch_live_schema_context(
         self,
-        connector: PostgresConnector,
+        connector: BaseConnector,
         query: str,
         schema_key: str,
         include_profile: bool,
@@ -1155,6 +1151,7 @@ class SQLAgent(BaseAgent):
         qualified_tables, columns_by_table = await self._load_schema_snapshot(
             connector=connector,
             schema_key=schema_key,
+            db_type=db_type,
         )
         if not qualified_tables:
             return None, []
@@ -1183,6 +1180,7 @@ class SQLAgent(BaseAgent):
         cached_profile_context = ""
         if include_profile and columns_by_table:
             join_context = self._build_join_hints_context(columns_by_table, focus_tables)
+        if include_profile and columns_by_table and db_type == "postgresql":
             profile_context = await self._build_lightweight_profile_context(
                 connector, schema_key, query, columns_by_table, focus_tables
             )
@@ -1203,8 +1201,9 @@ class SQLAgent(BaseAgent):
     async def _load_schema_snapshot(
         self,
         *,
-        connector: PostgresConnector,
+        connector: BaseConnector,
         schema_key: str,
+        db_type: str,
     ) -> tuple[list[str], dict[str, list[tuple[str, str | None]]]]:
         use_snapshot_cache = self._pipeline_flag("schema_snapshot_cache_enabled", True)
         snapshot_ttl_seconds = self._pipeline_int("schema_snapshot_cache_ttl_seconds", 21600)
@@ -1222,48 +1221,68 @@ class SQLAgent(BaseAgent):
                 if is_expired:
                     self._live_schema_snapshot_cache.pop(schema_key, None)
 
-        tables_query = (
-            "SELECT table_schema, table_name "
-            "FROM information_schema.tables "
-            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
-            "ORDER BY table_schema, table_name"
-        )
-        result = await connector.execute(tables_query)
-        if not result.rows:
-            return [], {}
+        if db_type == "postgresql":
+            tables_query = (
+                "SELECT table_schema, table_name "
+                "FROM information_schema.tables "
+                "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+                "ORDER BY table_schema, table_name"
+            )
+            result = await connector.execute(tables_query)
+            if not result.rows:
+                return [], {}
 
-        qualified_tables: list[str] = []
-        for row in result.rows:
-            schema = row.get("table_schema")
-            table = row.get("table_name")
-            if schema and table:
-                qualified_tables.append(f"{schema}.{table}")
-            elif table:
-                qualified_tables.append(str(table))
+            qualified_tables: list[str] = []
+            for row in result.rows:
+                schema = row.get("table_schema")
+                table = row.get("table_name")
+                if schema and table:
+                    qualified_tables.append(f"{schema}.{table}")
+                elif table:
+                    qualified_tables.append(str(table))
 
-        if not qualified_tables:
-            return [], {}
+            if not qualified_tables:
+                return [], {}
 
-        qualified_set = set(qualified_tables)
-        columns_query = (
-            "SELECT table_schema, table_name, column_name, data_type "
-            "FROM information_schema.columns "
-            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
-            "ORDER BY table_schema, table_name, ordinal_position"
-        )
-        columns_result = await connector.execute(columns_query)
-        columns_by_table: dict[str, list[tuple[str, str | None]]] = {}
-        for row in columns_result.rows:
-            schema = row.get("table_schema")
-            table = row.get("table_name")
-            column = row.get("column_name")
-            dtype = row.get("data_type")
-            if not (schema and table and column):
-                continue
-            key = f"{schema}.{table}"
-            if key not in qualified_set:
-                continue
-            columns_by_table.setdefault(key, []).append((str(column), dtype))
+            qualified_set = set(qualified_tables)
+            columns_query = (
+                "SELECT table_schema, table_name, column_name, data_type "
+                "FROM information_schema.columns "
+                "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+                "ORDER BY table_schema, table_name, ordinal_position"
+            )
+            columns_result = await connector.execute(columns_query)
+            columns_by_table: dict[str, list[tuple[str, str | None]]] = {}
+            for row in columns_result.rows:
+                schema = row.get("table_schema")
+                table = row.get("table_name")
+                column = row.get("column_name")
+                dtype = row.get("data_type")
+                if not (schema and table and column):
+                    continue
+                key = f"{schema}.{table}"
+                if key not in qualified_set:
+                    continue
+                columns_by_table.setdefault(key, []).append((str(column), dtype))
+        else:
+            tables_info = await connector.get_schema()
+            qualified_tables = []
+            columns_by_table = {}
+            for table in tables_info:
+                schema = getattr(table, "schema_name", None) or getattr(table, "schema", None)
+                name = getattr(table, "table_name", None)
+                if not name:
+                    continue
+                key = f"{schema}.{name}" if schema else str(name)
+                qualified_tables.append(key)
+                cols = []
+                for column in getattr(table, "columns", []):
+                    col_name = getattr(column, "name", None)
+                    if not col_name:
+                        continue
+                    cols.append((str(col_name), getattr(column, "data_type", None)))
+                if cols:
+                    columns_by_table[key] = cols
 
         if use_snapshot_cache:
             self._live_schema_snapshot_cache[schema_key] = {
@@ -1445,7 +1464,7 @@ class SQLAgent(BaseAgent):
 
     async def _build_lightweight_profile_context(
         self,
-        connector: PostgresConnector,
+        connector: BaseConnector,
         schema_key: str,
         query: str,
         columns_by_table: dict[str, list[tuple[str, str | None]]],
@@ -1493,7 +1512,7 @@ class SQLAgent(BaseAgent):
 
     async def _fetch_table_profile(
         self,
-        connector: PostgresConnector,
+        connector: BaseConnector,
         table: str,
         query: str,
         columns: list[tuple[str, str | None]],
@@ -1543,7 +1562,7 @@ class SQLAgent(BaseAgent):
         return selected[:5]
 
     async def _fetch_table_row_estimate(
-        self, connector: PostgresConnector, schema: str, table: str
+        self, connector: BaseConnector, schema: str, table: str
     ) -> int | None:
         query = (
             "SELECT reltuples::BIGINT AS estimate "
@@ -1562,7 +1581,7 @@ class SQLAgent(BaseAgent):
 
     async def _fetch_column_stats(
         self,
-        connector: PostgresConnector,
+        connector: BaseConnector,
         schema: str,
         table: str,
         columns: list[str],

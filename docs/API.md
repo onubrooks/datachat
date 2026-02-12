@@ -92,7 +92,9 @@ Notes:
 
 - Profiling is resilient to per-table failures and timeouts; a job can complete with partial coverage.
 - Lightweight profiling snapshots are cached locally and used to enrich credentials-only SQL prompts.
-- Query templates are available for `postgresql`, `mysql`, `bigquery`, `clickhouse`, and `redshift`; runtime execution is currently PostgreSQL-only until additional connectors land.
+- Query templates are available for `postgresql`, `mysql`, `bigquery`, `clickhouse`, and `redshift`.
+- Runtime query connectors are available for `postgresql`, `clickhouse`, and `mysql`.
+- Profiling execution remains PostgreSQL-only.
 
 Approve payload supports optional edits:
 

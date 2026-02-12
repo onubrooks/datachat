@@ -189,6 +189,8 @@ Query: _
 ```bash
 python scripts/eval_runner.py --mode retrieval --dataset eval/retrieval.json
 python scripts/eval_runner.py --mode qa --dataset eval/qa.json
+python scripts/eval_runner.py --mode intent --dataset eval/intent_credentials.json
+python scripts/eval_runner.py --mode catalog --dataset eval/catalog/mysql_credentials.json
 python scripts/eval_runner.py --mode retrieval --dataset eval/grocery/retrieval.json --min-hit-rate 0.6 --min-recall 0.5 --min-mrr 0.4
 python scripts/eval_runner.py --mode qa --dataset eval/grocery/qa.json --min-sql-match-rate 0.6 --min-answer-type-rate 0.6
 ```

@@ -20,13 +20,11 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from backend.agents.base import BaseAgent
 from backend.config import get_settings
 from backend.connectors.base import BaseConnector, QueryError
-from backend.connectors.clickhouse import ClickHouseConnector
-from backend.connectors.postgres import PostgresConnector
+from backend.connectors.factory import create_connector
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
 from backend.models import (
@@ -193,38 +191,18 @@ class ExecutorAgent(BaseAgent):
         Returns:
             Database connector instance
         """
-        if database_type == "postgresql":
-            if database_url:
-                db_url = database_url
-            elif self.config.database.url:
-                db_url = str(self.config.database.url)
-            else:
-                raise ValueError("DATABASE_URL is not configured for query execution.")
-            parsed = urlparse(db_url.replace("postgresql+asyncpg://", "postgresql://"))
-            if not parsed.hostname:
-                raise ValueError("Invalid PostgreSQL database URL.")
-            connector = PostgresConnector(
-                host=parsed.hostname,
-                port=parsed.port or 5432,
-                database=parsed.path.lstrip("/") if parsed.path else "datachat",
-                user=parsed.username or "postgres",
-                password=parsed.password or "",
-            )
-        elif database_type == "clickhouse":
-            if not database_url:
-                raise ValueError("ClickHouse requires a database URL.")
-            parsed = urlparse(database_url)
-            if not parsed.hostname:
-                raise ValueError("Invalid ClickHouse database URL.")
-            connector = ClickHouseConnector(
-                host=parsed.hostname,
-                port=parsed.port or 8123,
-                database=parsed.path.lstrip("/") if parsed.path else "default",
-                user=parsed.username or "default",
-                password=parsed.password or "",
-            )
+        if database_url:
+            db_url = database_url
+        elif self.config.database.url:
+            db_url = str(self.config.database.url)
         else:
-            raise ValueError(f"Unsupported database type: {database_type}")
+            raise ValueError("DATABASE_URL is not configured for query execution.")
+
+        connector = create_connector(
+            database_url=db_url,
+            database_type=database_type,
+            pool_size=self.config.database.pool_size,
+        )
 
         await connector.connect()
         return connector

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
+from backend.config import get_settings
 
 
 class TestToolsEndpoint:
@@ -107,3 +108,22 @@ class TestToolsEndpoint:
         assert response.status_code == 400
         assert "target_database requires an active database registry" in response.json()["detail"]
         assert executor_mock.await_count == 0
+
+    def test_execute_tool_fallback_infers_database_type_from_url(self, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", "mysql://u:p@localhost:3306/app")
+        get_settings.cache_clear()
+        executor_mock = AsyncMock(return_value={"result": {"ok": True}})
+
+        with patch(
+            "backend.api.main.app_state",
+            {"pipeline": None, "database_manager": None, "connector": None},
+        ), patch("backend.api.routes.tools.ToolExecutor.execute", new=executor_mock):
+            response = self.client.post(
+                "/api/v1/tools/execute",
+                json={"name": "list_tables", "arguments": {}},
+            )
+
+        assert response.status_code == 200
+        _, _, ctx = executor_mock.await_args.args
+        assert ctx.metadata["database_type"] == "mysql"
+        assert ctx.metadata["database_url"] == "mysql://u:p@localhost:3306/app"

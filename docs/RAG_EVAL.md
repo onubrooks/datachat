@@ -80,6 +80,9 @@ python scripts/eval_runner.py --mode qa --dataset eval/qa.json
 
 # Intent + credentials-only checks
 python scripts/eval_runner.py --mode intent --dataset eval/intent_credentials.json
+
+# Deterministic catalog checks (credentials-only metadata intents)
+python scripts/eval_runner.py --mode catalog --dataset eval/catalog/mysql_credentials.json
 ```
 
 Notes:
@@ -88,6 +91,8 @@ Notes:
 - Answer type checks support both columnar API payloads and row-list payloads.
 - Intent mode tracks source accuracy, clarification behavior, SQL pattern checks,
   and latency/LLM-call averages for credentials-only flows.
+- Catalog mode focuses on deterministic metadata intents
+  (`list tables`, `show columns`, `sample rows`, `row count`) and validates SQL/source/clarification behavior.
 
 Optional thresholds (non-zero exit on failure):
 
@@ -97,6 +102,9 @@ python scripts/eval_runner.py --mode retrieval --dataset eval/retrieval.json \
 
 python scripts/eval_runner.py --mode qa --dataset eval/qa.json \
   --min-sql-match-rate 0.6 --min-answer-type-rate 0.6
+
+python scripts/eval_runner.py --mode catalog --dataset eval/catalog/mysql_credentials.json \
+  --min-sql-match-rate 0.7 --min-source-match-rate 0.8 --min-clarification-match-rate 0.8
 ```
 
 ---
@@ -128,3 +136,4 @@ Keep a tiny set (5-10 queries) for quick regression checks before demos.
 - `eval/qa.json` - SQL pattern + answer type checks.
 - `eval/grocery/retrieval.json` - grocery DataPoint retrieval checks.
 - `eval/grocery/qa.json` - grocery end-to-end SQL/answer checks.
+- `eval/catalog/mysql_credentials.json` - deterministic catalog intent checks for MySQL credentials-only mode.

@@ -6,6 +6,7 @@ Usage:
   python scripts/eval_runner.py --mode retrieval --dataset eval/retrieval.json
   python scripts/eval_runner.py --mode qa --dataset eval/qa.json
   python scripts/eval_runner.py --mode intent --dataset eval/intent_credentials.json
+  python scripts/eval_runner.py --mode catalog --dataset eval/catalog/mysql_credentials.json
 """
 
 from __future__ import annotations
@@ -296,9 +297,92 @@ def run_intent(api_base: str, dataset: list[dict[str, Any]]) -> int:
     return 0
 
 
+def run_catalog(
+    api_base: str,
+    dataset: list[dict[str, Any]],
+    min_sql_match_rate: float | None = None,
+    min_source_match_rate: float | None = None,
+    min_clarification_match_rate: float | None = None,
+) -> int:
+    """Evaluate deterministic catalog behaviors (credentials-only flows)."""
+    total = len(dataset)
+    sql_matches = 0
+    source_matches = 0
+    clarification_matches = 0
+
+    for idx, item in enumerate(dataset):
+        query = item["query"]
+        expected_sql_contains = [token.lower() for token in item.get("expected_sql_contains", [])]
+        expected_source = item.get("expected_answer_source")
+        expect_clarification = item.get("expect_clarification")
+
+        response = _post_chat(
+            api_base=api_base,
+            message=query,
+            conversation_id=f"catalog_eval_{idx}",
+            target_database=item.get("target_database"),
+        )
+        sql = (response.get("sql") or "").lower()
+        source = response.get("answer_source")
+        clarifying_questions = response.get("clarifying_questions") or []
+        is_clarification = source == "clarification" or bool(clarifying_questions)
+
+        sql_ok = all(token in sql for token in expected_sql_contains)
+        source_ok = expected_source is None or source == expected_source
+        clarification_ok = (
+            expect_clarification is None or bool(expect_clarification) == is_clarification
+        )
+
+        if sql_ok:
+            sql_matches += 1
+        if source_ok:
+            source_matches += 1
+        if clarification_ok:
+            clarification_matches += 1
+
+        print(f"- {query}")
+        print(
+            "  sql_ok="
+            f"{sql_ok} source_ok={source_ok} clarification_ok={clarification_ok} "
+            f"(source={source}, clarification={is_clarification})"
+        )
+
+    sql_match_rate = (sql_matches / total) if total else 0.0
+    source_match_rate = (source_matches / total) if total else 0.0
+    clarification_match_rate = (clarification_matches / total) if total else 0.0
+
+    print(f"\nCatalog SQL match rate: {sql_matches}/{total} ({sql_match_rate:.2f})")
+    print(f"Catalog source match rate: {source_matches}/{total} ({source_match_rate:.2f})")
+    print(
+        "Catalog clarification match rate: "
+        f"{clarification_matches}/{total} ({clarification_match_rate:.2f})"
+    )
+
+    failures: list[str] = []
+    if min_sql_match_rate is not None and sql_match_rate < min_sql_match_rate:
+        failures.append(f"sql_match_rate {sql_match_rate:.2f} < {min_sql_match_rate:.2f}")
+    if min_source_match_rate is not None and source_match_rate < min_source_match_rate:
+        failures.append(f"source_match_rate {source_match_rate:.2f} < {min_source_match_rate:.2f}")
+    if (
+        min_clarification_match_rate is not None
+        and clarification_match_rate < min_clarification_match_rate
+    ):
+        failures.append(
+            "clarification_match_rate "
+            f"{clarification_match_rate:.2f} < {min_clarification_match_rate:.2f}"
+        )
+
+    if failures:
+        print("Threshold failures:")
+        for failure in failures:
+            print(f"  - {failure}")
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="DataChat eval runner")
-    parser.add_argument("--mode", choices=["retrieval", "qa", "intent"], required=True)
+    parser.add_argument("--mode", choices=["retrieval", "qa", "intent", "catalog"], required=True)
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--api-base", default="http://localhost:8000")
     parser.add_argument(
@@ -331,6 +415,18 @@ def main() -> int:
         default=None,
         help="Optional minimum answer-type match threshold for QA mode.",
     )
+    parser.add_argument(
+        "--min-source-match-rate",
+        type=float,
+        default=None,
+        help="Optional minimum source match threshold for catalog mode.",
+    )
+    parser.add_argument(
+        "--min-clarification-match-rate",
+        type=float,
+        default=None,
+        help="Optional minimum clarification match threshold for catalog mode.",
+    )
     args = parser.parse_args()
 
     try:
@@ -357,6 +453,14 @@ def main() -> int:
         )
     if args.mode == "intent":
         return run_intent(args.api_base, dataset)
+    if args.mode == "catalog":
+        return run_catalog(
+            args.api_base,
+            dataset,
+            min_sql_match_rate=args.min_sql_match_rate,
+            min_source_match_rate=args.min_source_match_rate,
+            min_clarification_match_rate=args.min_clarification_match_rate,
+        )
     return 1
 
 

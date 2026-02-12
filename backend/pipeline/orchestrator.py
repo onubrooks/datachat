@@ -17,7 +17,6 @@ from collections.abc import AsyncIterator
 from datetime import UTC
 from pathlib import Path
 from typing import Any, TypedDict
-from urllib.parse import urlparse
 
 from langgraph.graph import END, StateGraph
 
@@ -31,8 +30,7 @@ from backend.agents.tool_planner import ToolPlannerAgent
 from backend.agents.validator import ValidatorAgent
 from backend.config import get_settings
 from backend.connectors.base import BaseConnector
-from backend.connectors.clickhouse import ClickHouseConnector
-from backend.connectors.postgres import PostgresConnector
+from backend.connectors.factory import create_connector
 from backend.knowledge.retriever import Retriever
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
@@ -825,38 +823,14 @@ class DataChatPipeline:
     def _build_catalog_connector(
         self, database_type: str | None, database_url: str
     ) -> BaseConnector | None:
-        parsed = urlparse(database_url)
-        scheme = parsed.scheme.split("+")[0].lower() if parsed.scheme else ""
-        if database_type:
-            target_type = database_type
-        elif scheme in {"postgres", "postgresql"}:
-            target_type = "postgresql"
-        elif scheme == "clickhouse":
-            target_type = "clickhouse"
-        else:
-            target_type = getattr(self.config.database, "db_type", "postgresql")
-
-        if target_type == "postgresql":
-            if scheme not in {"postgres", "postgresql"} or not parsed.hostname:
-                return None
-            return PostgresConnector(
-                host=parsed.hostname,
-                port=parsed.port or 5432,
-                database=parsed.path.lstrip("/") if parsed.path else "datachat",
-                user=parsed.username or "postgres",
-                password=parsed.password or "",
+        try:
+            return create_connector(
+                database_url=database_url,
+                database_type=database_type or getattr(self.config.database, "db_type", None),
+                pool_size=self.config.database.pool_size,
             )
-        if target_type == "clickhouse":
-            if scheme != "clickhouse" or not parsed.hostname:
-                return None
-            return ClickHouseConnector(
-                host=parsed.hostname,
-                port=parsed.port or 8123,
-                database=parsed.path.lstrip("/") if parsed.path else "default",
-                user=parsed.username or "default",
-                password=parsed.password or "",
-            )
-        return None
+        except Exception:
+            return None
 
     def _extract_datapoint_table_key(self, datapoint: dict[str, Any]) -> str | None:
         metadata = datapoint.get("metadata") or {}
@@ -2805,14 +2779,15 @@ class DataChatPipeline:
 
 
 async def create_pipeline(
-    database_type: str = "postgresql",
+    database_type: str | None = None,
     database_url: str | None = None,
 ) -> DataChatPipeline:
     """
     Create a DataChatPipeline with all dependencies initialized.
 
     Args:
-        database_type: Database type (postgresql, clickhouse)
+        database_type: Database type (postgresql, clickhouse, mysql). If omitted,
+            inferred from database URL.
         database_url: Database connection URL (uses config if not provided)
 
     Returns:
@@ -2839,24 +2814,12 @@ async def create_pipeline(
     if not db_url:
         raise ValueError("DATABASE_URL must be set or provided to create a pipeline.")
 
-    if database_type == "postgresql":
-        # Parse PostgreSQL URL: postgresql://user:password@host:port/database
-        from urllib.parse import urlparse
-
-        # Convert Pydantic URL to string if needed
-        db_url_str = str(db_url) if not isinstance(db_url, str) else db_url
-        parsed = urlparse(db_url_str)
-        connector = PostgresConnector(
-            host=parsed.hostname or "localhost",
-            port=parsed.port or 5432,
-            database=parsed.path.lstrip("/") if parsed.path else "datachat",
-            user=parsed.username or "postgres",
-            password=parsed.password or "",
-        )
-    elif database_type == "clickhouse":
-        connector = ClickHouseConnector(db_url)
-    else:
-        raise ValueError(f"Unsupported database type: {database_type}")
+    db_url_str = str(db_url) if not isinstance(db_url, str) else db_url
+    connector = create_connector(
+        database_url=db_url_str,
+        database_type=database_type,
+        pool_size=config.database.pool_size,
+    )
 
     await connector.connect()
 

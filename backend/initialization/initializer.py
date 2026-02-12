@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.connectors.base import ConnectionError
-from backend.connectors.postgres import PostgresConnector
+from backend.connectors.factory import create_connector, infer_database_type
 from backend.knowledge.graph import KnowledgeGraph
 from backend.knowledge.retriever import Retriever
 from backend.knowledge.vectors import VectorStore
@@ -140,19 +140,10 @@ class SystemInitializer:
             self._app_state["profiling_store"] = profiling_store
 
         if database_url:
-            from urllib.parse import urlparse
-
-            parsed = urlparse(database_url)
-            if not parsed.scheme or not parsed.hostname:
-                raise ValueError("Invalid database URL.")
-            if parsed.scheme not in {"postgres", "postgresql"}:
-                raise ValueError("Only PostgreSQL database URLs are supported.")
-            connector = PostgresConnector(
-                host=parsed.hostname or "localhost",
-                port=parsed.port or 5432,
-                database=parsed.path.lstrip("/") if parsed.path else "datachat",
-                user=parsed.username or "postgres",
-                password=parsed.password or "",
+            db_type = infer_database_type(database_url)
+            connector = create_connector(
+                database_url=database_url,
+                database_type=db_type,
             )
             await connector.connect()
             self._app_state["connector"] = connector
@@ -178,7 +169,7 @@ class SystemInitializer:
                     await database_manager.add_connection(
                         name="Primary Database",
                         database_url=database_url,
-                        database_type="postgresql",
+                        database_type=db_type,
                         tags=["setup"],
                         description="Added during setup",
                         is_default=True,
@@ -199,7 +190,7 @@ class SystemInitializer:
                         existing = await database_manager.add_connection(
                             name="Primary Database",
                             database_url=database_url,
-                            database_type="postgresql",
+                            database_type=db_type,
                             tags=["auto-profiled"],
                             description="Auto-profiled during setup",
                             is_default=True,

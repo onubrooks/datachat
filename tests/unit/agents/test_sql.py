@@ -39,6 +39,7 @@ def sql_agent(mock_llm_provider):
     # Mock get_settings to avoid API key validation
     mock_settings = Mock()
     mock_settings.llm = Mock()
+    mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
 
     with (
         patch("backend.agents.sql.get_settings", return_value=mock_settings),
@@ -190,7 +191,7 @@ class TestExecution:
 
         mock_settings = Mock()
         mock_settings.llm = Mock()
-        mock_settings.database = Mock(url=None, db_type="postgresql")
+        mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
         mock_settings.pipeline = Mock(
             sql_two_stage_enabled=True,
             sql_two_stage_confidence_threshold=0.7,
@@ -250,7 +251,7 @@ class TestExecution:
 
         mock_settings = Mock()
         mock_settings.llm = Mock()
-        mock_settings.database = Mock(url=None, db_type="postgresql")
+        mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
         mock_settings.pipeline = Mock(
             sql_two_stage_enabled=True,
             sql_two_stage_confidence_threshold=0.7,
@@ -289,7 +290,7 @@ class TestExecution:
 
         mock_settings = Mock()
         mock_settings.llm = Mock()
-        mock_settings.database = Mock(url=None, db_type="postgresql")
+        mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
         mock_settings.pipeline = Mock(
             sql_two_stage_enabled=True,
             sql_two_stage_confidence_threshold=0.7,
@@ -984,7 +985,7 @@ class TestDatabaseContext:
         mock_connector.close = AsyncMock()
 
         with (
-            patch("backend.agents.sql.PostgresConnector", return_value=mock_connector) as connector_cls,
+            patch("backend.agents.sql.create_connector", return_value=mock_connector) as connector_factory,
             patch.object(
                 sql_agent,
                 "_fetch_live_schema_context",
@@ -998,10 +999,12 @@ class TestDatabaseContext:
             )
 
         assert context == "schema-context"
-        connector_cls.assert_called_once()
-        called = connector_cls.call_args.kwargs
-        assert called["host"] == "chosen-host"
-        assert called["database"] == "chosen_db"
+        connector_factory.assert_called_once_with(
+            database_url="postgresql://demo:demo@chosen-host:5432/chosen_db",
+            database_type="postgresql",
+            pool_size=sql_agent.config.database.pool_size,
+            timeout=10,
+        )
 
     def test_build_cached_profile_context_uses_matching_focus_tables(self, sql_agent):
         with patch(
@@ -1133,7 +1136,7 @@ class TestErrorHandling:
 
         mock_settings = Mock()
         mock_settings.llm = Mock(sql_formatter_model="gemini-2.5-flash-lite")
-        mock_settings.database = Mock(url=None, db_type="postgresql")
+        mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
         mock_settings.pipeline = Mock(
             sql_two_stage_enabled=False,
             sql_prompt_budget_enabled=False,
@@ -1182,7 +1185,7 @@ class TestErrorHandling:
 
         mock_settings = Mock()
         mock_settings.llm = Mock(sql_formatter_model=None)
-        mock_settings.database = Mock(url=None, db_type="postgresql")
+        mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
         mock_settings.pipeline = Mock(
             sql_two_stage_enabled=False,
             sql_prompt_budget_enabled=False,

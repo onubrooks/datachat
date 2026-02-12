@@ -11,6 +11,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
+from backend.config import get_settings
+from backend.connectors.factory import infer_database_type
 from backend.initialization.initializer import SystemInitializer
 from backend.models.api import ChatMetrics, ChatRequest, ChatResponse, DataSource
 
@@ -43,7 +45,8 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
         # Get pipeline from app state
         from backend.api.main import app_state
 
-        database_type = "postgresql"
+        settings = get_settings()
+        database_type = settings.database.db_type
         database_url = None
         manager = app_state.get("database_manager")
         if chat_request.target_database:
@@ -69,6 +72,12 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             if default_connection is not None:
                 database_type = default_connection.database_type
                 database_url = default_connection.database_url.get_secret_value()
+        elif settings.database.url:
+            database_url = str(settings.database.url)
+            try:
+                database_type = infer_database_type(database_url)
+            except Exception:
+                pass
 
         initializer = SystemInitializer(app_state)
         status_state = await initializer.status()
