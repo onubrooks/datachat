@@ -182,6 +182,48 @@ class TestDemoCommand:
         )
         assert "demo-host:5432/datachat_grocery" in result.output
 
+    def test_demo_fintech_uses_target_database(self, runner):
+        settings = self._make_settings("postgresql://demo:pw@demo-host:5432/datachat_fintech")
+
+        mock_connector = AsyncMock()
+        mock_connector.connect = AsyncMock()
+        mock_connector.execute = AsyncMock()
+        mock_connector.close = AsyncMock()
+
+        mock_vector_store = AsyncMock()
+        mock_vector_store.initialize = AsyncMock()
+        mock_vector_store.clear = AsyncMock()
+        mock_vector_store.add_datapoints = AsyncMock()
+
+        mock_graph = MagicMock()
+        mock_graph.add_datapoint = MagicMock()
+
+        with (
+            patch("backend.cli.apply_config_defaults"),
+            patch("backend.cli.get_settings", return_value=settings),
+            patch("backend.cli.PostgresConnector", return_value=mock_connector) as connector_cls,
+            patch("backend.cli.DataPointLoader") as loader_cls,
+            patch("backend.cli.VectorStore", return_value=mock_vector_store),
+            patch("backend.cli.KnowledgeGraph", return_value=mock_graph),
+        ):
+            loader_cls.return_value.load_directory.return_value = [MagicMock()]
+            result = runner.invoke(
+                cli, ["demo", "--dataset", "fintech", "--reset", "--no-workspace"]
+            )
+
+        assert result.exit_code == 0
+        connector_cls.assert_called_once_with(
+            host="demo-host",
+            port=5432,
+            database="datachat_fintech",
+            user="demo",
+            password="pw",
+        )
+        loader_cls.return_value.load_directory.assert_called_once_with(
+            Path("datapoints") / "examples" / "fintech_bank"
+        )
+        assert "demo-host:5432/datachat_fintech" in result.output
+
 
 class TestConnectCommand:
     """Test connect command."""

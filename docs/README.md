@@ -32,7 +32,7 @@ Planned (not yet implemented as full product features):
 - `DATAPOINT_SCHEMA.md` - DataPoint model and conventions.
 - `PLAYBOOK.md` - development workflows.
 - `PROMPTS.md` - prompt architecture and guardrails.
-- `DATAPOINT_GROCERY_TESTING.md` - end-to-end DataPoint-driven manual test playbook.
+- `DATAPOINT_EXAMPLES_TESTING.md` - end-to-end DataPoint-driven manual test playbook for grocery + fintech examples.
 
 ## Prompt Files
 

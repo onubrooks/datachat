@@ -33,10 +33,11 @@ import type { ResultLayoutMode } from "@/lib/settings";
 interface MessageProps {
   message: MessageType;
   displayMode?: ResultLayoutMode;
+  showAgentTimingBreakdown?: boolean;
   onClarifyingAnswer?: (question: string) => void;
 }
 
-type TabId = "answer" | "sql" | "table" | "visualization" | "sources";
+type TabId = "answer" | "sql" | "table" | "visualization" | "sources" | "timing";
 type VizHint = "table" | "bar_chart" | "line_chart" | "pie_chart" | "scatter" | "none";
 
 const CHART_COLORS = [
@@ -145,6 +146,18 @@ const formatMetricNumber = (value: number): string => {
   }).format(value);
 };
 
+const formatDurationSeconds = (milliseconds: number): string => {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
+    return "0s";
+  }
+  const seconds = milliseconds / 1000;
+  const maximumFractionDigits = seconds >= 10 ? 1 : 2;
+  return `${new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits,
+  }).format(seconds)}s`;
+};
+
 const toNumber = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -176,6 +189,7 @@ function clampPercent(value: number): number {
 export function Message({
   message,
   displayMode = "stacked",
+  showAgentTimingBreakdown = true,
   onClarifyingAnswer,
 }: MessageProps) {
   const isUser = message.role === "user";
@@ -252,6 +266,11 @@ export function Message({
     Boolean(message.sources?.length) && message.answer_source !== "context";
   const hasEvidence = Boolean(message.evidence?.length);
   const hasTable = Boolean(message.data) && rowCount > 0;
+  const hasAgentTimings = Boolean(
+    message.metrics?.agent_timings &&
+      Object.keys(message.metrics.agent_timings).length > 0 &&
+      showAgentTimingBreakdown
+  );
 
   const inferVisualizationType = (): VizHint => {
     const hint = (message.visualization_hint || "").toLowerCase();
@@ -835,6 +854,41 @@ export function Message({
     return renderFallback("No suitable visualization is available.");
   };
 
+  const renderTimingSection = () => {
+    if (!hasAgentTimings || !message.metrics?.agent_timings) {
+      return (
+        <Card className="mt-4">
+          <CardContent className="pt-6 text-sm text-muted-foreground">
+            No agent timing breakdown available.
+          </CardContent>
+        </Card>
+      );
+    }
+
+    return (
+      <Card className="mt-4">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Clock size={16} />
+            Agent Timing Breakdown
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2">
+            {Object.entries(message.metrics.agent_timings)
+              .sort((a, b) => b[1] - a[1])
+              .map(([agent, ms]) => (
+                <div key={agent} className="flex items-center justify-between gap-3 text-sm">
+                  <span>{formatAgentTimingLabel(agent)}</span>
+                  <span className="text-muted-foreground">{formatDurationSeconds(ms)}</span>
+                </div>
+              ))}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
   const tabs: Array<{ id: TabId; label: string }> = useMemo(() => {
     const items: Array<{ id: TabId; label: string }> = [{ id: "answer", label: "Answer" }];
     if (message.sql) {
@@ -847,8 +901,11 @@ export function Message({
     if (hasSources || hasEvidence) {
       items.push({ id: "sources", label: "Sources" });
     }
+    if (hasAgentTimings) {
+      items.push({ id: "timing", label: "Timing" });
+    }
     return items;
-  }, [hasEvidence, hasSources, hasTable, message.sql]);
+  }, [hasAgentTimings, hasEvidence, hasSources, hasTable, message.sql]);
 
   useEffect(() => {
     if (!tabs.some((tab) => tab.id === activeTab)) {
@@ -882,7 +939,30 @@ export function Message({
     if (activeTab === "sources") {
       return renderSourcesSection();
     }
+    if (activeTab === "timing") {
+      return renderTimingSection();
+    }
     return null;
+  };
+
+  const formatAgentTimingLabel = (agent: string) => {
+    const labels: Record<string, string> = {
+      tool_planner: "Tool Planner",
+      classifier: "Classifier",
+      context: "Context",
+      sql: "SQL",
+      validator: "Validator",
+      executor: "Executor",
+      context_answer: "Context Answer",
+      response_synthesis: "Response Synthesis",
+    };
+    if (labels[agent]) {
+      return labels[agent];
+    }
+    return agent
+      .split("_")
+      .map((part) => (part ? `${part[0].toUpperCase()}${part.slice(1)}` : part))
+      .join(" ");
   };
 
   return (
@@ -975,13 +1055,15 @@ export function Message({
           )}
 
           {message.metrics && (
-            <div className="mt-3 flex items-center gap-4 text-xs text-muted-foreground">
-              <div className="flex items-center gap-1">
-                <Clock size={12} />
-                {message.metrics.total_latency_ms}ms
+            <div className="mt-3 text-xs text-muted-foreground">
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-1">
+                  <Clock size={12} />
+                  {formatDurationSeconds(message.metrics.total_latency_ms)}
+                </div>
+                {message.metrics.llm_calls > 0 && <div>LLM calls: {message.metrics.llm_calls}</div>}
+                {message.metrics.retry_count > 0 && <div>Retries: {message.metrics.retry_count}</div>}
               </div>
-              {message.metrics.llm_calls > 0 && <div>LLM calls: {message.metrics.llm_calls}</div>}
-              {message.metrics.retry_count > 0 && <div>Retries: {message.metrics.retry_count}</div>}
             </div>
           )}
         </div>

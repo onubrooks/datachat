@@ -5,6 +5,7 @@
  */
 
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 import type { ChatMessage, ChatResponse, AgentUpdate } from "../api";
 
 export interface Message extends ChatMessage {
@@ -34,7 +35,6 @@ export interface Message extends ChatMessage {
     name: string;
     arguments?: Record<string, unknown>;
   }>;
-  tool_approval_required?: boolean;
   metrics?: {
     total_latency_ms: number;
     agent_timings: Record<string, number>;
@@ -43,10 +43,68 @@ export interface Message extends ChatMessage {
   };
 }
 
+type PersistedMessage = Pick<
+  Message,
+  | "id"
+  | "role"
+  | "content"
+  | "clarifying_questions"
+  | "answer_source"
+  | "answer_confidence"
+  | "tool_approval_required"
+  | "tool_approval_message"
+> & {
+  timestamp: string | Date;
+};
+
+const MAX_PERSISTED_MESSAGES = 60;
+const MAX_PERSISTED_CONTENT_CHARS = 4000;
+
+const createSessionId = () => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `session_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const createMessageId = () => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const noopStorage = {
+  getItem: () => null,
+  setItem: () => undefined,
+  removeItem: () => undefined,
+};
+
+const reviveMessage = (message: PersistedMessage): Message => ({
+  ...message,
+  timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp),
+});
+
+const compactMessageForPersistence = (message: Message): PersistedMessage => ({
+  id: message.id,
+  role: message.role,
+  content:
+    message.content.length > MAX_PERSISTED_CONTENT_CHARS
+      ? `${message.content.slice(0, MAX_PERSISTED_CONTENT_CHARS)}...`
+      : message.content,
+  clarifying_questions: message.clarifying_questions,
+  answer_source: message.answer_source,
+  answer_confidence: message.answer_confidence,
+  tool_approval_required: message.tool_approval_required,
+  tool_approval_message: message.tool_approval_message,
+  timestamp: message.timestamp,
+});
+
 interface ChatState {
   // Messages
   messages: Message[];
   conversationId: string | null;
+  frontendSessionId: string;
 
   // Agent status
   currentAgent: string | null;
@@ -76,10 +134,13 @@ interface ChatState {
   appendToLastMessage: (content: string) => void;
 }
 
-export const useChatStore = create<ChatState>((set, get) => ({
+export const useChatStore = create<ChatState>()(
+  persist(
+    (set, get) => ({
   // Initial state
   messages: [],
   conversationId: null,
+  frontendSessionId: createSessionId(),
   currentAgent: null,
   agentStatus: "idle",
   agentMessage: null,
@@ -95,7 +156,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...state.messages,
         {
           ...message,
-          id: crypto.randomUUID(),
+          id: createMessageId(),
           timestamp: new Date(),
         },
       ],
@@ -142,6 +203,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       messages: [],
       conversationId: null,
+      frontendSessionId: createSessionId(),
       currentAgent: null,
       agentStatus: "idle",
       agentMessage: null,
@@ -152,14 +214,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   addChatResponse: (query, response) =>
     set((state) => {
       const userMessage: Message = {
-        id: crypto.randomUUID(),
+        id: createMessageId(),
         role: "user",
         content: query,
         timestamp: new Date(),
       };
 
       const assistantMessage: Message = {
-        id: crypto.randomUUID(),
+        id: createMessageId(),
         role: "assistant",
         content: response.answer,
         timestamp: new Date(),
@@ -196,4 +258,32 @@ export const useChatStore = create<ChatState>((set, get) => ({
       };
       return { messages };
     }),
-}));
+    }),
+    {
+      name: "datachat.chat.session.v1",
+      storage: createJSONStorage(() =>
+        typeof window === "undefined" ? noopStorage : window.localStorage
+      ),
+      partialize: (state) => ({
+        messages: (
+          state.isLoading &&
+          state.messages.length > 0 &&
+          state.messages[state.messages.length - 1]?.role === "assistant"
+            ? state.messages.slice(0, -1)
+            : state.messages
+        )
+          .slice(-MAX_PERSISTED_MESSAGES)
+          .map((message) => compactMessageForPersistence(message)),
+        conversationId: state.conversationId,
+        frontendSessionId: state.frontendSessionId,
+      }),
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        state.messages = state.messages.map((message) => reviveMessage(message as PersistedMessage));
+        if (!state.frontendSessionId) {
+          state.frontendSessionId = createSessionId();
+        }
+      },
+    }
+  )
+);

@@ -16,7 +16,10 @@ import json
 import logging
 import re
 import time
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from backend.agents.base import BaseAgent
@@ -768,6 +771,15 @@ class ExecutorAgent(BaseAgent):
 
         num_cols = len(query_result.columns)
         num_rows = query_result.row_count
+        sample_rows = query_result.rows[: min(len(query_result.rows), 50)]
+        numeric_col_count = sum(
+            1
+            for col in query_result.columns
+            if any(self._is_numeric_value(row.get(col)) for row in sample_rows)
+        )
+        has_time_dimension = any(
+            self._is_temporal_column(col, sample_rows) for col in query_result.columns
+        )
 
         # Single value
         if num_rows == 1 and num_cols == 1:
@@ -778,20 +790,25 @@ class ExecutorAgent(BaseAgent):
             return "none"
         if requested_hint == "table":
             return "table"
-        if requested_hint == "line_chart" and num_cols >= 2 and num_rows >= 2:
+        if requested_hint == "line_chart" and num_cols >= 2 and num_rows >= 2 and has_time_dimension:
             return "line_chart"
-        if requested_hint == "bar_chart" and num_cols >= 2 and num_rows >= 2:
+        if requested_hint == "bar_chart" and num_cols >= 2 and num_rows >= 2 and numeric_col_count >= 1:
             return "bar_chart"
-        if requested_hint == "pie_chart" and num_cols >= 2 and num_rows >= 2:
+        if (
+            requested_hint == "pie_chart"
+            and num_cols >= 2
+            and num_rows >= 2
+            and num_rows <= 12
+            and numeric_col_count >= 1
+        ):
             return "pie_chart"
-        if requested_hint == "scatter" and num_cols >= 2 and num_rows >= 2:
+        if requested_hint == "scatter" and num_cols >= 2 and num_rows >= 2 and numeric_col_count >= 2:
             return "scatter"
+        if requested_hint == "line_chart" and num_cols >= 2 and num_rows >= 2 and numeric_col_count >= 1:
+            return "bar_chart"
 
         # Time series detection (prioritize over other 2-column logic)
-        has_date = any(
-            "date" in col.lower() or "time" in col.lower() for col in query_result.columns
-        )
-        if has_date and num_cols == 2:
+        if has_time_dimension and num_cols >= 2 and numeric_col_count >= 1:
             return "line_chart"
 
         # Two columns - likely category + value
@@ -805,7 +822,7 @@ class ExecutorAgent(BaseAgent):
 
         # Multiple columns - scatter or table
         if num_cols >= 3:
-            if num_rows <= 100:
+            if num_rows <= 100 and numeric_col_count >= 2:
                 return "scatter"
             return "table"
 
@@ -831,3 +848,55 @@ class ExecutorAgent(BaseAgent):
         if re.search(r"\b(line chart|line graph|trend|time series|over time)\b", text):
             return "line_chart"
         return None
+
+    @staticmethod
+    def _is_numeric_value(value: Any) -> bool:
+        if isinstance(value, bool):
+            return False
+        return isinstance(value, (int, float, Decimal))
+
+    def _is_temporal_column(self, column_name: str, rows: list[dict[str, Any]]) -> bool:
+        lowered = column_name.lower()
+        tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
+        direct_markers = {"date", "time", "timestamp", "datetime"}
+        period_markers = {"day", "week", "month", "quarter", "year"}
+        period_disqualifiers = {"type", "category", "name", "code"}
+
+        if any(marker in tokens for marker in direct_markers):
+            return True
+        if any(marker in tokens for marker in period_markers) and not any(
+            disqualifier in tokens for disqualifier in period_disqualifiers
+        ):
+            return True
+        if len(tokens) >= 2 and tokens[-1] == "at" and tokens[-2] in {
+            "created",
+            "updated",
+            "deleted",
+            "opened",
+            "closed",
+            "posted",
+            "processed",
+            "occurred",
+            "recorded",
+        }:
+            return True
+        for row in rows[:20]:
+            if self._is_temporal_value(row.get(column_name)):
+                return True
+        return False
+
+    @staticmethod
+    def _is_temporal_value(value: Any) -> bool:
+        if isinstance(value, (datetime, date)):
+            return True
+        if not isinstance(value, str):
+            return False
+        candidate = value.strip()
+        if len(candidate) < 8:
+            return False
+        try:
+            normalized = candidate.replace("Z", "+00:00")
+            datetime.fromisoformat(normalized)
+            return True
+        except ValueError:
+            return False

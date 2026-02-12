@@ -39,6 +39,28 @@ psql "postgresql://postgres:@localhost:5432/datachat_grocery" -f scripts/grocery
 **Related DataPoints**: `datapoints/examples/grocery_store/*.json`
 **Related eval datasets**: `eval/grocery/*.json`
 
+### 0c. `fintech_seed.sql` - Fintech Banking Seed
+
+**Purpose**: Create banking/fintech operational tables with realistic sample data for DataPoint-driven testing.
+
+Tables created:
+- `bank_customers`
+- `bank_accounts`
+- `bank_transactions`
+- `bank_cards`
+- `bank_loans`
+- `bank_loan_payments`
+- `bank_fx_rates`
+
+**Usage**:
+
+```bash
+createdb datachat_fintech
+psql "postgresql://postgres:@localhost:5432/datachat_fintech" -f scripts/fintech_seed.sql
+```
+
+**Related DataPoints**: `datapoints/examples/fintech_bank/*.json`
+
 ### 1. `test_sql_agent.py` - Comprehensive SQLAgent Testing
 
 **Purpose**: Test SQLAgent with predefined sample queries to verify SQL generation, self-correction, and metadata.

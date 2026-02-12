@@ -100,4 +100,62 @@ describe("Message", () => {
       expect(section.open).toBe(false);
     }
   });
+
+  it("can hide agent timing breakdown while keeping summary metrics", () => {
+    render(
+      <Message
+        showAgentTimingBreakdown={false}
+        message={{
+          id: "msg-4",
+          role: "assistant",
+          content: "Done",
+          metrics: {
+            total_latency_ms: 1250,
+            agent_timings: {
+              classifier: 120,
+              context: 330,
+            },
+            llm_calls: 1,
+            retry_count: 0,
+          },
+          timestamp: new Date(),
+        }}
+      />
+    );
+
+    expect(screen.queryByText("Classifier")).not.toBeInTheDocument();
+    expect(screen.getByText("1.25s")).toBeInTheDocument();
+    expect(screen.getByText("LLM calls: 1")).toBeInTheDocument();
+  });
+
+  it("shows agent timing breakdown in a timing tab sorted longest to shortest", () => {
+    render(
+      <Message
+        displayMode="tabbed"
+        message={{
+          id: "msg-5",
+          role: "assistant",
+          content: "Done",
+          metrics: {
+            total_latency_ms: 3250,
+            agent_timings: {
+              classifier: 1000,
+              context: 2100,
+              sql: 150,
+            },
+            llm_calls: 2,
+            retry_count: 0,
+          },
+          timestamp: new Date(),
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Timing" }));
+
+    const rows = screen.getAllByText(/s$/);
+    expect(rows[0]).toHaveTextContent("2.1s");
+    expect(rows[1]).toHaveTextContent("1s");
+    expect(rows[2]).toHaveTextContent("0.15s");
+  });
 });

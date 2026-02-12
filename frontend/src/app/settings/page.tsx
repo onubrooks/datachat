@@ -14,7 +14,9 @@ import { Button } from "@/components/ui/button";
 import {
   getWaitingUxMode,
   getResultLayoutMode,
+  getShowAgentTimingBreakdown,
   setResultLayoutMode,
+  setShowAgentTimingBreakdown,
   setWaitingUxMode,
   type ResultLayoutMode,
   type WaitingUxMode,
@@ -45,10 +47,12 @@ const OPTIONS: Array<{
 export default function SettingsPage() {
   const [mode, setMode] = useState<WaitingUxMode>("animated");
   const [resultLayout, setResultLayout] = useState<ResultLayoutMode>("stacked");
+  const [showAgentTimings, setShowAgentTimings] = useState(true);
 
   useEffect(() => {
     setMode(getWaitingUxMode());
     setResultLayout(getResultLayoutMode());
+    setShowAgentTimings(getShowAgentTimingBreakdown());
   }, []);
 
   const handleChange = (value: WaitingUxMode) => {
@@ -59,6 +63,11 @@ export default function SettingsPage() {
   const handleLayoutChange = (value: ResultLayoutMode) => {
     setResultLayout(value);
     setResultLayoutMode(value);
+  };
+
+  const handleAgentTimingsChange = (value: boolean) => {
+    setShowAgentTimings(value);
+    setShowAgentTimingBreakdown(value);
   };
 
   return (
@@ -127,6 +136,40 @@ export default function SettingsPage() {
             <div className="font-medium">Tabbed</div>
             <div className="text-xs text-muted-foreground mt-1">
               Answer, SQL, table, visualization, and sources in tabs.
+            </div>
+          </button>
+        </div>
+      </Card>
+
+      <Card className="p-4 space-y-4">
+        <div className="text-sm font-medium">Agent Timing Breakdown</div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => handleAgentTimingsChange(true)}
+            className={`rounded-md border px-4 py-3 text-left text-sm transition ${
+              showAgentTimings
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/40"
+            }`}
+          >
+            <div className="font-medium">Show</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Display per-agent execution times beside response metrics.
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleAgentTimingsChange(false)}
+            className={`rounded-md border px-4 py-3 text-left text-sm transition ${
+              !showAgentTimings
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/40"
+            }`}
+          >
+            <div className="font-medium">Hide</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Keep only summary metrics (latency, LLM calls, retries).
             </div>
           </button>
         </div>
