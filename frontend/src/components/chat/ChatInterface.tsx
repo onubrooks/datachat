@@ -360,7 +360,7 @@ export function ChatInterface() {
             {isLoading && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
             <span className="text-muted-foreground">
               {isLoading
-                ? `Working (${loadingElapsedSeconds}s)`
+                ? formatWaitingChipLabel(loadingElapsedSeconds)
                 : isConnected
                   ? "Streaming"
                   : isBackendReachable
