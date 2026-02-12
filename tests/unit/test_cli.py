@@ -225,6 +225,100 @@ class TestDemoCommand:
         assert "demo-host:5432/datachat_fintech" in result.output
 
 
+class TestResetCommand:
+    """Test reset command target-db behavior."""
+
+    @pytest.fixture
+    def runner(self):
+        return CliRunner()
+
+    @staticmethod
+    def _make_settings():
+        return type(
+            "Settings",
+            (),
+            {
+                "database": type("DatabaseSettings", (), {"url": None})(),
+                "system_database": type("SystemDatabaseSettings", (), {"url": None})(),
+                "chroma": type("ChromaSettings", (), {"persist_dir": Path("./chroma_data_test")})(),
+            },
+        )()
+
+    def test_reset_include_target_mysql_uses_non_postgres_drop(self, runner):
+        settings = self._make_settings()
+        connector = AsyncMock()
+        connector.connect = AsyncMock()
+        connector.execute = AsyncMock()
+        connector.close = AsyncMock()
+
+        with (
+            patch("backend.cli.apply_config_defaults"),
+            patch("backend.cli.get_settings", return_value=settings),
+            patch("backend.cli._resolve_system_database_url", return_value=(None, "none")),
+            patch(
+                "backend.cli._resolve_target_database_url",
+                return_value=("mysql://root:password@localhost:3306/datachat_demo", "settings"),
+            ),
+            patch("backend.cli.create_connector", return_value=connector),
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "reset",
+                    "--yes",
+                    "--include-target",
+                    "--keep-vectors",
+                    "--keep-config",
+                    "--keep-managed-datapoints",
+                    "--keep-user-datapoints",
+                ],
+            )
+
+        assert result.exit_code == 0
+        executed = [call.args[0] for call in connector.execute.await_args_list]
+        assert executed == [
+            "DROP TABLE IF EXISTS orders",
+            "DROP TABLE IF EXISTS users",
+        ]
+
+    def test_reset_include_target_clickhouse_uses_non_postgres_drop(self, runner):
+        settings = self._make_settings()
+        connector = AsyncMock()
+        connector.connect = AsyncMock()
+        connector.execute = AsyncMock()
+        connector.close = AsyncMock()
+
+        with (
+            patch("backend.cli.apply_config_defaults"),
+            patch("backend.cli.get_settings", return_value=settings),
+            patch("backend.cli._resolve_system_database_url", return_value=(None, "none")),
+            patch(
+                "backend.cli._resolve_target_database_url",
+                return_value=("clickhouse://default:@localhost:8123/default", "settings"),
+            ),
+            patch("backend.cli.create_connector", return_value=connector),
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "reset",
+                    "--yes",
+                    "--include-target",
+                    "--keep-vectors",
+                    "--keep-config",
+                    "--keep-managed-datapoints",
+                    "--keep-user-datapoints",
+                ],
+            )
+
+        assert result.exit_code == 0
+        executed = [call.args[0] for call in connector.execute.await_args_list]
+        assert executed == [
+            "DROP TABLE IF EXISTS orders",
+            "DROP TABLE IF EXISTS users",
+        ]
+
+
 class TestConnectCommand:
     """Test connect command."""
 

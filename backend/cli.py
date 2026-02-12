@@ -242,6 +242,34 @@ async def _execute_sql_script(connector: PostgresConnector, script_path: Path) -
         await connector.execute(statement)
 
 
+async def _clear_demo_tables_for_database(
+    connector: Any,
+    database_type: str,
+) -> None:
+    """Clear demo tables on supported database engines."""
+    drop_statements = {
+        "postgresql": [
+            "DROP TABLE IF EXISTS orders CASCADE",
+            "DROP TABLE IF EXISTS users CASCADE",
+        ],
+        "mysql": [
+            "DROP TABLE IF EXISTS orders",
+            "DROP TABLE IF EXISTS users",
+        ],
+        "clickhouse": [
+            "DROP TABLE IF EXISTS orders",
+            "DROP TABLE IF EXISTS users",
+        ],
+    }
+    statements = drop_statements.get(database_type)
+    if not statements:
+        raise click.ClickException(
+            f"Target reset is not supported for database type: {database_type}"
+        )
+    for statement in statements:
+        await connector.execute(statement)
+
+
 async def create_pipeline_from_config() -> DataChatPipeline:
     """Create pipeline from configuration."""
     apply_config_defaults()
@@ -1330,8 +1358,7 @@ def reset(
                         )
                         console.print("[green]✓ Target DB tables dropped[/green]")
                     else:
-                        await connector.execute("DROP TABLE IF EXISTS orders CASCADE")
-                        await connector.execute("DROP TABLE IF EXISTS users CASCADE")
+                        await _clear_demo_tables_for_database(connector, target_db_type)
                         console.print("[green]✓ Target DB demo tables cleared[/green]")
                 finally:
                     await connector.close()
