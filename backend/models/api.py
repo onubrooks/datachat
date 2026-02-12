@@ -28,6 +28,13 @@ class ChatRequest(BaseModel):
         default_factory=list,
         description="Previous messages in the conversation",
     )
+    synthesize_simple_sql: bool | None = Field(
+        default=None,
+        description=(
+            "Override for response synthesis on simple SQL answers "
+            "(None = use server default)."
+        ),
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -36,6 +43,7 @@ class ChatRequest(BaseModel):
                 "conversation_id": "conv_123",
                 "target_database": "3a1f2d3e-4b5c-6d7e-8f90-1234567890ab",
                 "conversation_history": [],
+                "synthesize_simple_sql": None,
             }
         }
     }
@@ -57,6 +65,14 @@ class ChatMetrics(BaseModel):
     agent_timings: dict[str, float] = Field(..., description="Per-agent execution times in ms")
     llm_calls: int = Field(..., description="Total number of LLM API calls")
     retry_count: int = Field(default=0, description="Number of SQL retries")
+    sql_formatter_fallback_calls: int = Field(
+        default=0,
+        description="Number of SQL formatter fallback attempts for malformed SQL JSON.",
+    )
+    sql_formatter_fallback_successes: int = Field(
+        default=0,
+        description="Number of successful SQL formatter fallback recoveries.",
+    )
 
 
 class ChatResponse(BaseModel):

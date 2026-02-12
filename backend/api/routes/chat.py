@@ -109,6 +109,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             conversation_history=conversation_history,
             database_type=database_type,
             database_url=database_url,
+            synthesize_simple_sql=chat_request.synthesize_simple_sql,
         )
 
         # Extract data from pipeline state
@@ -233,6 +234,8 @@ def _build_metrics(result: dict[str, Any]) -> ChatMetrics | None:
             agent_timings=result.get("agent_timings", {}),
             llm_calls=result.get("llm_calls", 0),
             retry_count=result.get("retry_count", 0),
+            sql_formatter_fallback_calls=result.get("sql_formatter_fallback_calls", 0),
+            sql_formatter_fallback_successes=result.get("sql_formatter_fallback_successes", 0),
         )
     except Exception as e:
         logger.warning(f"Failed to build metrics: {e}")

@@ -15,6 +15,7 @@ export interface ChatRequest {
   conversation_id?: string;
   target_database?: string;
   conversation_history?: ChatMessage[];
+  synthesize_simple_sql?: boolean;
 }
 
 export interface DataSource {
@@ -29,6 +30,8 @@ export interface ChatMetrics {
   agent_timings: Record<string, number>;
   llm_calls: number;
   retry_count: number;
+  sql_formatter_fallback_calls?: number;
+  sql_formatter_fallback_successes?: number;
 }
 
 export interface SQLValidationError {

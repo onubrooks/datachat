@@ -26,6 +26,7 @@ import { SystemSetup } from "../system/SystemSetup";
 import {
   getResultLayoutMode,
   getShowAgentTimingBreakdown,
+  getSynthesizeSimpleSql,
   getWaitingUxMode,
   type ResultLayoutMode,
   type WaitingUxMode,
@@ -65,6 +66,7 @@ export function ChatInterface() {
   const [resultLayoutMode, setResultLayoutMode] =
     useState<ResultLayoutMode>("stacked");
   const [showAgentTimingBreakdown, setShowAgentTimingBreakdown] = useState(true);
+  const [synthesizeSimpleSql, setSynthesizeSimpleSql] = useState(true);
   const [loadingElapsedSeconds, setLoadingElapsedSeconds] = useState(0);
   const [toolApprovalOpen, setToolApprovalOpen] = useState(false);
   const [toolApprovalCalls, setToolApprovalCalls] = useState<
@@ -105,10 +107,12 @@ export function ChatInterface() {
     setWaitingMode(getWaitingUxMode());
     setResultLayoutMode(getResultLayoutMode());
     setShowAgentTimingBreakdown(getShowAgentTimingBreakdown());
+    setSynthesizeSimpleSql(getSynthesizeSimpleSql());
     const handleStorage = () => {
       setWaitingMode(getWaitingUxMode());
       setResultLayoutMode(getResultLayoutMode());
       setShowAgentTimingBreakdown(getShowAgentTimingBreakdown());
+      setSynthesizeSimpleSql(getSynthesizeSimpleSql());
     };
     window.addEventListener("storage", handleStorage);
     return () => {
@@ -170,6 +174,7 @@ export function ChatInterface() {
           message: query,
           conversation_id: conversationId || undefined,
           conversation_history: conversationHistory,
+          synthesize_simple_sql: synthesizeSimpleSql,
         },
         {
           onOpen: () => {

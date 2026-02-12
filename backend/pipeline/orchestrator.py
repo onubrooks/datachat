@@ -83,6 +83,7 @@ class PipelineState(TypedDict, total=False):
     clarification_limit: int
     fast_path: bool
     skip_response_synthesis: bool
+    synthesize_simple_sql: bool | None
 
     # Classifier output
     intent: str | None
@@ -103,6 +104,8 @@ class PipelineState(TypedDict, total=False):
     generated_sql: str | None
     sql_explanation: str | None
     sql_confidence: float | None
+    sql_formatter_fallback_calls: int
+    sql_formatter_fallback_successes: int
     used_datapoints: list[str]
     assumptions: list[str]
 
@@ -1023,6 +1026,12 @@ class DataChatPipeline:
                 getattr(output.generated_sql, "used_datapoint_ids", []),
             )
             state["assumptions"] = output.generated_sql.assumptions
+            state["sql_formatter_fallback_calls"] = int(
+                (output.data or {}).get("formatter_fallback_calls", 0)
+            )
+            state["sql_formatter_fallback_successes"] = int(
+                (output.data or {}).get("formatter_fallback_successes", 0)
+            )
 
             # Update metadata
             elapsed = (time.time() - start_time) * 1000
@@ -1337,9 +1346,39 @@ class DataChatPipeline:
             return "end"
         if state.get("fast_path"):
             return "sql"
-        if self.tooling_enabled and self.tool_planner_enabled:
+        if self._should_run_tool_planner(state):
             return "tool_planner"
         return "classifier"
+
+    def _should_run_tool_planner(self, state: PipelineState) -> bool:
+        if not (self.tooling_enabled and self.tool_planner_enabled):
+            return False
+        pipeline_cfg = getattr(self.config, "pipeline", None)
+        selective = (
+            True
+            if pipeline_cfg is None
+            else bool(getattr(pipeline_cfg, "selective_tool_planner_enabled", True))
+        )
+        if not selective:
+            return True
+        return self._query_likely_requires_tools(state.get("query", ""))
+
+    def _query_likely_requires_tools(self, query: str) -> bool:
+        text = (query or "").strip().lower()
+        if not text:
+            return False
+        tool_patterns = [
+            r"\bprofile\b",
+            r"\bdatapoint quality\b",
+            r"\bquality report\b",
+            r"\bsync datapoints?\b",
+            r"\bgenerate datapoints?\b",
+            r"\brun tool\b",
+            r"\bexecute tool\b",
+            r"\bapprove\b",
+            r"\brefresh profile\b",
+        ]
+        return any(re.search(pattern, text) for pattern in tool_patterns)
 
     def _should_validate_sql(self, state: PipelineState) -> str:
         if state.get("clarification_needed"):
@@ -1364,11 +1403,11 @@ class DataChatPipeline:
         if "datapoint" in query or "data point" in query:
             return "context"
 
-        if intent in ("exploration", "explanation", "meta"):
-            return "context"
-
         if self._query_requires_sql(query):
             return "sql"
+
+        if intent in ("exploration", "explanation", "meta"):
+            return "context"
 
         if confidence >= 0.7:
             return "context"
@@ -1430,6 +1469,11 @@ class DataChatPipeline:
             "avg",
             "min",
             "max",
+            "rate",
+            "ratio",
+            "percent",
+            "percentage",
+            "pct",
             "trend",
             "by",
             "per",
@@ -1529,8 +1573,41 @@ class DataChatPipeline:
         if state.get("skip_response_synthesis"):
             return "end"
         if state.get("validated_sql") and state.get("query_result"):
+            synthesize_simple = state.get("synthesize_simple_sql")
+            if synthesize_simple is None:
+                pipeline_cfg = getattr(self.config, "pipeline", None)
+                synthesize_simple = (
+                    True
+                    if pipeline_cfg is None
+                    else bool(getattr(pipeline_cfg, "synthesize_simple_sql_answers", True))
+                )
+            if not synthesize_simple and self._is_simple_sql_response(state):
+                return "end"
             return "synthesize"
         return "end"
+
+    def _is_simple_sql_response(self, state: PipelineState) -> bool:
+        sql = (state.get("validated_sql") or "").strip()
+        if not sql:
+            return False
+        if re.search(r"\b(JOIN|GROUP\s+BY|WITH|UNION|OVER|HAVING)\b", sql, flags=re.IGNORECASE):
+            return False
+
+        query_result = state.get("query_result") or {}
+        row_count = query_result.get("row_count")
+        if row_count is None and isinstance(query_result.get("rows"), list):
+            row_count = len(query_result.get("rows", []))
+        try:
+            row_count_num = int(row_count) if row_count is not None else 0
+        except (TypeError, ValueError):
+            row_count_num = 0
+        if row_count_num > 10:
+            return False
+
+        columns = query_result.get("columns")
+        if isinstance(columns, list) and len(columns) > 8:
+            return False
+        return True
 
     def _format_clarifying_response(
         self, query: str, questions: list[str]
@@ -2326,6 +2403,7 @@ class DataChatPipeline:
         conversation_history: list[Message] | None = None,
         database_type: str = "postgresql",
         database_url: str | None = None,
+        synthesize_simple_sql: bool | None = None,
     ) -> PipelineState:
         """
         Run pipeline synchronously (wait for completion).
@@ -2354,6 +2432,7 @@ class DataChatPipeline:
             "clarification_limit": self.max_clarifications,
             "fast_path": False,
             "skip_response_synthesis": False,
+            "synthesize_simple_sql": synthesize_simple_sql,
             "current_agent": None,
             "error": None,
             "total_cost": 0.0,
@@ -2371,6 +2450,8 @@ class DataChatPipeline:
             "key_insights": [],
             "used_datapoints": [],
             "assumptions": [],
+            "sql_formatter_fallback_calls": 0,
+            "sql_formatter_fallback_successes": 0,
             "investigation_memory": None,
             "retrieved_datapoints": [],
             "context_confidence": None,
@@ -2410,6 +2491,7 @@ class DataChatPipeline:
         conversation_history: list[Message] | None = None,
         database_type: str = "postgresql",
         database_url: str | None = None,
+        synthesize_simple_sql: bool | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """
         Run pipeline with streaming updates.
@@ -2440,6 +2522,7 @@ class DataChatPipeline:
             "clarification_limit": self.max_clarifications,
             "fast_path": False,
             "skip_response_synthesis": False,
+            "synthesize_simple_sql": synthesize_simple_sql,
             "current_agent": None,
             "error": None,
             "total_cost": 0.0,
@@ -2457,6 +2540,8 @@ class DataChatPipeline:
             "key_insights": [],
             "used_datapoints": [],
             "assumptions": [],
+            "sql_formatter_fallback_calls": 0,
+            "sql_formatter_fallback_successes": 0,
             "investigation_memory": None,
             "retrieved_datapoints": [],
             "context_confidence": None,
@@ -2497,6 +2582,7 @@ class DataChatPipeline:
         conversation_history: list[Message] | None = None,
         database_type: str = "postgresql",
         database_url: str | None = None,
+        synthesize_simple_sql: bool | None = None,
         event_callback: Any = None,
     ) -> PipelineState:
         """
@@ -2535,6 +2621,7 @@ class DataChatPipeline:
             "clarification_limit": self.max_clarifications,
             "fast_path": False,
             "skip_response_synthesis": False,
+            "synthesize_simple_sql": synthesize_simple_sql,
             "current_agent": None,
             "error": None,
             "total_cost": 0.0,
@@ -2552,6 +2639,8 @@ class DataChatPipeline:
             "key_insights": [],
             "used_datapoints": [],
             "assumptions": [],
+            "sql_formatter_fallback_calls": 0,
+            "sql_formatter_fallback_successes": 0,
             "investigation_memory": None,
             "retrieved_datapoints": [],
             "context_confidence": None,

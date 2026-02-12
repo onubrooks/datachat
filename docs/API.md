@@ -34,7 +34,8 @@ Request body:
 {
   "message": "What was revenue last quarter?",
   "conversation_id": "conv_123",
-  "target_database": "optional-connection-id"
+  "target_database": "optional-connection-id",
+  "synthesize_simple_sql": true
 }
 ```
 
@@ -43,6 +44,8 @@ Notes:
 - If `target_database` is provided, SQL generation and execution both use that
   connection's database type and URL.
 - If `target_database` is omitted, the default registry connection is used when set.
+- `synthesize_simple_sql` is optional. When `false`, simple SQL answers skip
+  response synthesis for lower latency.
 - When no DataPoints are loaded, responses include a live schema mode notice.
 
 ## Database Connections

@@ -209,12 +209,12 @@ Verify vector-store resilience (UI path):
 1. Keep backend running.
 2. In another terminal, run:
 
-```bash
-datachat reset --yes
-datachat dp sync --datapoints-dir datapoints/examples/grocery_store
-# or
-datachat dp sync --datapoints-dir datapoints/examples/fintech_bank
-```
+  ```bash
+  datachat reset --yes
+  datachat dp sync --datapoints-dir datapoints/examples/grocery_store
+  # or
+  datachat dp sync --datapoints-dir datapoints/examples/fintech_bank
+  ```
 
 3. Return to UI and ask a domain question.
 

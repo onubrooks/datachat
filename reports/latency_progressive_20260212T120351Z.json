@@ -1,0 +1,481 @@
+{
+  "queries": [
+    "List all grocery stores",
+    "What is total grocery revenue?",
+    "Show gross margin by category"
+  ],
+  "results": [
+    {
+      "stage": "baseline",
+      "query_count": 3,
+      "latency_ms": {
+        "mean": 9547.147353490194,
+        "median": 9837.51106262207,
+        "p95": 13714.650201797485
+      },
+      "llm_calls_mean": 2.3333333333333335,
+      "success_rate": 0.6666666666666666,
+      "clarification_rate": 0.6666666666666666,
+      "sql_answer_rate": 0.0,
+      "agent_mean_ms": {
+        "classifier": 6283.1714153289795,
+        "tool_planner": 2061.136166254679,
+        "context": 1202.518145243327,
+        "intent_gate": 0.3216266632080078
+      },
+      "runs": [
+        {
+          "query": "List all grocery stores",
+          "latency_ms": 9837.51106262207,
+          "llm_calls": 2,
+          "answer_source": "error",
+          "has_error": true,
+          "clarifications": 0,
+          "agent_timings": {
+            "intent_gate": 0.13494491577148438,
+            "tool_planner": 2973.7420082092285,
+            "classifier": 4509.081125259399,
+            "context": 2354.552984237671
+          }
+        },
+        {
+          "query": "What is total grocery revenue?",
+          "latency_ms": 4658.487558364868,
+          "llm_calls": 2,
+          "answer_source": "clarification",
+          "has_error": false,
+          "clarifications": 1,
+          "agent_timings": {
+            "intent_gate": 0.47397613525390625,
+            "tool_planner": 1609.3811988830566,
+            "classifier": 2500.7410049438477,
+            "context": 547.89137840271
+          }
+        },
+        {
+          "query": "Show gross margin by category",
+          "latency_ms": 14145.443439483643,
+          "llm_calls": 3,
+          "answer_source": "clarification",
+          "has_error": false,
+          "clarifications": 1,
+          "agent_timings": {
+            "intent_gate": 0.3559589385986328,
+            "tool_planner": 1600.285291671753,
+            "classifier": 11839.692115783691,
+            "context": 705.1100730895996
+          }
+        }
+      ]
+    },
+    {
+      "stage": "stage1_sql_two_stage",
+      "query_count": 3,
+      "latency_ms": {
+        "mean": 7409.595966339111,
+        "median": 8332.533597946167,
+        "p95": 8655.657386779785
+      },
+      "llm_calls_mean": 2.0,
+      "success_rate": 0.6666666666666666,
+      "clarification_rate": 0.6666666666666666,
+      "sql_answer_rate": 0.0,
+      "agent_mean_ms": {
+        "classifier": 4554.728269577026,
+        "tool_planner": 2113.5953267415366,
+        "context": 741.0653432210287,
+        "intent_gate": 0.20702679951985678
+      },
+      "runs": [
+        {
+          "query": "List all grocery stores",
+          "latency_ms": 8332.533597946167,
+          "llm_calls": 2,
+          "answer_source": "error",
+          "has_error": true,
+          "clarifications": 0,
+          "agent_timings": {
+            "intent_gate": 0.16570091247558594,
+            "tool_planner": 2166.635751724243,
+            "classifier": 5440.03701210022,
+            "context": 725.6951332092285
+          }
+        },
+        {
+          "query": "What is total grocery revenue?",
+          "latency_ms": 5204.6942710876465,
+          "llm_calls": 2,
+          "answer_source": "clarification",
+          "has_error": false,
+          "clarifications": 1,
+          "agent_timings": {
+            "intent_gate": 0.21719932556152344,
+            "tool_planner": 2778.445243835449,
+            "classifier": 1674.1578578948975,
+            "context": 751.8739700317383
+          }
+        },
+        {
+          "query": "Show gross margin by category",
+          "latency_ms": 8691.56002998352,
+          "llm_calls": 2,
+          "answer_source": "clarification",
+          "has_error": false,
+          "clarifications": 1,
+          "agent_timings": {
+            "intent_gate": 0.23818016052246094,
+            "tool_planner": 1395.704984664917,
+            "classifier": 6549.989938735962,
+            "context": 745.6269264221191
+          }
+        }
+      ]
+    },
+    {
+      "stage": "stage2_prompt_budget",
+      "query_count": 3,
+      "latency_ms": {
+        "mean": 39924.39349492391,
+        "median": 47688.8210773468,
+        "p95": 62774.015617370605
+      },
+      "llm_calls_mean": 4.0,
+      "success_rate": 0.6666666666666666,
+      "clarification_rate": 0.0,
+      "sql_answer_rate": 0.6666666666666666,
+      "agent_mean_ms": {
+        "sql": 33315.298199653625,
+        "classifier": 8571.65495554606,
+        "executor": 4058.4781169891357,
+        "response_synthesis": 3045.462965965271,
+        "tool_planner": 2387.6332441965737,
+        "context": 2016.500473022461,
+        "validator": 2.7735233306884766,
+        "intent_gate": 0.5962848663330078
+      },
+      "runs": [
+        {
+          "query": "List all grocery stores",
+          "latency_ms": 7634.21106338501,
+          "llm_calls": 2,
+          "answer_source": "error",
+          "has_error": true,
+          "clarifications": 0,
+          "agent_timings": {
+            "intent_gate": 1.2278556823730469,
+            "tool_planner": 3047.968864440918,
+            "classifier": 2696.55704498291,
+            "context": 1888.4572982788086
+          }
+        },
+        {
+          "query": "What is total grocery revenue?",
+          "latency_ms": 47688.8210773468,
+          "llm_calls": 5,
+          "answer_source": "sql",
+          "has_error": false,
+          "clarifications": 0,
+          "agent_timings": {
+            "intent_gate": 0.24700164794921875,
+            "tool_planner": 1956.7129611968994,
+            "classifier": 11289.05177116394,
+            "context": 2394.723892211914,
+            "sql": 28016.40224456787,
+            "validator": 1.8379688262939453,
+            "executor": 1899.6782302856445,
+            "response_synthesis": 2130.167007446289
+          }
+        },
+        {
+          "query": "Show gross margin by category",
+          "latency_ms": 64450.14834403992,
+          "llm_calls": 5,
+          "answer_source": "sql",
+          "has_error": false,
+          "clarifications": 0,
+          "agent_timings": {
+            "intent_gate": 0.3139972686767578,
+            "tool_planner": 2158.2179069519043,
+            "classifier": 11729.356050491333,
+            "context": 1766.3202285766602,
+            "sql": 38614.19415473938,
+            "validator": 3.709077835083008,
+            "executor": 6217.278003692627,
+            "response_synthesis": 3960.758924484253
+          }
+        }
+      ]
+    },
+    {
+      "stage": "stage3_simple_sql_synthesis_off",
+      "query_count": 3,
+      "latency_ms": {
+        "mean": 20434.39753850301,
+        "median": 7937.126159667969,
+        "p95": 44536.41083240509
+      },
+      "llm_calls_mean": 2.6666666666666665,
+      "success_rate": 1.0,
+      "clarification_rate": 0.6666666666666666,
+      "sql_answer_rate": 0.3333333333333333,
+      "agent_mean_ms": {
+        "sql": 35504.289865493774,
+        "executor": 4929.551839828491,
+        "response_synthesis": 4028.6219120025635,
+        "classifier": 2435.62658627828,
+        "tool_planner": 2134.226401646932,
+        "context": 1042.258580525716,
+        "validator": 3.320932388305664,
+        "intent_gate": 0.3577868143717448
+      },
+      "runs": [
+        {
+          "query": "List all grocery stores",
+          "latency_ms": 7937.126159667969,
+          "llm_calls": 2,
+          "answer_source": "clarification",
+          "has_error": false,
+          "clarifications": 1,
+          "agent_timings": {
+            "intent_gate": 0.19931793212890625,
+            "tool_planner": 2881.6018104553223,
+            "classifier": 3133.6328983306885,
+            "context": 1921.692132949829
+          }
+        },
+        {
+          "query": "What is total grocery revenue?",
+          "latency_ms": 4763.068437576294,
+          "llm_calls": 2,
+          "answer_source": "clarification",
+          "has_error": false,
+          "clarifications": 1,
+          "agent_timings": {
+            "intent_gate": 0.6468296051025391,
+            "tool_planner": 1913.456678390503,
+            "classifier": 2232.2840690612793,
+            "context": 616.6808605194092
+          }
+        },
+        {
+          "query": "Show gross margin by category",
+          "latency_ms": 48602.99801826477,
+          "llm_calls": 4,
+          "answer_source": "sql",
+          "has_error": false,
+          "clarifications": 0,
+          "agent_timings": {
+            "intent_gate": 0.22721290588378906,
+            "tool_planner": 1607.6207160949707,
+            "classifier": 1940.962791442871,
+            "context": 588.4027481079102,
+            "sql": 35504.289865493774,
+            "validator": 3.320932388305664,
+            "executor": 4929.551839828491,
+            "response_synthesis": 4028.6219120025635
+          }
+        }
+      ]
+    },
+    {
+      "stage": "stage4_classifier_deep_gate",
+      "query_count": 3,
+      "latency_ms": {
+        "mean": 8598.736127217611,
+        "median": 7907.244920730591,
+        "p95": 12115.576148033142
+      },
+      "llm_calls_mean": 2.3333333333333335,
+      "success_rate": 0.3333333333333333,
+      "clarification_rate": 0.3333333333333333,
+      "sql_answer_rate": 0.0,
+      "agent_mean_ms": {
+        "classifier": 4862.816731135051,
+        "context": 1972.3474184672039,
+        "tool_planner": 1763.1553014119465,
+        "intent_gate": 0.41667620340983075
+      },
+      "runs": [
+        {
+          "query": "List all grocery stores",
+          "latency_ms": 5305.794954299927,
+          "llm_calls": 2,
+          "answer_source": "error",
+          "has_error": true,
+          "clarifications": 0,
+          "agent_timings": {
+            "intent_gate": 0.3330707550048828,
+            "tool_planner": 1885.2059841156006,
+            "classifier": 2533.184051513672,
+            "context": 887.0718479156494
+          }
+        },
+        {
+          "query": "What is total grocery revenue?",
+          "latency_ms": 7907.244920730591,
+          "llm_calls": 2,
+          "answer_source": "clarification",
+          "has_error": false,
+          "clarifications": 1,
+          "agent_timings": {
+            "intent_gate": 0.3008842468261719,
+            "tool_planner": 1873.802900314331,
+            "classifier": 1648.658037185669,
+            "context": 4384.483098983765
+          }
+        },
+        {
+          "query": "Show gross margin by category",
+          "latency_ms": 12583.168506622314,
+          "llm_calls": 3,
+          "answer_source": "error",
+          "has_error": true,
+          "clarifications": 0,
+          "agent_timings": {
+            "intent_gate": 0.6160736083984375,
+            "tool_planner": 1530.4570198059082,
+            "classifier": 10406.60810470581,
+            "context": 645.4873085021973
+          }
+        }
+      ]
+    },
+    {
+      "stage": "stage5_selective_tool_planner",
+      "query_count": 3,
+      "latency_ms": {
+        "mean": 25038.188616434734,
+        "median": 6193.222284317017,
+        "p95": 60280.39107322692
+      },
+      "llm_calls_mean": 2.0,
+      "success_rate": 1.0,
+      "clarification_rate": 0.6666666666666666,
+      "sql_answer_rate": 0.3333333333333333,
+      "agent_mean_ms": {
+        "sql": 40619.44103240967,
+        "executor": 9452.114820480347,
+        "classifier": 5632.514874140422,
+        "response_synthesis": 3437.3388290405273,
+        "context": 1567.4378077189128,
+        "validator": 4.996776580810547,
+        "intent_gate": 0.2721150716145833
+      },
+      "runs": [
+        {
+          "query": "List all grocery stores",
+          "latency_ms": 6193.222284317017,
+          "llm_calls": 1,
+          "answer_source": "clarification",
+          "has_error": false,
+          "clarifications": 1,
+          "agent_timings": {
+            "intent_gate": 0.3910064697265625,
+            "classifier": 3124.6020793914795,
+            "context": 3068.2291984558105
+          }
+        },
+        {
+          "query": "What is total grocery revenue?",
+          "latency_ms": 2631.2670707702637,
+          "llm_calls": 1,
+          "answer_source": "clarification",
+          "has_error": false,
+          "clarifications": 1,
+          "agent_timings": {
+            "intent_gate": 0.18525123596191406,
+            "classifier": 1768.8307762145996,
+            "context": 862.2510433197021
+          }
+        },
+        {
+          "query": "Show gross margin by category",
+          "latency_ms": 66290.07649421692,
+          "llm_calls": 4,
+          "answer_source": "sql",
+          "has_error": false,
+          "clarifications": 0,
+          "agent_timings": {
+            "intent_gate": 0.24008750915527344,
+            "classifier": 12004.111766815186,
+            "context": 771.8331813812256,
+            "sql": 40619.44103240967,
+            "validator": 4.996776580810547,
+            "executor": 9452.114820480347,
+            "response_synthesis": 3437.3388290405273
+          }
+        }
+      ]
+    },
+    {
+      "stage": "stage6_schema_snapshot_cache",
+      "query_count": 3,
+      "latency_ms": {
+        "mean": 34849.64656829834,
+        "median": 43607.93995857239,
+        "p95": 54903.59716415405
+      },
+      "llm_calls_mean": 2.3333333333333335,
+      "success_rate": 1.0,
+      "clarification_rate": 0.3333333333333333,
+      "sql_answer_rate": 0.6666666666666666,
+      "agent_mean_ms": {
+        "sql": 34836.71593666077,
+        "classifier": 5816.830476125081,
+        "executor": 5691.828489303589,
+        "response_synthesis": 3444.3702697753906,
+        "context": 863.7327353159586,
+        "validator": 2.478957176208496,
+        "intent_gate": 0.2776781717936198
+      },
+      "runs": [
+        {
+          "query": "List all grocery stores",
+          "latency_ms": 4782.329559326172,
+          "llm_calls": 1,
+          "answer_source": "clarification",
+          "has_error": false,
+          "clarifications": 1,
+          "agent_timings": {
+            "intent_gate": 0.22912025451660156,
+            "classifier": 3605.3481101989746,
+            "context": 1176.7523288726807
+          }
+        },
+        {
+          "query": "What is total grocery revenue?",
+          "latency_ms": 43607.93995857239,
+          "llm_calls": 2,
+          "answer_source": "sql",
+          "has_error": false,
+          "clarifications": 0,
+          "agent_timings": {
+            "intent_gate": 0.20694732666015625,
+            "classifier": 2449.045181274414,
+            "context": 811.6118907928467,
+            "sql": 30853.48081588745,
+            "validator": 1.2040138244628906,
+            "executor": 9492.391109466553
+          }
+        },
+        {
+          "query": "Show gross margin by category",
+          "latency_ms": 56158.67018699646,
+          "llm_calls": 4,
+          "answer_source": "sql",
+          "has_error": false,
+          "clarifications": 0,
+          "agent_timings": {
+            "intent_gate": 0.39696693420410156,
+            "classifier": 11396.098136901855,
+            "context": 602.8339862823486,
+            "sql": 38819.95105743408,
+            "validator": 3.7539005279541016,
+            "executor": 1891.265869140625,
+            "response_synthesis": 3444.3702697753906
+          }
+        }
+      ]
+    }
+  ]
+}

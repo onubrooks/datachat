@@ -94,7 +94,7 @@ class ClassifierAgent(BaseAgent):
             classification = self._parse_classification_response(response.content)
             extra_calls = 0
 
-            if self._should_deep_classify(classification):
+            if self._should_deep_classify(classification, input.query):
                 deep_classification = await self._deep_classify(
                     input.query, input.conversation_history
                 )
@@ -154,10 +154,26 @@ class ClassifierAgent(BaseAgent):
 
         return system_prompt, user_prompt
 
-    def _should_deep_classify(self, classification: QueryClassification) -> bool:
-        if classification.confidence < 0.6:
+    def _should_deep_classify(
+        self, classification: QueryClassification, query: str
+    ) -> bool:
+        pipeline_cfg = getattr(self.config, "pipeline", None)
+        if pipeline_cfg is None:
+            low_conf_threshold = 0.6
+            min_len = 1
+        else:
+            low_conf_threshold = float(
+                getattr(pipeline_cfg, "classifier_deep_low_confidence_threshold", 0.45)
+            )
+            min_len = int(getattr(pipeline_cfg, "classifier_deep_min_query_length", 28))
+
+        if classification.confidence < low_conf_threshold:
             return True
+        if len((query or "").strip()) < min_len:
+            return False
         if not classification.entities and classification.complexity != "simple":
+            return True
+        if classification.clarification_needed and classification.complexity != "simple":
             return True
         return False
 

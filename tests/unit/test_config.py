@@ -24,6 +24,7 @@ class TestLLMSettings:
     def test_valid_llm_settings(self, monkeypatch):
         """Valid LLM settings load correctly."""
         monkeypatch.setenv("LLM_OPENAI_API_KEY", "sk-test-key-1234567890abcdefghij")
+        monkeypatch.delenv("LLM_SQL_FORMATTER_MODEL", raising=False)
 
         settings = LLMSettings()
 
@@ -37,12 +38,14 @@ class TestLLMSettings:
         """Custom LLM settings override defaults."""
         monkeypatch.setenv("LLM_OPENAI_API_KEY", "sk-custom-key-1234567890xyz")
         monkeypatch.setenv("LLM_OPENAI_MODEL", "gpt-4-turbo")
+        monkeypatch.setenv("LLM_SQL_FORMATTER_MODEL", "gpt-4o-mini")
         monkeypatch.setenv("LLM_TEMPERATURE", "0.7")
         monkeypatch.setenv("LLM_MAX_TOKENS", "4000")
 
         settings = LLMSettings()
 
         assert settings.openai_model == "gpt-4-turbo"
+        assert settings.sql_formatter_model == "gpt-4o-mini"
         assert settings.temperature == 0.7
         assert settings.max_tokens == 4000
 

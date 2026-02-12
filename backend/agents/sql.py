@@ -16,6 +16,7 @@ The SQLAgent:
 import json
 import logging
 import re
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -93,8 +94,16 @@ class SQLAgent(BaseAgent):
                 config=self.config.llm,
                 model_type="main",  # Use main model (GPT-4o) for SQL generation
             )
+            self.fast_llm = LLMProviderFactory.create_agent_provider(
+                agent_name="sql",
+                config=self.config.llm,
+                model_type="mini",
+            )
+            self.formatter_llm = self.fast_llm
         else:
             self.llm = llm_provider
+            self.fast_llm = llm_provider
+            self.formatter_llm = llm_provider
 
         provider_name = getattr(self.llm, "provider", "unknown")
         model_name = getattr(self.llm, "model", "unknown")
@@ -105,10 +114,81 @@ class SQLAgent(BaseAgent):
         self.prompts = PromptLoader()
         self.catalog = CatalogIntelligence()
         self._live_schema_cache: dict[str, str] = {}
+        self._live_schema_snapshot_cache: dict[str, dict[str, Any]] = {}
         self._live_schema_tables_cache: dict[str, set[str]] = {}
         self._live_profile_cache: dict[str, dict[str, dict[str, object]]] = {}
         self._max_safe_row_limit = 10
         self._default_row_limit = 5
+
+    def _pipeline_flag(self, name: str, default: bool) -> bool:
+        pipeline_cfg = getattr(self.config, "pipeline", None)
+        if pipeline_cfg is None:
+            return default
+        return bool(getattr(pipeline_cfg, name, default))
+
+    def _pipeline_int(self, name: str, default: int) -> int:
+        pipeline_cfg = getattr(self.config, "pipeline", None)
+        if pipeline_cfg is None:
+            return default
+        value = getattr(pipeline_cfg, name, default)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _pipeline_float(self, name: str, default: float) -> float:
+        pipeline_cfg = getattr(self.config, "pipeline", None)
+        if pipeline_cfg is None:
+            return default
+        value = getattr(pipeline_cfg, name, default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _providers_are_equivalent(self, primary: Any, secondary: Any) -> bool:
+        """Return True when two providers resolve to the same effective model endpoint."""
+        def _stored_attr(obj: Any, name: str) -> Any:
+            data = getattr(obj, "__dict__", {})
+            if isinstance(data, dict) and name in data:
+                return data.get(name)
+            return None
+
+        if primary is secondary:
+            return True
+        if primary is None or secondary is None:
+            return False
+
+        primary_provider = (
+            _stored_attr(primary, "provider_name")
+            or _stored_attr(primary, "provider")
+            or primary.__class__.__name__
+        )
+        secondary_provider = (
+            _stored_attr(secondary, "provider_name")
+            or _stored_attr(secondary, "provider")
+            or secondary.__class__.__name__
+        )
+        if str(primary_provider).lower() != str(secondary_provider).lower():
+            return False
+
+        primary_model = _stored_attr(primary, "model")
+        secondary_model = _stored_attr(secondary, "model")
+        if (primary_model is None) != (secondary_model is None):
+            return False
+        if primary_model is not None and str(primary_model).lower() != str(secondary_model).lower():
+            return False
+
+        primary_base_url = _stored_attr(primary, "base_url")
+        secondary_base_url = _stored_attr(secondary, "base_url")
+        if (primary_base_url is None) != (secondary_base_url is None):
+            return False
+        if primary_base_url is not None and str(primary_base_url).rstrip("/") != str(
+            secondary_base_url
+        ).rstrip("/"):
+            return False
+
+        return True
 
     async def execute(self, input: SQLAgentInput) -> SQLAgentOutput:
         """
@@ -136,11 +216,15 @@ class SQLAgent(BaseAgent):
 
         metadata = AgentMetadata(agent_name=self.name)
         correction_attempts: list[CorrectionAttempt] = []
+        runtime_stats = {
+            "formatter_fallback_calls": 0,
+            "formatter_fallback_successes": 0,
+        }
 
         try:
             # Initial SQL generation
             try:
-                generated_sql = await self._generate_sql(input, metadata)
+                generated_sql = await self._generate_sql(input, metadata, runtime_stats)
             except SQLClarificationNeeded as exc:
                 generated_sql = GeneratedSQL(
                     sql="SELECT 1",
@@ -152,7 +236,7 @@ class SQLAgent(BaseAgent):
                 )
                 return SQLAgentOutput(
                     success=True,
-                    data={},
+                    data=runtime_stats,
                     metadata=metadata,
                     next_agent="ValidatorAgent",
                     generated_sql=generated_sql,
@@ -176,7 +260,11 @@ class SQLAgent(BaseAgent):
 
                 # Attempt correction
                 corrected_sql = await self._correct_sql(
-                    generated_sql=generated_sql, issues=issues, input=input, metadata=metadata
+                    generated_sql=generated_sql,
+                    issues=issues,
+                    input=input,
+                    metadata=metadata,
+                    runtime_stats=runtime_stats,
                 )
 
                 # Validate corrected SQL
@@ -224,7 +312,7 @@ class SQLAgent(BaseAgent):
 
             return SQLAgentOutput(
                 success=True,
-                data={},
+                data=runtime_stats,
                 metadata=metadata,
                 next_agent="ValidatorAgent",
                 generated_sql=generated_sql,
@@ -242,7 +330,9 @@ class SQLAgent(BaseAgent):
                 context={"query": input.query},
             ) from e
 
-    async def _generate_sql(self, input: SQLAgentInput, metadata: AgentMetadata) -> GeneratedSQL:
+    async def _generate_sql(
+        self, input: SQLAgentInput, metadata: AgentMetadata, runtime_stats: dict[str, int]
+    ) -> GeneratedSQL:
         """
         Generate SQL from user query and context.
 
@@ -293,33 +383,34 @@ class SQLAgent(BaseAgent):
         )
 
         try:
-            # Call LLM
-            response = await self.llm.generate(llm_request)
+            use_two_stage = (
+                self._pipeline_flag("sql_two_stage_enabled", True)
+                and not self._providers_are_equivalent(self.fast_llm, self.llm)
+            )
 
-            # Track LLM call and tokens
-            self._track_llm_call(tokens=response.usage.total_tokens)
-
-            # Parse structured response
-            try:
-                generated_sql = self._parse_llm_response(response.content, input)
-            except ValueError:
-                retry_request = llm_request.model_copy()
-                retry_request.messages.append(
-                    LLMMessage(
-                        role="system",
-                        content="Return ONLY JSON with a top-level 'sql' field.",
-                    )
+            if use_two_stage:
+                fast_generated = await self._request_sql_from_llm(
+                    provider=self.fast_llm,
+                    llm_request=llm_request,
+                    input=input,
+                    runtime_stats=runtime_stats,
                 )
-                retry_response = await self.llm.generate(retry_request)
-                self._track_llm_call(tokens=retry_response.usage.total_tokens)
-                try:
-                    generated_sql = self._parse_llm_response(
-                        retry_response.content, input
+                if self._should_accept_fast_sql(fast_generated, input):
+                    generated_sql = fast_generated
+                else:
+                    generated_sql = await self._request_sql_from_llm(
+                        provider=self.llm,
+                        llm_request=llm_request,
+                        input=input,
+                        runtime_stats=runtime_stats,
                     )
-                except ValueError as exc:
-                    raise SQLClarificationNeeded(
-                        self._build_clarifying_questions(input.query)
-                    ) from exc
+            else:
+                generated_sql = await self._request_sql_from_llm(
+                    provider=self.llm,
+                    llm_request=llm_request,
+                    input=input,
+                    runtime_stats=runtime_stats,
+                )
 
             logger.debug(
                 f"Generated SQL: {generated_sql.sql[:200]}...",
@@ -338,12 +429,59 @@ class SQLAgent(BaseAgent):
                 context={"query": input.query},
             ) from e
 
+    async def _request_sql_from_llm(
+        self,
+        *,
+        provider: Any,
+        llm_request: LLMRequest,
+        input: SQLAgentInput,
+        runtime_stats: dict[str, int],
+    ) -> GeneratedSQL:
+        response = await provider.generate(llm_request)
+        self._track_llm_call(tokens=response.usage.total_tokens)
+
+        try:
+            return self._parse_llm_response(response.content, input)
+        except ValueError:
+            retry_request = llm_request.model_copy()
+            retry_request.messages.append(
+                LLMMessage(
+                    role="system",
+                    content="Return ONLY JSON with a top-level 'sql' field.",
+                )
+            )
+            retry_response = await provider.generate(retry_request)
+            self._track_llm_call(tokens=retry_response.usage.total_tokens)
+            try:
+                return self._parse_llm_response(retry_response.content, input)
+            except ValueError as exc:
+                recovered = await self._recover_sql_with_formatter(
+                    raw_content=retry_response.content or response.content,
+                    input=input,
+                    runtime_stats=runtime_stats,
+                )
+                if recovered is not None:
+                    return recovered
+                raise SQLClarificationNeeded(
+                    self._build_clarifying_questions(input.query)
+                ) from exc
+
+    def _should_accept_fast_sql(self, generated_sql: GeneratedSQL, input: SQLAgentInput) -> bool:
+        if generated_sql.clarifying_questions:
+            return False
+        threshold = self._pipeline_float("sql_two_stage_confidence_threshold", 0.78)
+        if generated_sql.confidence < threshold:
+            return False
+        issues = self._validate_sql(generated_sql, input)
+        return len(issues) == 0
+
     async def _correct_sql(
         self,
         generated_sql: GeneratedSQL,
         issues: list[ValidationIssue],
         input: SQLAgentInput,
         metadata: AgentMetadata,
+        runtime_stats: dict[str, int],
     ) -> GeneratedSQL:
         """
         Self-correct SQL based on validation issues.
@@ -381,7 +519,17 @@ class SQLAgent(BaseAgent):
             self._track_llm_call(tokens=response.usage.total_tokens)
 
             # Parse corrected response
-            corrected_sql = self._parse_llm_response(response.content, input)
+            try:
+                corrected_sql = self._parse_llm_response(response.content, input)
+            except ValueError as parse_error:
+                recovered = await self._recover_sql_with_formatter(
+                    raw_content=response.content,
+                    input=input,
+                    runtime_stats=runtime_stats,
+                )
+                if recovered is None:
+                    raise parse_error
+                corrected_sql = recovered
 
             logger.debug(
                 f"Corrected SQL: {corrected_sql.sql[:200]}...",
@@ -397,6 +545,77 @@ class SQLAgent(BaseAgent):
                 message=f"SQL correction failed: {e}",
                 context={"original_sql": generated_sql.sql},
             ) from e
+
+    async def _recover_sql_with_formatter(
+        self, *, raw_content: str, input: SQLAgentInput, runtime_stats: dict[str, int]
+    ) -> GeneratedSQL | None:
+        """Attempt to recover malformed SQL-agent output with a formatter model."""
+        if not self._pipeline_flag("sql_formatter_fallback_enabled", True):
+            return None
+        if not raw_content or not raw_content.strip():
+            return None
+
+        provider = getattr(self, "formatter_llm", None) or self.fast_llm or self.llm
+        if provider is None:
+            return None
+
+        formatter_model = getattr(self.config.llm, "sql_formatter_model", None)
+        if not isinstance(formatter_model, str):
+            formatter_model = None
+        elif not formatter_model.strip():
+            formatter_model = None
+
+        formatter_prompt = self._build_sql_formatter_prompt(raw_content, input.query)
+        formatter_request = LLMRequest(
+            messages=[
+                LLMMessage(
+                    role="system",
+                    content=(
+                        "You are a strict JSON formatter for SQL generation outputs. "
+                        "Return only valid JSON."
+                    ),
+                ),
+                LLMMessage(role="user", content=formatter_prompt),
+            ],
+            temperature=0.0,
+            max_tokens=600,
+            model=formatter_model,
+        )
+
+        try:
+            runtime_stats["formatter_fallback_calls"] = (
+                int(runtime_stats.get("formatter_fallback_calls", 0)) + 1
+            )
+            formatter_response = await provider.generate(formatter_request)
+            self._track_llm_call(tokens=formatter_response.usage.total_tokens)
+            parsed = self._parse_llm_response(formatter_response.content, input)
+            runtime_stats["formatter_fallback_successes"] = (
+                int(runtime_stats.get("formatter_fallback_successes", 0)) + 1
+            )
+            return parsed
+        except Exception as exc:
+            logger.debug(
+                "Formatter fallback failed to recover SQL response",
+                extra={"error": str(exc)},
+            )
+            return None
+
+    def _build_sql_formatter_prompt(self, raw_content: str, query: str) -> str:
+        max_chars = self._pipeline_int("sql_prompt_max_context_chars", 12000)
+        clipped_content = raw_content.strip()[:max_chars]
+        return (
+            "Reformat the MODEL_OUTPUT into strict JSON.\n"
+            "Output requirements:\n"
+            '- Return ONLY one JSON object with keys: "sql", "explanation", '
+            '"used_datapoints", "confidence", "assumptions", "clarifying_questions".\n'
+            "- sql must contain executable SQL when present.\n"
+            "- If SQL is not recoverable from MODEL_OUTPUT, set sql to an empty string and "
+            "add one concise clarifying question.\n"
+            "- used_datapoints and assumptions must be JSON arrays.\n"
+            "- confidence must be a number between 0 and 1.\n\n"
+            f"USER_QUERY:\n{query}\n\n"
+            f"MODEL_OUTPUT:\n{clipped_content}\n"
+        )
 
     def _validate_sql(
         self, generated_sql: GeneratedSQL, input: SQLAgentInput
@@ -835,6 +1054,9 @@ class SQLAgent(BaseAgent):
                     f"{schema_context}\n\n**Live schema snapshot (authoritative):**\n"
                     f"{live_context}"
                 )
+        if self._pipeline_flag("sql_prompt_budget_enabled", True):
+            max_chars = self._pipeline_int("sql_prompt_max_context_chars", 12000)
+            schema_context = self._truncate_context(schema_context, max_chars)
         business_context = self._format_business_context(input.investigation_memory)
         conversation_context = self._format_conversation_context(
             input.conversation_history
@@ -847,6 +1069,15 @@ class SQLAgent(BaseAgent):
             conversation_context=conversation_context,
             backend=input.database_type or getattr(self.config.database, "db_type", "postgresql"),
             user_preferences={"default_limit": 10},
+        )
+
+    def _truncate_context(self, text: str, max_chars: int) -> str:
+        if len(text) <= max_chars:
+            return text
+        truncated = text[:max_chars].rstrip()
+        return (
+            f"{truncated}\n\n"
+            "[Context truncated for latency budget. Ask a narrower query for more schema detail.]"
         )
 
     async def _get_live_schema_context(
@@ -921,35 +1152,30 @@ class SQLAgent(BaseAgent):
         db_type: str,
         db_url: str,
     ) -> tuple[str | None, list[str]]:
-        tables_query = (
-            "SELECT table_schema, table_name "
-            "FROM information_schema.tables "
-            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
-            "ORDER BY table_schema, table_name"
+        qualified_tables, columns_by_table = await self._load_schema_snapshot(
+            connector=connector,
+            schema_key=schema_key,
         )
-        result = await connector.execute(tables_query)
-        if not result.rows:
+        if not qualified_tables:
             return None, []
 
+        max_tables = 200
+        if self._pipeline_flag("sql_prompt_budget_enabled", True):
+            max_tables = self._pipeline_int("sql_prompt_max_tables", 80)
+
         entries = []
-        qualified_tables = []
-        for row in result.rows[:200]:
-            schema = row.get("table_schema")
-            table = row.get("table_name")
-            if schema and table:
-                qualified = f"{schema}.{table}"
-                entries.append(qualified)
-                qualified_tables.append(qualified)
-            elif table:
-                entries.append(str(table))
+        for qualified in qualified_tables[:max_tables]:
+            entries.append(qualified)
 
         if not entries:
             return None, []
 
         tables = ", ".join(entries)
 
-        columns_context, columns_by_table, focus_tables = await self._build_columns_context(
-            connector, query, qualified_tables
+        columns_context, focus_tables = self._build_columns_context_from_map(
+            query=query,
+            qualified_tables=qualified_tables,
+            columns_by_table=columns_by_table,
         )
 
         join_context = ""
@@ -974,15 +1200,51 @@ class SQLAgent(BaseAgent):
             f"{cached_profile_context}"
         ), qualified_tables
 
-    async def _build_columns_context(
+    async def _load_schema_snapshot(
         self,
+        *,
         connector: PostgresConnector,
-        query: str,
-        qualified_tables: list[str],
-    ) -> tuple[str, dict[str, list[tuple[str, str | None]]], list[str]]:
-        if not qualified_tables:
-            return "", {}, []
+        schema_key: str,
+    ) -> tuple[list[str], dict[str, list[tuple[str, str | None]]]]:
+        use_snapshot_cache = self._pipeline_flag("schema_snapshot_cache_enabled", True)
+        snapshot_ttl_seconds = self._pipeline_int("schema_snapshot_cache_ttl_seconds", 21600)
+        if use_snapshot_cache:
+            cached = self._live_schema_snapshot_cache.get(schema_key)
+            if cached:
+                tables = cached.get("tables")
+                columns = cached.get("columns")
+                cached_at = cached.get("cached_at")
+                is_expired = False
+                if snapshot_ttl_seconds > 0 and isinstance(cached_at, int | float):
+                    is_expired = (time.time() - float(cached_at)) > snapshot_ttl_seconds
+                if not is_expired and isinstance(tables, list) and isinstance(columns, dict):
+                    return list(tables), columns
+                if is_expired:
+                    self._live_schema_snapshot_cache.pop(schema_key, None)
 
+        tables_query = (
+            "SELECT table_schema, table_name "
+            "FROM information_schema.tables "
+            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+            "ORDER BY table_schema, table_name"
+        )
+        result = await connector.execute(tables_query)
+        if not result.rows:
+            return [], {}
+
+        qualified_tables: list[str] = []
+        for row in result.rows:
+            schema = row.get("table_schema")
+            table = row.get("table_name")
+            if schema and table:
+                qualified_tables.append(f"{schema}.{table}")
+            elif table:
+                qualified_tables.append(str(table))
+
+        if not qualified_tables:
+            return [], {}
+
+        qualified_set = set(qualified_tables)
         columns_query = (
             "SELECT table_schema, table_name, column_name, data_type "
             "FROM information_schema.columns "
@@ -990,9 +1252,6 @@ class SQLAgent(BaseAgent):
             "ORDER BY table_schema, table_name, ordinal_position"
         )
         columns_result = await connector.execute(columns_query)
-        if not columns_result.rows:
-            return "", {}, []
-
         columns_by_table: dict[str, list[tuple[str, str | None]]] = {}
         for row in columns_result.rows:
             schema = row.get("table_schema")
@@ -1002,12 +1261,28 @@ class SQLAgent(BaseAgent):
             if not (schema and table and column):
                 continue
             key = f"{schema}.{table}"
-            if key not in qualified_tables:
+            if key not in qualified_set:
                 continue
             columns_by_table.setdefault(key, []).append((str(column), dtype))
 
-        if not columns_by_table:
-            return "", {}, []
+        if use_snapshot_cache:
+            self._live_schema_snapshot_cache[schema_key] = {
+                "tables": list(qualified_tables),
+                "columns": columns_by_table,
+                "cached_at": time.time(),
+            }
+
+        return qualified_tables, columns_by_table
+
+    def _build_columns_context_from_map(
+        self,
+        *,
+        query: str,
+        qualified_tables: list[str],
+        columns_by_table: dict[str, list[tuple[str, str | None]]],
+    ) -> tuple[str, list[str]]:
+        if not qualified_tables or not columns_by_table:
+            return "", []
 
         query_lower = query.lower()
         is_list_tables = bool(
@@ -1016,32 +1291,40 @@ class SQLAgent(BaseAgent):
             or "available tables" in query_lower
         )
 
+        focus_limit = 10
+        if self._pipeline_flag("sql_prompt_budget_enabled", True):
+            focus_limit = self._pipeline_int("sql_prompt_focus_tables", 8)
+
         if is_list_tables:
-            focus_tables = sorted(columns_by_table.keys())
+            focus_tables = sorted(columns_by_table.keys())[:focus_limit]
         else:
-            focus_tables = self._rank_tables_by_query(query, columns_by_table)[:10]
+            focus_tables = self._rank_tables_by_query(query, columns_by_table)[:focus_limit]
 
         if not focus_tables:
-            return "", columns_by_table, []
+            return "", []
+
+        max_columns = 30
+        if self._pipeline_flag("sql_prompt_budget_enabled", True):
+            max_columns = self._pipeline_int("sql_prompt_max_columns_per_table", 18)
 
         lines = []
         for table in focus_tables:
             columns = columns_by_table.get(table, [])
             if columns:
                 formatted_columns = []
-                for name, dtype in columns[:30]:
+                for name, dtype in columns[:max_columns]:
                     formatted_columns.append(f"{name} ({dtype})" if dtype else name)
                 lines.append(f"- {table}: {', '.join(formatted_columns)}")
 
         if not lines:
-            return "", columns_by_table, focus_tables
+            return "", focus_tables
 
         header = (
             "**Columns (all tables):**"
             if is_list_tables
             else "**Columns (top matched tables):**"
         )
-        return f"\n{header}\n" + "\n".join(lines), columns_by_table, focus_tables
+        return f"\n{header}\n" + "\n".join(lines), focus_tables
 
     def _rank_tables_by_query(
         self, query: str, columns_by_table: dict[str, list[tuple[str, str | None]]]

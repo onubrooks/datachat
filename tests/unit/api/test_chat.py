@@ -388,6 +388,31 @@ class TestChatEndpoint:
                 assert kwargs["database_url"] == "clickhouse://u:p@host:8123/db"
 
     @pytest.mark.asyncio
+    async def test_chat_forwards_synthesize_simple_sql_override(
+        self, client, mock_pipeline_result, initialized_status
+    ):
+        with patch(
+            "backend.api.routes.chat.SystemInitializer.status",
+            new=AsyncMock(return_value=initialized_status),
+        ):
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
+                response = client.post(
+                    "/api/v1/chat",
+                    json={
+                        "message": "Show first 5 rows",
+                        "synthesize_simple_sql": False,
+                    },
+                )
+                assert response.status_code == 200
+                kwargs = mock_pipeline.run.call_args.kwargs
+                assert kwargs["synthesize_simple_sql"] is False
+
+    @pytest.mark.asyncio
     async def test_chat_preserves_conversation_id_if_provided(
         self, client, mock_pipeline_result, initialized_status
     ):

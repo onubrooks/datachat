@@ -1063,6 +1063,10 @@ export function Message({
                 </div>
                 {message.metrics.llm_calls > 0 && <div>LLM calls: {message.metrics.llm_calls}</div>}
                 {message.metrics.retry_count > 0 && <div>Retries: {message.metrics.retry_count}</div>}
+                <div>
+                  Formatter: {message.metrics.sql_formatter_fallback_calls ?? 0} (
+                  {message.metrics.sql_formatter_fallback_successes ?? 0} recovered)
+                </div>
               </div>
             </div>
           )}
