@@ -999,6 +999,49 @@ class TestErrorHandling:
 
         assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 5"
 
+    def test_parse_llm_response_adds_outer_limit_when_only_subquery_has_limit(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(update={"query": "Show orders"})
+        content = json.dumps(
+            {
+                "sql": (
+                    "SELECT * FROM public.orders o "
+                    "WHERE EXISTS ("
+                    "SELECT 1 FROM public.order_items oi "
+                    "WHERE oi.order_id = o.id LIMIT 1"
+                    ")"
+                ),
+                "confidence": 0.9,
+            }
+        )
+
+        generated = sql_agent._parse_llm_response(content, sql_input)
+
+        assert "LIMIT 1" in generated.sql
+        assert generated.sql.endswith("LIMIT 5")
+
+    def test_parse_llm_response_keeps_top_level_parameterized_limit(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(update={"query": "Show orders"})
+        content = json.dumps(
+            {
+                "sql": (
+                    "SELECT * FROM public.orders o "
+                    "WHERE EXISTS ("
+                    "SELECT 1 FROM public.order_items oi "
+                    "WHERE oi.order_id = o.id LIMIT 1"
+                    ") LIMIT $1"
+                ),
+                "confidence": 0.9,
+            }
+        )
+
+        generated = sql_agent._parse_llm_response(content, sql_input)
+
+        assert generated.sql.endswith("LIMIT $1")
+
     def test_parse_llm_response_does_not_force_limit_on_single_aggregate(
         self, sql_agent, sample_sql_agent_input
     ):

@@ -1697,17 +1697,20 @@ class SQLAgent(BaseAgent):
 
     def _rewrite_sql_limit(self, sql: str, target_limit: int, *, force_limit: bool) -> str:
         """Rewrite SQL LIMIT to enforce bounded row returns."""
-        numeric_limit_matches = list(re.finditer(r"\bLIMIT\s+(\d+)\b", sql, re.IGNORECASE))
-        if numeric_limit_matches:
-            last = numeric_limit_matches[-1]
-            current_limit = int(last.group(1))
+        top_level_limits = self._scan_top_level_limit_clauses(sql)
+        numeric_limits = [entry for entry in top_level_limits if entry[2].isdigit()]
+
+        if numeric_limits:
+            value_start, value_end, value_token = numeric_limits[-1]
+            current_limit = int(value_token)
             new_limit = target_limit if force_limit else min(current_limit, target_limit)
             if new_limit == current_limit:
                 return sql
-            return f"{sql[:last.start(1)]}{new_limit}{sql[last.end(1):]}"
+            return f"{sql[:value_start]}{new_limit}{sql[value_end:]}"
 
-        # Avoid appending a second LIMIT when a non-numeric variant already exists (e.g. LIMIT $1).
-        if re.search(r"\bLIMIT\s+\S+", sql, re.IGNORECASE):
+        # Avoid appending a second LIMIT when a top-level non-numeric variant already exists
+        # (e.g. LIMIT $1). Subquery limits do not count.
+        if top_level_limits:
             return sql
 
         stripped = sql.rstrip()
@@ -1715,6 +1718,86 @@ class SQLAgent(BaseAgent):
             stripped = stripped[:-1].rstrip()
             return f"{stripped} LIMIT {target_limit};"
         return f"{stripped} LIMIT {target_limit}"
+
+    def _scan_top_level_limit_clauses(self, sql: str) -> list[tuple[int, int, str]]:
+        """
+        Return top-level LIMIT clause values.
+
+        Returns tuples of: (value_start_index, value_end_index, value_token).
+        """
+        clauses: list[tuple[int, int, str]] = []
+        i = 0
+        depth = 0
+        length = len(sql)
+
+        while i < length:
+            ch = sql[i]
+            nxt = sql[i + 1] if i + 1 < length else ""
+
+            # Skip line comments.
+            if ch == "-" and nxt == "-":
+                i += 2
+                while i < length and sql[i] != "\n":
+                    i += 1
+                continue
+
+            # Skip block comments.
+            if ch == "/" and nxt == "*":
+                i += 2
+                while i + 1 < length and not (sql[i] == "*" and sql[i + 1] == "/"):
+                    i += 1
+                i = min(i + 2, length)
+                continue
+
+            # Skip quoted strings/identifiers.
+            if ch in ("'", '"', "`"):
+                quote = ch
+                i += 1
+                while i < length:
+                    if sql[i] == quote:
+                        # Handle doubled quotes: '' or "" or ``
+                        if i + 1 < length and sql[i + 1] == quote:
+                            i += 2
+                            continue
+                        i += 1
+                        break
+                    i += 1
+                continue
+
+            if ch == "(":
+                depth += 1
+                i += 1
+                continue
+
+            if ch == ")":
+                depth = max(0, depth - 1)
+                i += 1
+                continue
+
+            if depth == 0 and self._matches_keyword(sql, i, "LIMIT"):
+                value_start = i + len("LIMIT")
+                while value_start < length and sql[value_start].isspace():
+                    value_start += 1
+                value_end = value_start
+                while value_end < length and re.match(r"[A-Za-z0-9_$:]", sql[value_end]):
+                    value_end += 1
+                value_token = sql[value_start:value_end]
+                clauses.append((value_start, value_end, value_token))
+                i = value_end
+                continue
+
+            i += 1
+
+        return clauses
+
+    @staticmethod
+    def _matches_keyword(sql: str, index: int, keyword: str) -> bool:
+        end = index + len(keyword)
+        if sql[index:end].upper() != keyword:
+            return False
+        before = sql[index - 1] if index > 0 else " "
+        after = sql[end] if end < len(sql) else " "
+        return not (before.isalnum() or before == "_") and not (after.isalnum() or after == "_")
 
     def _is_single_value_query(self, sql_upper: str) -> bool:
         """Heuristic: single aggregate queries usually return one row and don't need LIMIT."""
