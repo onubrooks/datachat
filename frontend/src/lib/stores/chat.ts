@@ -35,7 +35,6 @@ export interface Message extends ChatMessage {
     name: string;
     arguments?: Record<string, unknown>;
   }>;
-  tool_approval_required?: boolean;
   metrics?: {
     total_latency_ms: number;
     agent_timings: Record<string, number>;
@@ -44,9 +43,22 @@ export interface Message extends ChatMessage {
   };
 }
 
-type PersistedMessage = Omit<Message, "timestamp"> & {
+type PersistedMessage = Pick<
+  Message,
+  | "id"
+  | "role"
+  | "content"
+  | "clarifying_questions"
+  | "answer_source"
+  | "answer_confidence"
+  | "tool_approval_required"
+  | "tool_approval_message"
+> & {
   timestamp: string | Date;
 };
+
+const MAX_PERSISTED_MESSAGES = 60;
+const MAX_PERSISTED_CONTENT_CHARS = 4000;
 
 const createSessionId = () => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -71,6 +83,21 @@ const noopStorage = {
 const reviveMessage = (message: PersistedMessage): Message => ({
   ...message,
   timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp),
+});
+
+const compactMessageForPersistence = (message: Message): PersistedMessage => ({
+  id: message.id,
+  role: message.role,
+  content:
+    message.content.length > MAX_PERSISTED_CONTENT_CHARS
+      ? `${message.content.slice(0, MAX_PERSISTED_CONTENT_CHARS)}...`
+      : message.content,
+  clarifying_questions: message.clarifying_questions,
+  answer_source: message.answer_source,
+  answer_confidence: message.answer_confidence,
+  tool_approval_required: message.tool_approval_required,
+  tool_approval_message: message.tool_approval_message,
+  timestamp: message.timestamp,
 });
 
 interface ChatState {
@@ -238,7 +265,15 @@ export const useChatStore = create<ChatState>()(
         typeof window === "undefined" ? noopStorage : window.localStorage
       ),
       partialize: (state) => ({
-        messages: state.messages,
+        messages: (
+          state.isLoading &&
+          state.messages.length > 0 &&
+          state.messages[state.messages.length - 1]?.role === "assistant"
+            ? state.messages.slice(0, -1)
+            : state.messages
+        )
+          .slice(-MAX_PERSISTED_MESSAGES)
+          .map((message) => compactMessageForPersistence(message)),
         conversationId: state.conversationId,
         frontendSessionId: state.frontendSessionId,
       }),

@@ -857,7 +857,28 @@ class ExecutorAgent(BaseAgent):
 
     def _is_temporal_column(self, column_name: str, rows: list[dict[str, Any]]) -> bool:
         lowered = column_name.lower()
-        if any(marker in lowered for marker in ("date", "time", "timestamp", "month", "year", "day")):
+        tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
+        direct_markers = {"date", "time", "timestamp", "datetime"}
+        period_markers = {"day", "week", "month", "quarter", "year"}
+        period_disqualifiers = {"type", "category", "name", "code"}
+
+        if any(marker in tokens for marker in direct_markers):
+            return True
+        if any(marker in tokens for marker in period_markers) and not any(
+            disqualifier in tokens for disqualifier in period_disqualifiers
+        ):
+            return True
+        if len(tokens) >= 2 and tokens[-1] == "at" and tokens[-2] in {
+            "created",
+            "updated",
+            "deleted",
+            "opened",
+            "closed",
+            "posted",
+            "processed",
+            "occurred",
+            "recorded",
+        }:
             return True
         for row in rows[:20]:
             if self._is_temporal_value(row.get(column_name)):

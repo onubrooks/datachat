@@ -340,6 +340,30 @@ Insights:
         assert result.executed_query.visualization_hint == "line_chart"
 
     @pytest.mark.asyncio
+    async def test_non_temporal_column_name_with_day_substring_does_not_force_line_chart(
+        self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
+    ):
+        """Columns like holiday_type should not be inferred as time axes."""
+        sample_rows = [
+            {"holiday_type": "public", "waste_cost": 120.0},
+            {"holiday_type": "seasonal", "waste_cost": 95.0},
+        ]
+        sample_input.query = "Show waste cost by holiday type"
+        mock_postgres_connector.execute = AsyncMock(
+            return_value=ConnectorQueryResult(
+                rows=sample_rows,
+                row_count=2,
+                columns=["holiday_type", "waste_cost"],
+                execution_time_ms=20.0,
+            )
+        )
+        mock_llm_provider.set_response("Answer: Waste cost by holiday type.")
+
+        result = await executor_agent.execute(sample_input)
+
+        assert result.executed_query.visualization_hint == "bar_chart"
+
+    @pytest.mark.asyncio
     async def test_suggests_none_for_single_value(
         self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
     ):

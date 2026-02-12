@@ -37,7 +37,7 @@ interface MessageProps {
   onClarifyingAnswer?: (question: string) => void;
 }
 
-type TabId = "answer" | "sql" | "table" | "visualization" | "sources";
+type TabId = "answer" | "sql" | "table" | "visualization" | "sources" | "timing";
 type VizHint = "table" | "bar_chart" | "line_chart" | "pie_chart" | "scatter" | "none";
 
 const CHART_COLORS = [
@@ -144,6 +144,18 @@ const formatMetricNumber = (value: number): string => {
   return new Intl.NumberFormat(undefined, {
     maximumFractionDigits: Math.abs(value) < 100 ? 2 : 0,
   }).format(value);
+};
+
+const formatDurationSeconds = (milliseconds: number): string => {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
+    return "0s";
+  }
+  const seconds = milliseconds / 1000;
+  const maximumFractionDigits = seconds >= 10 ? 1 : 2;
+  return `${new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits,
+  }).format(seconds)}s`;
 };
 
 const toNumber = (value: unknown): number | null => {
@@ -254,6 +266,11 @@ export function Message({
     Boolean(message.sources?.length) && message.answer_source !== "context";
   const hasEvidence = Boolean(message.evidence?.length);
   const hasTable = Boolean(message.data) && rowCount > 0;
+  const hasAgentTimings = Boolean(
+    message.metrics?.agent_timings &&
+      Object.keys(message.metrics.agent_timings).length > 0 &&
+      showAgentTimingBreakdown
+  );
 
   const inferVisualizationType = (): VizHint => {
     const hint = (message.visualization_hint || "").toLowerCase();
@@ -837,6 +854,41 @@ export function Message({
     return renderFallback("No suitable visualization is available.");
   };
 
+  const renderTimingSection = () => {
+    if (!hasAgentTimings || !message.metrics?.agent_timings) {
+      return (
+        <Card className="mt-4">
+          <CardContent className="pt-6 text-sm text-muted-foreground">
+            No agent timing breakdown available.
+          </CardContent>
+        </Card>
+      );
+    }
+
+    return (
+      <Card className="mt-4">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Clock size={16} />
+            Agent Timing Breakdown
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2">
+            {Object.entries(message.metrics.agent_timings)
+              .sort((a, b) => b[1] - a[1])
+              .map(([agent, ms]) => (
+                <div key={agent} className="flex items-center justify-between gap-3 text-sm">
+                  <span>{formatAgentTimingLabel(agent)}</span>
+                  <span className="text-muted-foreground">{formatDurationSeconds(ms)}</span>
+                </div>
+              ))}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
   const tabs: Array<{ id: TabId; label: string }> = useMemo(() => {
     const items: Array<{ id: TabId; label: string }> = [{ id: "answer", label: "Answer" }];
     if (message.sql) {
@@ -849,8 +901,11 @@ export function Message({
     if (hasSources || hasEvidence) {
       items.push({ id: "sources", label: "Sources" });
     }
+    if (hasAgentTimings) {
+      items.push({ id: "timing", label: "Timing" });
+    }
     return items;
-  }, [hasEvidence, hasSources, hasTable, message.sql]);
+  }, [hasAgentTimings, hasEvidence, hasSources, hasTable, message.sql]);
 
   useEffect(() => {
     if (!tabs.some((tab) => tab.id === activeTab)) {
@@ -883,6 +938,9 @@ export function Message({
     }
     if (activeTab === "sources") {
       return renderSourcesSection();
+    }
+    if (activeTab === "timing") {
+      return renderTimingSection();
     }
     return null;
   };
@@ -998,24 +1056,10 @@ export function Message({
 
           {message.metrics && (
             <div className="mt-3 text-xs text-muted-foreground">
-              {showAgentTimingBreakdown &&
-                message.metrics.agent_timings &&
-                Object.keys(message.metrics.agent_timings).length > 0 && (
-                  <div className="mb-2 space-y-1 rounded border border-border/60 bg-secondary/30 p-2">
-                    {Object.entries(message.metrics.agent_timings)
-                      .sort((a, b) => b[1] - a[1])
-                      .map(([agent, ms]) => (
-                        <div key={agent} className="flex items-center justify-between gap-3">
-                          <span>{formatAgentTimingLabel(agent)}</span>
-                          <span>{Math.round(ms)}ms</span>
-                        </div>
-                      ))}
-                  </div>
-                )}
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-1">
                   <Clock size={12} />
-                  {Math.round(message.metrics.total_latency_ms)}ms
+                  {formatDurationSeconds(message.metrics.total_latency_ms)}
                 </div>
                 {message.metrics.llm_calls > 0 && <div>LLM calls: {message.metrics.llm_calls}</div>}
                 {message.metrics.retry_count > 0 && <div>Retries: {message.metrics.retry_count}</div>}
