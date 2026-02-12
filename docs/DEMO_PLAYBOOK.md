@@ -64,6 +64,7 @@ Use the CLI entrypoint to prepare a demo:
 ```text
 datachat demo --persona analyst --reset
 datachat demo --dataset grocery --reset
+datachat demo --dataset fintech --reset
 ```
 
 ### Expected behavior
@@ -71,14 +72,19 @@ datachat demo --dataset grocery --reset
 - Seeds demo tables into the target database (`DATABASE_URL` or saved `datachat connect` URL).
 - `--dataset core` seeds `public.users` and `public.orders`.
 - `--dataset grocery` seeds the grocery sample schema from `scripts/grocery_seed.sql`.
-- Loads DataPoints from `datapoints/demo/<persona>/` (`core`) or `datapoints/examples/grocery_store` (`grocery`).
-- Optionally indexes workspace from `workspace_demo/<persona>` for `core` and `workspace_demo/grocery` for `grocery`.
+- `--dataset fintech` seeds the fintech sample schema from `scripts/fintech_seed.sql`.
+- Loads DataPoints from `datapoints/demo/<persona>/` for `core`.
+- Loads DataPoints from `datapoints/examples/grocery_store` for `grocery`.
+- Loads DataPoints from `datapoints/examples/fintech_bank` for `fintech`.
+- Optionally indexes workspace from `workspace_demo/<persona>` for `core`.
+- Optionally indexes workspace from `workspace_demo/grocery` for `grocery`.
+- Optionally indexes workspace from `workspace_demo/fintech` for `fintech`.
 - Prints a short “demo script” of suggested questions.
 
 ### Flags
 
 ```text
---dataset <core|grocery>
+--dataset <core|grocery|fintech>
 --persona <analyst|engineer|platform|executive>
 --reset          # Drops and re-seeds demo data
 --no-workspace   # Skip workspace indexing

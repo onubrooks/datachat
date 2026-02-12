@@ -420,6 +420,30 @@ Insights:
 
         assert result.executed_query.visualization_hint == "none"
 
+    @pytest.mark.asyncio
+    async def test_line_chart_hint_falls_back_when_no_time_dimension(
+        self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
+    ):
+        """Line-chart requests should not force line when result has no time axis."""
+        sample_input.query = "Show order line items by customer as a line chart"
+        mock_postgres_connector.execute = AsyncMock(
+            return_value=ConnectorQueryResult(
+                rows=[
+                    {"customer": "A", "total": 100.0},
+                    {"customer": "B", "total": 150.0},
+                    {"customer": "C", "total": 90.0},
+                ],
+                row_count=3,
+                columns=["customer", "total"],
+                execution_time_ms=25.0,
+            )
+        )
+        mock_llm_provider.set_response("Answer: Totals by customer.")
+
+        result = await executor_agent.execute(sample_input)
+
+        assert result.executed_query.visualization_hint == "bar_chart"
+
     # ============================================================================
     @pytest.mark.asyncio
     async def test_query_phrase_line_items_does_not_force_line_chart(

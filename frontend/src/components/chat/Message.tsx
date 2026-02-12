@@ -33,6 +33,7 @@ import type { ResultLayoutMode } from "@/lib/settings";
 interface MessageProps {
   message: MessageType;
   displayMode?: ResultLayoutMode;
+  showAgentTimingBreakdown?: boolean;
   onClarifyingAnswer?: (question: string) => void;
 }
 
@@ -176,6 +177,7 @@ function clampPercent(value: number): number {
 export function Message({
   message,
   displayMode = "stacked",
+  showAgentTimingBreakdown = true,
   onClarifyingAnswer,
 }: MessageProps) {
   const isUser = message.role === "user";
@@ -885,6 +887,26 @@ export function Message({
     return null;
   };
 
+  const formatAgentTimingLabel = (agent: string) => {
+    const labels: Record<string, string> = {
+      tool_planner: "Tool Planner",
+      classifier: "Classifier",
+      context: "Context",
+      sql: "SQL",
+      validator: "Validator",
+      executor: "Executor",
+      context_answer: "Context Answer",
+      response_synthesis: "Response Synthesis",
+    };
+    if (labels[agent]) {
+      return labels[agent];
+    }
+    return agent
+      .split("_")
+      .map((part) => (part ? `${part[0].toUpperCase()}${part.slice(1)}` : part))
+      .join(" ");
+  };
+
   return (
     <div className={cn("flex gap-3 mb-4", isUser ? "justify-end" : "justify-start")}>
       {!isUser && (
@@ -975,13 +997,29 @@ export function Message({
           )}
 
           {message.metrics && (
-            <div className="mt-3 flex items-center gap-4 text-xs text-muted-foreground">
-              <div className="flex items-center gap-1">
-                <Clock size={12} />
-                {message.metrics.total_latency_ms}ms
+            <div className="mt-3 text-xs text-muted-foreground">
+              {showAgentTimingBreakdown &&
+                message.metrics.agent_timings &&
+                Object.keys(message.metrics.agent_timings).length > 0 && (
+                  <div className="mb-2 space-y-1 rounded border border-border/60 bg-secondary/30 p-2">
+                    {Object.entries(message.metrics.agent_timings)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([agent, ms]) => (
+                        <div key={agent} className="flex items-center justify-between gap-3">
+                          <span>{formatAgentTimingLabel(agent)}</span>
+                          <span>{Math.round(ms)}ms</span>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-1">
+                  <Clock size={12} />
+                  {Math.round(message.metrics.total_latency_ms)}ms
+                </div>
+                {message.metrics.llm_calls > 0 && <div>LLM calls: {message.metrics.llm_calls}</div>}
+                {message.metrics.retry_count > 0 && <div>Retries: {message.metrics.retry_count}</div>}
               </div>
-              {message.metrics.llm_calls > 0 && <div>LLM calls: {message.metrics.llm_calls}</div>}
-              {message.metrics.retry_count > 0 && <div>Retries: {message.metrics.retry_count}</div>}
             </div>
           )}
         </div>

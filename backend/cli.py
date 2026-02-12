@@ -1347,7 +1347,7 @@ def reset(
 @cli.command()
 @click.option(
     "--dataset",
-    type=click.Choice(["core", "grocery"], case_sensitive=False),
+    type=click.Choice(["core", "grocery", "fintech"], case_sensitive=False),
     default="core",
     show_default=True,
     help="Demo dataset to seed and load.",
@@ -1397,6 +1397,20 @@ def demo(dataset: str, persona: str, reset: bool, no_workspace: bool):
                     else:
                         console.print(
                             "[yellow]Grocery tables already exist. Use --reset to re-seed.[/yellow]"
+                        )
+            elif dataset_name == "fintech":
+                if reset:
+                    await _execute_sql_script(connector, Path("scripts") / "fintech_seed.sql")
+                else:
+                    has_fintech = await connector.execute(
+                        "SELECT to_regclass('public.bank_customers') IS NOT NULL AS exists"
+                    )
+                    exists = bool(has_fintech.rows and has_fintech.rows[0].get("exists"))
+                    if not exists:
+                        await _execute_sql_script(connector, Path("scripts") / "fintech_seed.sql")
+                    else:
+                        console.print(
+                            "[yellow]Fintech tables already exist. Use --reset to re-seed.[/yellow]"
                         )
             else:
                 if reset:
@@ -1457,6 +1471,10 @@ def demo(dataset: str, persona: str, reset: bool, no_workspace: bool):
             datapoints_dir = Path("datapoints") / "examples" / "grocery_store"
             workspace_root = Path("workspace_demo") / "grocery"
             suggested_query = "List all grocery stores"
+        elif dataset_name == "fintech":
+            datapoints_dir = Path("datapoints") / "examples" / "fintech_bank"
+            workspace_root = Path("workspace_demo") / "fintech"
+            suggested_query = "What is total deposits?"
         else:
             base_dir = Path("datapoints") / "demo"
             datapoints_dir = base_dir

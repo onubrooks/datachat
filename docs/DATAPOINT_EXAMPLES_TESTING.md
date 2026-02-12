@@ -1,26 +1,39 @@
-# DataPoint-Driven Testing: Grocery Sample
+# DataPoint-Driven Testing: Example Datasets
 
-This guide validates DataPoint-driven quality (not credentials-only fallback only).
+This guide validates DataPoint-driven quality (not credentials-only fallback only)
+using the packaged example datasets.
 
 ## 1) Prepare a test database
 
-Create a fresh PostgreSQL database and seed it:
+Create a fresh PostgreSQL database and seed one of the sample domains.
+
+Grocery:
 
 ```bash
 createdb datachat_grocery
 psql "postgresql://postgres:@localhost:5432/datachat_grocery" -f scripts/grocery_seed.sql
 ```
 
-Shortcut (uses `DATABASE_URL` target + loads grocery DataPoints):
+Fintech:
+
+```bash
+createdb datachat_fintech
+psql "postgresql://postgres:@localhost:5432/datachat_fintech" -f scripts/fintech_seed.sql
+```
+
+Shortcut (uses `DATABASE_URL` target + loads matching example DataPoints):
 
 ```bash
 datachat demo --dataset grocery --reset
+datachat demo --dataset fintech --reset
 ```
 
 Set target DB in `.env` (or via CLI):
 
 ```env
 DATABASE_URL=postgresql://postgres:@localhost:5432/datachat_grocery
+# or
+DATABASE_URL=postgresql://postgres:@localhost:5432/datachat_fintech
 ```
 
 Important:
@@ -36,7 +49,7 @@ datachat status
 
 Expected:
 
-- `Connection` shows `.../datachat_grocery`
+- `Connection` shows the intended target DB.
 
 ## 2) Start backend (and optional frontend)
 
@@ -53,8 +66,21 @@ npm run dev
 
 ## 3) Exercise DataPoint add flow (single file)
 
+Grocery:
+
 ```bash
 datachat dp add schema datapoints/examples/grocery_store/table_grocery_stores_001.json
+```
+
+Fintech:
+
+```bash
+datachat dp add schema datapoints/examples/fintech_bank/table_bank_accounts_001.json
+```
+
+Then verify:
+
+```bash
 datachat dp list
 ```
 
@@ -65,18 +91,33 @@ Expected:
 
 ## 4) Exercise DataPoint sync flow (bulk)
 
+Grocery:
+
 ```bash
 datachat dp sync --datapoints-dir datapoints/examples/grocery_store
+```
+
+Fintech:
+
+```bash
+datachat dp sync --datapoints-dir datapoints/examples/fintech_bank
+```
+
+Then verify:
+
+```bash
 datachat dp list
 ```
 
 Expected:
 
-- all grocery DataPoints load (schema + business + process)
+- all domain DataPoints load (schema + business + process)
 - vector store count increases
 - no failed files
 
 ## 5) CLI quality smoke checks
+
+Grocery:
 
 ```bash
 datachat ask "List all grocery stores"
@@ -85,13 +126,22 @@ datachat ask "Show gross margin by category"
 datachat ask "Daily waste cost trend"
 ```
 
+Fintech:
+
+```bash
+datachat ask "List active bank accounts"
+datachat ask "What is total deposits?"
+datachat ask "Show failed transaction rate by day"
+datachat ask "What is loan default rate?"
+```
+
 Expected:
 
-- SQL references grocery tables
+- SQL references the selected domain tables
 - metric prompts use metric-related tables/columns
 - answer source is mostly `sql` or grounded `context` with evidence
 
-## 6) Run retrieval eval
+## 6) Run retrieval eval (grocery baseline)
 
 ```bash
 python scripts/eval_runner.py \
@@ -107,7 +157,7 @@ Expected:
 - exit code `0`
 - summary prints Hit rate, Recall@K, MRR, Coverage
 
-## 7) Run end-to-end QA eval
+## 7) Run end-to-end QA eval (grocery baseline)
 
 ```bash
 python scripts/eval_runner.py \
@@ -124,17 +174,26 @@ Expected:
 
 ## 8) UI manual checks
 
-In chat UI, run:
+In chat UI, run domain-specific checks.
+
+Grocery sample:
 
 1. `What is total grocery revenue this week?`
 2. `How do we compute gross margin?`
 3. `Show stockout rate by store`
 4. `What waste reasons are most common?`
 
+Fintech sample:
+
+1. `What is total deposits across active accounts?`
+2. `How is net interest income calculated?`
+3. `Show failed transaction rate trend`
+4. `Which loans are 90+ days past due?`
+
 Validate:
 
-- Responses use grocery-specific vocabulary
-- SQL references grocery tables
+- Responses use domain-specific vocabulary
+- SQL references domain tables
 - Follow-up clarifications preserve intent
 - No hallucinated table names
 - If both example and auto-profiled DataPoints exist for the same table, managed/user DataPoints should win over examples.
@@ -142,7 +201,7 @@ Validate:
 Also validate DataPoint visibility in `Manage DataPoints`:
 
 1. Open `Manage DataPoints`.
-2. Confirm approved DataPoints include grocery entries loaded from `datapoints/examples/grocery_store`.
+2. Confirm approved DataPoints include entries loaded from `datapoints/examples/...`.
 3. Confirm the list is populated even if you have not generated pending DataPoints from profiling yet.
 
 Verify vector-store resilience (UI path):
@@ -153,9 +212,11 @@ Verify vector-store resilience (UI path):
 ```bash
 datachat reset --yes
 datachat dp sync --datapoints-dir datapoints/examples/grocery_store
+# or
+datachat dp sync --datapoints-dir datapoints/examples/fintech_bank
 ```
 
-3. Return to UI and ask `List all grocery stores`.
+3. Return to UI and ask a domain question.
 
 Expected:
 

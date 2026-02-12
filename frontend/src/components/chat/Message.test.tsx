@@ -100,4 +100,31 @@ describe("Message", () => {
       expect(section.open).toBe(false);
     }
   });
+
+  it("can hide agent timing breakdown while keeping summary metrics", () => {
+    render(
+      <Message
+        showAgentTimingBreakdown={false}
+        message={{
+          id: "msg-4",
+          role: "assistant",
+          content: "Done",
+          metrics: {
+            total_latency_ms: 1250,
+            agent_timings: {
+              classifier: 120,
+              context: 330,
+            },
+            llm_calls: 1,
+            retry_count: 0,
+          },
+          timestamp: new Date(),
+        }}
+      />
+    );
+
+    expect(screen.queryByText("Classifier")).not.toBeInTheDocument();
+    expect(screen.getByText("1250ms")).toBeInTheDocument();
+    expect(screen.getByText("LLM calls: 1")).toBeInTheDocument();
+  });
 });

@@ -25,6 +25,7 @@ import { apiClient, wsClient, type SetupStep } from "@/lib/api";
 import { SystemSetup } from "../system/SystemSetup";
 import {
   getResultLayoutMode,
+  getShowAgentTimingBreakdown,
   getWaitingUxMode,
   type ResultLayoutMode,
   type WaitingUxMode,
@@ -38,6 +39,8 @@ export function ChatInterface() {
     conversationId,
     isLoading,
     isConnected,
+    agentHistory,
+    agentStatus,
     setLoading,
     setConnected,
     setAgentUpdate,
@@ -61,6 +64,7 @@ export function ChatInterface() {
   const [waitingMode, setWaitingMode] = useState<WaitingUxMode>("animated");
   const [resultLayoutMode, setResultLayoutMode] =
     useState<ResultLayoutMode>("stacked");
+  const [showAgentTimingBreakdown, setShowAgentTimingBreakdown] = useState(true);
   const [loadingElapsedSeconds, setLoadingElapsedSeconds] = useState(0);
   const [toolApprovalOpen, setToolApprovalOpen] = useState(false);
   const [toolApprovalCalls, setToolApprovalCalls] = useState<
@@ -100,9 +104,11 @@ export function ChatInterface() {
   useEffect(() => {
     setWaitingMode(getWaitingUxMode());
     setResultLayoutMode(getResultLayoutMode());
+    setShowAgentTimingBreakdown(getShowAgentTimingBreakdown());
     const handleStorage = () => {
       setWaitingMode(getWaitingUxMode());
       setResultLayoutMode(getResultLayoutMode());
+      setShowAgentTimingBreakdown(getShowAgentTimingBreakdown());
     };
     window.addEventListener("storage", handleStorage);
     return () => {
@@ -126,6 +132,12 @@ export function ChatInterface() {
       window.clearInterval(interval);
     };
   }, [isLoading]);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    if (agentStatus === "idle") return;
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [agentHistory.length, agentStatus, isLoading]);
 
   // Handle send message
   const handleSend = async () => {
@@ -423,6 +435,7 @@ export function ChatInterface() {
             key={message.id}
             message={message}
             displayMode={resultLayoutMode}
+            showAgentTimingBreakdown={showAgentTimingBreakdown}
             onClarifyingAnswer={(question) => {
               setInput(`Regarding "${question}": `);
               inputRef.current?.focus();

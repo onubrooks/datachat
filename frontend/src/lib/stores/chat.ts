@@ -5,6 +5,7 @@
  */
 
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 import type { ChatMessage, ChatResponse, AgentUpdate } from "../api";
 
 export interface Message extends ChatMessage {
@@ -43,10 +44,40 @@ export interface Message extends ChatMessage {
   };
 }
 
+type PersistedMessage = Omit<Message, "timestamp"> & {
+  timestamp: string | Date;
+};
+
+const createSessionId = () => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `session_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const createMessageId = () => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const noopStorage = {
+  getItem: () => null,
+  setItem: () => undefined,
+  removeItem: () => undefined,
+};
+
+const reviveMessage = (message: PersistedMessage): Message => ({
+  ...message,
+  timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp),
+});
+
 interface ChatState {
   // Messages
   messages: Message[];
   conversationId: string | null;
+  frontendSessionId: string;
 
   // Agent status
   currentAgent: string | null;
@@ -76,10 +107,13 @@ interface ChatState {
   appendToLastMessage: (content: string) => void;
 }
 
-export const useChatStore = create<ChatState>((set, get) => ({
+export const useChatStore = create<ChatState>()(
+  persist(
+    (set, get) => ({
   // Initial state
   messages: [],
   conversationId: null,
+  frontendSessionId: createSessionId(),
   currentAgent: null,
   agentStatus: "idle",
   agentMessage: null,
@@ -95,7 +129,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...state.messages,
         {
           ...message,
-          id: crypto.randomUUID(),
+          id: createMessageId(),
           timestamp: new Date(),
         },
       ],
@@ -142,6 +176,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       messages: [],
       conversationId: null,
+      frontendSessionId: createSessionId(),
       currentAgent: null,
       agentStatus: "idle",
       agentMessage: null,
@@ -152,14 +187,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   addChatResponse: (query, response) =>
     set((state) => {
       const userMessage: Message = {
-        id: crypto.randomUUID(),
+        id: createMessageId(),
         role: "user",
         content: query,
         timestamp: new Date(),
       };
 
       const assistantMessage: Message = {
-        id: crypto.randomUUID(),
+        id: createMessageId(),
         role: "assistant",
         content: response.answer,
         timestamp: new Date(),
@@ -196,4 +231,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
       };
       return { messages };
     }),
-}));
+    }),
+    {
+      name: "datachat.chat.session.v1",
+      storage: createJSONStorage(() =>
+        typeof window === "undefined" ? noopStorage : window.localStorage
+      ),
+      partialize: (state) => ({
+        messages: state.messages,
+        conversationId: state.conversationId,
+        frontendSessionId: state.frontendSessionId,
+      }),
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        state.messages = state.messages.map((message) => reviveMessage(message as PersistedMessage));
+        if (!state.frontendSessionId) {
+          state.frontendSessionId = createSessionId();
+        }
+      },
+    }
+  )
+);
