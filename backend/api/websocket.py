@@ -169,6 +169,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
         message = data["message"]
         conversation_id = data.get("conversation_id") or f"conv_{uuid.uuid4().hex[:12]}"
         conversation_history = data.get("conversation_history", [])
+        synthesize_simple_sql = data.get("synthesize_simple_sql")
 
         # Convert conversation history to pipeline format
         history = [
@@ -196,6 +197,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
             conversation_history=history,
             database_type=database_type,
             database_url=database_url,
+            synthesize_simple_sql=synthesize_simple_sql,
             event_callback=event_callback,
         )
 

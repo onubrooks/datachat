@@ -175,6 +175,105 @@ class TestExecution:
         assert output.metadata.tokens_used == 650
 
     @pytest.mark.asyncio
+    async def test_two_stage_sql_accepts_fast_model_when_confident(
+        self, sample_sql_agent_input, sample_valid_llm_response
+    ):
+        fast_provider = Mock()
+        fast_provider.generate = AsyncMock(return_value=sample_valid_llm_response)
+        fast_provider.provider = "openai"
+        fast_provider.model = "gpt-4o-mini"
+
+        main_provider = Mock()
+        main_provider.generate = AsyncMock(return_value=sample_valid_llm_response)
+        main_provider.provider = "openai"
+        main_provider.model = "gpt-4o"
+
+        mock_settings = Mock()
+        mock_settings.llm = Mock()
+        mock_settings.database = Mock(url=None, db_type="postgresql")
+        mock_settings.pipeline = Mock(
+            sql_two_stage_enabled=True,
+            sql_two_stage_confidence_threshold=0.7,
+            sql_prompt_budget_enabled=False,
+            schema_snapshot_cache_enabled=False,
+        )
+
+        with (
+            patch("backend.agents.sql.get_settings", return_value=mock_settings),
+            patch(
+                "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+                side_effect=[main_provider, fast_provider],
+            ),
+        ):
+            agent = SQLAgent()
+
+        output = await agent(sample_sql_agent_input)
+        assert output.success is True
+        assert output.metadata.llm_calls == 1
+        assert fast_provider.generate.await_count == 1
+        assert main_provider.generate.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_two_stage_sql_escalates_to_main_when_fast_low_confidence(
+        self, sample_sql_agent_input, sample_valid_llm_response
+    ):
+        fast_response = LLMResponse(
+            content=(
+                "```json\n"
+                + json.dumps(
+                    {
+                        "sql": "SELECT SUM(amount) FROM analytics.fact_sales",
+                        "explanation": "Draft SQL",
+                        "used_datapoints": ["table_fact_sales_001"],
+                        "confidence": 0.4,
+                        "assumptions": [],
+                        "clarifying_questions": [],
+                    }
+                )
+                + "\n```"
+            ),
+            model="gpt-4o-mini",
+            usage=LLMUsage(prompt_tokens=500, completion_tokens=120, total_tokens=620),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        fast_provider = Mock()
+        fast_provider.generate = AsyncMock(return_value=fast_response)
+        fast_provider.provider = "openai"
+        fast_provider.model = "gpt-4o-mini"
+
+        main_provider = Mock()
+        main_provider.generate = AsyncMock(return_value=sample_valid_llm_response)
+        main_provider.provider = "openai"
+        main_provider.model = "gpt-4o"
+
+        mock_settings = Mock()
+        mock_settings.llm = Mock()
+        mock_settings.database = Mock(url=None, db_type="postgresql")
+        mock_settings.pipeline = Mock(
+            sql_two_stage_enabled=True,
+            sql_two_stage_confidence_threshold=0.7,
+            sql_prompt_budget_enabled=False,
+            schema_snapshot_cache_enabled=False,
+        )
+
+        with (
+            patch("backend.agents.sql.get_settings", return_value=mock_settings),
+            patch(
+                "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+                side_effect=[main_provider, fast_provider],
+            ),
+        ):
+            agent = SQLAgent()
+
+        output = await agent(sample_sql_agent_input)
+        assert output.success is True
+        assert output.metadata.llm_calls == 2
+        assert fast_provider.generate.await_count == 1
+        assert main_provider.generate.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_tracks_used_datapoints(
         self, sql_agent, sample_sql_agent_input, sample_valid_llm_response
     ):
@@ -667,6 +766,34 @@ class TestPromptBuilding:
         assert "wrong_table" in prompt
         assert "not found" in prompt.lower()
         assert "analytics.fact_sales" in prompt or "fact_sales" in prompt
+
+    def test_truncate_context_applies_budget(self, sql_agent):
+        text = "x" * 100
+        truncated = sql_agent._truncate_context(text, 40)
+        assert len(truncated) > 40
+        assert "Context truncated for latency budget" in truncated
+
+    def test_columns_context_map_applies_focus_and_column_limits(self, sql_agent):
+        sql_agent.config.pipeline = Mock(
+            sql_prompt_budget_enabled=True,
+            sql_prompt_focus_tables=2,
+            sql_prompt_max_columns_per_table=1,
+        )
+        columns_by_table = {
+            "public.orders": [("id", "integer"), ("total", "numeric")],
+            "public.customers": [("id", "integer"), ("name", "text")],
+            "public.items": [("id", "integer"), ("sku", "text")],
+        }
+        context, focus_tables = sql_agent._build_columns_context_from_map(
+            query="show revenue by customer",
+            qualified_tables=list(columns_by_table.keys()),
+            columns_by_table=columns_by_table,
+        )
+        assert len(focus_tables) == 2
+        table_lines = [line for line in context.splitlines() if line.startswith("- ")]
+        assert len(table_lines) == 2
+        assert table_lines[0].count("(") == 1
+        assert table_lines[1].count("(") == 1
 
 
 class TestDatabaseContext:

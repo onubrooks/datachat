@@ -15,6 +15,7 @@ export interface ChatRequest {
   conversation_id?: string;
   target_database?: string;
   conversation_history?: ChatMessage[];
+  synthesize_simple_sql?: boolean;
 }
 
 export interface DataSource {

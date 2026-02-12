@@ -12,11 +12,13 @@ import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
+  getSynthesizeSimpleSql,
   getWaitingUxMode,
   getResultLayoutMode,
   getShowAgentTimingBreakdown,
   setResultLayoutMode,
   setShowAgentTimingBreakdown,
+  setSynthesizeSimpleSql,
   setWaitingUxMode,
   type ResultLayoutMode,
   type WaitingUxMode,
@@ -48,11 +50,13 @@ export default function SettingsPage() {
   const [mode, setMode] = useState<WaitingUxMode>("animated");
   const [resultLayout, setResultLayout] = useState<ResultLayoutMode>("stacked");
   const [showAgentTimings, setShowAgentTimings] = useState(true);
+  const [synthesizeSimpleSql, setSynthesizeSimpleSqlState] = useState(true);
 
   useEffect(() => {
     setMode(getWaitingUxMode());
     setResultLayout(getResultLayoutMode());
     setShowAgentTimings(getShowAgentTimingBreakdown());
+    setSynthesizeSimpleSqlState(getSynthesizeSimpleSql());
   }, []);
 
   const handleChange = (value: WaitingUxMode) => {
@@ -68,6 +72,11 @@ export default function SettingsPage() {
   const handleAgentTimingsChange = (value: boolean) => {
     setShowAgentTimings(value);
     setShowAgentTimingBreakdown(value);
+  };
+
+  const handleSynthesizeSimpleSqlChange = (value: boolean) => {
+    setSynthesizeSimpleSqlState(value);
+    setSynthesizeSimpleSql(value);
   };
 
   return (
@@ -170,6 +179,40 @@ export default function SettingsPage() {
             <div className="font-medium">Hide</div>
             <div className="text-xs text-muted-foreground mt-1">
               Keep only summary metrics (latency, LLM calls, retries).
+            </div>
+          </button>
+        </div>
+      </Card>
+
+      <Card className="p-4 space-y-4">
+        <div className="text-sm font-medium">Simple SQL Response Synthesis</div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => handleSynthesizeSimpleSqlChange(true)}
+            className={`rounded-md border px-4 py-3 text-left text-sm transition ${
+              synthesizeSimpleSql
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/40"
+            }`}
+          >
+            <div className="font-medium">On</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Use the synthesis agent for simple SQL answers (best wording quality).
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSynthesizeSimpleSqlChange(false)}
+            className={`rounded-md border px-4 py-3 text-left text-sm transition ${
+              !synthesizeSimpleSql
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/40"
+            }`}
+          >
+            <div className="font-medium">Off</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Skip synthesis on simple SQL answers to reduce latency.
             </div>
           </button>
         </div>

@@ -238,6 +238,27 @@ class TestPipelineExecution:
         assert result["total_latency_ms"] > 0
 
     @pytest.mark.asyncio
+    async def test_simple_sql_can_skip_response_synthesis(self, mock_agents):
+        """Request-level override should skip synthesis for simple SQL responses."""
+        result = await mock_agents.run("test query", synthesize_simple_sql=False)
+
+        assert result["natural_language_answer"] == "Found 1 result."
+        assert not mock_agents.response_synthesis.execute.called
+        assert result["llm_calls"] == 3  # classifier + sql + executor
+
+    @pytest.mark.asyncio
+    async def test_selective_tool_planner_skips_standard_data_query(self, mock_agents):
+        """Tool planner should not run for plain SQL data requests."""
+        await mock_agents.run("Show first 5 rows from orders")
+        assert not mock_agents.tool_planner.execute.called
+
+    @pytest.mark.asyncio
+    async def test_selective_tool_planner_runs_for_tool_like_intent(self, mock_agents):
+        """Tool planner should run for tool/action-style requests."""
+        await mock_agents.run("Profile database and generate datapoints")
+        assert mock_agents.tool_planner.execute.called
+
+    @pytest.mark.asyncio
     async def test_pipeline_includes_all_outputs(self, mock_agents):
         """Test that final state includes all agent outputs."""
         result = await mock_agents.run("test query")

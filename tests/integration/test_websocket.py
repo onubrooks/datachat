@@ -111,6 +111,7 @@ class TestWebSocketStreaming:
             conversation_history,
             database_type=None,
             database_url=None,
+            synthesize_simple_sql=None,
             event_callback=None,
         ):
             # Simulate agent events
@@ -240,6 +241,31 @@ class TestWebSocketStreaming:
         kwargs = mock_pipeline.run_with_streaming.call_args.kwargs
         assert kwargs["database_type"] == "clickhouse"
         assert kwargs["database_url"] == "clickhouse://u:p@host:8123/db"
+        assert kwargs["synthesize_simple_sql"] is None
+
+    def test_websocket_forwards_synthesize_simple_sql_override(self, client):
+        mock_pipeline = AsyncMock()
+        mock_pipeline.run_with_streaming = AsyncMock(
+            return_value={
+                "natural_language_answer": "Test answer",
+                "total_latency_ms": 1000.0,
+                "agent_timings": {},
+                "llm_calls": 1,
+                "retry_count": 0,
+                "retrieved_datapoints": [],
+            }
+        )
+        with patch("backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)):
+            with client.websocket_connect("/ws/chat") as websocket:
+                websocket.send_json(
+                    {"message": "Test query", "synthesize_simple_sql": False}
+                )
+                while True:
+                    event = websocket.receive_json()
+                    if event.get("event") == "complete":
+                        break
+        kwargs = mock_pipeline.run_with_streaming.call_args.kwargs
+        assert kwargs["synthesize_simple_sql"] is False
 
     def test_websocket_handles_client_disconnect(self, client):
         """Test that WebSocket handles client disconnect gracefully."""

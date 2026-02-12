@@ -351,6 +351,79 @@ class ToolsSettings(BaseSettings):
     )
 
 
+class PipelineSettings(BaseSettings):
+    """Pipeline performance and behavior settings."""
+
+    sql_two_stage_enabled: bool = Field(
+        default=True,
+        description="Try mini model first for SQL generation, escalate to main model when needed.",
+    )
+    sql_two_stage_confidence_threshold: float = Field(
+        default=0.78,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence for accepting first-pass mini SQL output.",
+    )
+    sql_prompt_budget_enabled: bool = Field(
+        default=False,
+        description="Apply prompt budgeting to SQL schema context sections.",
+    )
+    sql_prompt_max_tables: int = Field(
+        default=80,
+        ge=10,
+        le=500,
+        description="Maximum tables to include in live schema context.",
+    )
+    sql_prompt_focus_tables: int = Field(
+        default=8,
+        ge=1,
+        le=50,
+        description="Maximum ranked tables to include for non-table-list queries.",
+    )
+    sql_prompt_max_columns_per_table: int = Field(
+        default=18,
+        ge=3,
+        le=100,
+        description="Maximum columns per table in SQL prompt context.",
+    )
+    sql_prompt_max_context_chars: int = Field(
+        default=12000,
+        ge=2000,
+        le=50000,
+        description="Maximum schema context characters injected into SQL prompt.",
+    )
+    synthesize_simple_sql_answers: bool = Field(
+        default=True,
+        description="Run response synthesis for simple SQL answers.",
+    )
+    classifier_deep_low_confidence_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Deep classifier triggers below this confidence threshold.",
+    )
+    classifier_deep_min_query_length: int = Field(
+        default=1,
+        ge=1,
+        le=500,
+        description="Minimum query length to allow deep-classification fallback.",
+    )
+    selective_tool_planner_enabled: bool = Field(
+        default=False,
+        description="Run tool planner only for likely tool/action requests.",
+    )
+    schema_snapshot_cache_enabled: bool = Field(
+        default=False,
+        description="Cache schema snapshot by database for reuse across queries.",
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="PIPELINE_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+
 class Settings(BaseSettings):
     """
     Main application settings.
@@ -416,6 +489,7 @@ class Settings(BaseSettings):
     chroma: ChromaSettings = Field(default_factory=ChromaSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     tools: ToolsSettings = Field(default_factory=ToolsSettings)
+    pipeline: PipelineSettings = Field(default_factory=PipelineSettings)
     database_credentials_key: str | None = Field(
         default=None,
         description="Fernet key for encrypting stored database credentials.",

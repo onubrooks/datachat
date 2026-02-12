@@ -609,7 +609,17 @@ def cli():
     type=int,
     help="Maximum clarification prompts before stopping.",
 )
-def chat(evidence: bool, pager: bool, max_clarifications: int):
+@click.option(
+    "--synthesize-simple-sql/--no-synthesize-simple-sql",
+    default=None,
+    help="Override response synthesis for simple SQL answers.",
+)
+def chat(
+    evidence: bool,
+    pager: bool,
+    max_clarifications: int,
+    synthesize_simple_sql: bool | None,
+):
     """Interactive REPL mode for conversations."""
     console.print(
         Panel.fit(
@@ -651,6 +661,7 @@ def chat(evidence: bool, pager: bool, max_clarifications: int):
                         result = await pipeline.run(
                             query=query,
                             conversation_history=conversation_history,
+                            synthesize_simple_sql=synthesize_simple_sql,
                         )
 
                     # Extract results
@@ -731,7 +742,18 @@ def chat(evidence: bool, pager: bool, max_clarifications: int):
     type=int,
     help="Maximum clarification prompts before stopping.",
 )
-def ask(query: str, evidence: bool, pager: bool, max_clarifications: int):
+@click.option(
+    "--synthesize-simple-sql/--no-synthesize-simple-sql",
+    default=None,
+    help="Override response synthesis for simple SQL answers.",
+)
+def ask(
+    query: str,
+    evidence: bool,
+    pager: bool,
+    max_clarifications: int,
+    synthesize_simple_sql: bool | None,
+):
     """Ask a single question and exit."""
 
     async def run_query():
@@ -767,6 +789,7 @@ def ask(query: str, evidence: bool, pager: bool, max_clarifications: int):
                     result = await pipeline.run(
                         query=current_query,
                         conversation_history=conversation_history,
+                        synthesize_simple_sql=synthesize_simple_sql,
                     )
 
                 # Extract results

@@ -199,6 +199,35 @@ python scripts/eval_runner.py --mode qa --dataset eval/grocery/qa.json --min-sql
 - Answer types support both API columnar payloads and row-oriented payloads.
 - Optional thresholds return non-zero exit codes to support CI gating.
 
+### 4. `benchmark_latency_progressive.py` - Progressive Latency Benchmark
+
+**Purpose**: Measure latency + quality guard metrics across cumulative performance stages:
+
+- baseline
+- stage1: SQL two-stage generation
+- stage2: SQL prompt budget
+- stage3: simple-SQL synthesis OFF
+- stage4: classifier deep-gate tuning
+- stage5: selective tool planner
+- stage6: schema snapshot cache
+
+**Usage**:
+
+```bash
+python scripts/benchmark_latency_progressive.py --iterations 2
+python scripts/benchmark_latency_progressive.py --iterations 3 --queries-file eval/latency_queries.txt
+```
+
+**Outputs**:
+
+- `reports/latency_progressive_<timestamp>.json`
+- `reports/latency_progressive_<timestamp>.md`
+
+**Notes**:
+
+- Uses your current `DATABASE_URL` / configured target DB.
+- Applies stage flags via `PIPELINE_*` env vars in-process and rebuilds settings per stage.
+
 ## Common Issues & Solutions
 
 ### Issue: `ModuleNotFoundError: No module named 'openai'`

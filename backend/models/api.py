@@ -28,6 +28,13 @@ class ChatRequest(BaseModel):
         default_factory=list,
         description="Previous messages in the conversation",
     )
+    synthesize_simple_sql: bool | None = Field(
+        default=None,
+        description=(
+            "Override for response synthesis on simple SQL answers "
+            "(None = use server default)."
+        ),
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -36,6 +43,7 @@ class ChatRequest(BaseModel):
                 "conversation_id": "conv_123",
                 "target_database": "3a1f2d3e-4b5c-6d7e-8f90-1234567890ab",
                 "conversation_history": [],
+                "synthesize_simple_sql": None,
             }
         }
     }
