@@ -828,6 +828,6 @@ class ExecutorAgent(BaseAgent):
             return "pie_chart"
         if re.search(r"\bscatter|correlation\b", text):
             return "scatter"
-        if re.search(r"\b(line|trend|time series|over time)\b", text):
+        if re.search(r"\b(line chart|line graph|trend|time series|over time)\b", text):
             return "line_chart"
         return None
