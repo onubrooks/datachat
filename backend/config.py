@@ -36,6 +36,13 @@ class LLMSettings(BaseSettings):
     sql_provider: Literal["openai", "anthropic", "google", "local"] | None = Field(
         None, description="Provider for SQLAgent (defaults to default_provider)"
     )
+    sql_formatter_model: str | None = Field(
+        None,
+        description=(
+            "Optional model override used only for SQL JSON formatting fallback. "
+            "When unset, SQLAgent uses the configured mini model."
+        ),
+    )
     fallback_provider: Literal["openai", "anthropic", "google", "local"] | None = Field(
         None, description="Fallback provider if primary fails"
     )
@@ -355,7 +362,7 @@ class PipelineSettings(BaseSettings):
     """Pipeline performance and behavior settings."""
 
     sql_two_stage_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Try mini model first for SQL generation, escalate to main model when needed.",
     )
     sql_two_stage_confidence_threshold: float = Field(
@@ -363,6 +370,13 @@ class PipelineSettings(BaseSettings):
         ge=0.0,
         le=1.0,
         description="Minimum confidence for accepting first-pass mini SQL output.",
+    )
+    sql_formatter_fallback_enabled: bool = Field(
+        default=True,
+        description=(
+            "Use mini-model formatter fallback when SQL LLM output is malformed "
+            "(for example missing `sql` field)."
+        ),
     )
     sql_prompt_budget_enabled: bool = Field(
         default=False,
@@ -413,8 +427,17 @@ class PipelineSettings(BaseSettings):
         description="Run tool planner only for likely tool/action requests.",
     )
     schema_snapshot_cache_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Cache schema snapshot by database for reuse across queries.",
+    )
+    schema_snapshot_cache_ttl_seconds: int = Field(
+        default=21600,
+        ge=0,
+        le=604800,
+        description=(
+            "Schema snapshot cache TTL in seconds. "
+            "Set to 0 for no expiry while process is running."
+        ),
     )
 
     model_config = SettingsConfigDict(

@@ -216,6 +216,7 @@ python scripts/eval_runner.py --mode qa --dataset eval/grocery/qa.json --min-sql
 ```bash
 python scripts/benchmark_latency_progressive.py --iterations 2
 python scripts/benchmark_latency_progressive.py --iterations 3 --queries-file eval/latency_queries.txt
+python scripts/benchmark_latency_progressive.py --iterations 2 --mode isolated --queries-file eval/latency_queries.txt
 ```
 
 **Outputs**:
@@ -227,6 +228,7 @@ python scripts/benchmark_latency_progressive.py --iterations 3 --queries-file ev
 
 - Uses your current `DATABASE_URL` / configured target DB.
 - Applies stage flags via `PIPELINE_*` env vars in-process and rebuilds settings per stage.
+- See `docs/LATENCY_TUNING.md` for env var guidance and rollout recommendations.
 
 ## Common Issues & Solutions
 

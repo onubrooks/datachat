@@ -30,6 +30,8 @@ export interface ChatMetrics {
   agent_timings: Record<string, number>;
   llm_calls: number;
   retry_count: number;
+  sql_formatter_fallback_calls?: number;
+  sql_formatter_fallback_successes?: number;
 }
 
 export interface SQLValidationError {

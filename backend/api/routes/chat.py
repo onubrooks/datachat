@@ -234,6 +234,8 @@ def _build_metrics(result: dict[str, Any]) -> ChatMetrics | None:
             agent_timings=result.get("agent_timings", {}),
             llm_calls=result.get("llm_calls", 0),
             retry_count=result.get("retry_count", 0),
+            sql_formatter_fallback_calls=result.get("sql_formatter_fallback_calls", 0),
+            sql_formatter_fallback_successes=result.get("sql_formatter_fallback_successes", 0),
         )
     except Exception as e:
         logger.warning(f"Failed to build metrics: {e}")

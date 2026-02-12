@@ -415,6 +415,9 @@ def _emit_query_output(
         metrics.add_row("⏱️  Latency:", f"{result.get('total_latency_ms', 0):.0f}ms")
         metrics.add_row("🤖 LLM Calls:", str(result.get("llm_calls", 0)))
         metrics.add_row("🔄 Retries:", str(result.get("retry_count", 0)))
+        formatter_calls = int(result.get("sql_formatter_fallback_calls", 0) or 0)
+        formatter_successes = int(result.get("sql_formatter_fallback_successes", 0) or 0)
+        metrics.add_row("🧩 SQL Formatter:", f"{formatter_calls} ({formatter_successes} recovered)")
         console.print(metrics)
         console.print()
 

@@ -23,6 +23,7 @@ import {
   type ResultLayoutMode,
   type WaitingUxMode,
 } from "@/lib/settings";
+import { useChatStore } from "@/lib/stores/chat";
 
 const OPTIONS: Array<{
   value: WaitingUxMode;
@@ -51,6 +52,8 @@ export default function SettingsPage() {
   const [resultLayout, setResultLayout] = useState<ResultLayoutMode>("stacked");
   const [showAgentTimings, setShowAgentTimings] = useState(true);
   const [synthesizeSimpleSql, setSynthesizeSimpleSqlState] = useState(true);
+  const [clearedAt, setClearedAt] = useState<Date | null>(null);
+  const clearMessages = useChatStore((state) => state.clearMessages);
 
   useEffect(() => {
     setMode(getWaitingUxMode());
@@ -77,6 +80,11 @@ export default function SettingsPage() {
   const handleSynthesizeSimpleSqlChange = (value: boolean) => {
     setSynthesizeSimpleSqlState(value);
     setSynthesizeSimpleSql(value);
+  };
+
+  const handleClearChatHistory = () => {
+    clearMessages();
+    setClearedAt(new Date());
   };
 
   return (
@@ -215,6 +223,23 @@ export default function SettingsPage() {
               Skip synthesis on simple SQL answers to reduce latency.
             </div>
           </button>
+        </div>
+      </Card>
+
+      <Card className="p-4 space-y-3">
+        <div className="text-sm font-medium">Chat History</div>
+        <p className="text-xs text-muted-foreground">
+          Clears the locally saved chat session and starts a new frontend session id.
+        </p>
+        <div className="flex items-center gap-3">
+          <Button type="button" variant="destructive" size="sm" onClick={handleClearChatHistory}>
+            Clear Chat History
+          </Button>
+          {clearedAt && (
+            <span className="text-xs text-muted-foreground">
+              Cleared at {clearedAt.toLocaleTimeString()}
+            </span>
+          )}
         </div>
       </Card>
     </main>

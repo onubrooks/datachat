@@ -274,6 +274,45 @@ class TestExecution:
         assert main_provider.generate.await_count == 1
 
     @pytest.mark.asyncio
+    async def test_two_stage_skips_when_providers_are_effectively_same(
+        self, sample_sql_agent_input, sample_valid_llm_response
+    ):
+        fast_provider = Mock()
+        fast_provider.generate = AsyncMock(return_value=sample_valid_llm_response)
+        fast_provider.provider = "openai"
+        fast_provider.model = "gpt-4o"
+
+        main_provider = Mock()
+        main_provider.generate = AsyncMock(return_value=sample_valid_llm_response)
+        main_provider.provider = "openai"
+        main_provider.model = "gpt-4o"
+
+        mock_settings = Mock()
+        mock_settings.llm = Mock()
+        mock_settings.database = Mock(url=None, db_type="postgresql")
+        mock_settings.pipeline = Mock(
+            sql_two_stage_enabled=True,
+            sql_two_stage_confidence_threshold=0.7,
+            sql_prompt_budget_enabled=False,
+            schema_snapshot_cache_enabled=False,
+        )
+
+        with (
+            patch("backend.agents.sql.get_settings", return_value=mock_settings),
+            patch(
+                "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+                side_effect=[main_provider, fast_provider],
+            ),
+        ):
+            agent = SQLAgent()
+
+        output = await agent(sample_sql_agent_input)
+        assert output.success is True
+        assert output.metadata.llm_calls == 1
+        assert main_provider.generate.await_count == 1
+        assert fast_provider.generate.await_count == 0
+
+    @pytest.mark.asyncio
     async def test_tracks_used_datapoints(
         self, sql_agent, sample_sql_agent_input, sample_valid_llm_response
     ):
@@ -1047,6 +1086,124 @@ class TestErrorHandling:
         output = await sql_agent(sample_sql_agent_input)
         assert output.needs_clarification is True
         assert output.generated_sql.clarifying_questions
+
+    @pytest.mark.asyncio
+    async def test_recovers_missing_sql_with_formatter_fallback(self, sample_sql_agent_input):
+        """Formatter fallback should recover malformed SQL JSON output."""
+        malformed_response = LLMResponse(
+            content='{"explanation":"I can help with SQL","confidence":0.7}',
+            model="gemini-2.5-flash",
+            usage=LLMUsage(prompt_tokens=350, completion_tokens=40, total_tokens=390),
+            finish_reason="stop",
+            provider="google",
+        )
+        formatter_response = LLMResponse(
+            content=(
+                "```json\n"
+                + json.dumps(
+                    {
+                        "sql": (
+                            "SELECT SUM(amount) FROM analytics.fact_sales "
+                            "WHERE date >= '2024-07-01' AND date < '2024-10-01'"
+                        ),
+                        "explanation": "Recovered SQL JSON.",
+                        "used_datapoints": ["table_fact_sales_001"],
+                        "confidence": 0.86,
+                        "assumptions": [],
+                        "clarifying_questions": [],
+                    }
+                )
+                + "\n```"
+            ),
+            model="gemini-2.5-flash-lite",
+            usage=LLMUsage(prompt_tokens=180, completion_tokens=60, total_tokens=240),
+            finish_reason="stop",
+            provider="google",
+        )
+
+        main_provider = Mock()
+        main_provider.generate = AsyncMock(side_effect=[malformed_response, malformed_response])
+        main_provider.provider = "google"
+        main_provider.model = "gemini-2.5-flash"
+
+        formatter_provider = Mock()
+        formatter_provider.generate = AsyncMock(return_value=formatter_response)
+        formatter_provider.provider = "google"
+        formatter_provider.model = "gemini-2.5-flash-lite"
+
+        mock_settings = Mock()
+        mock_settings.llm = Mock(sql_formatter_model="gemini-2.5-flash-lite")
+        mock_settings.database = Mock(url=None, db_type="postgresql")
+        mock_settings.pipeline = Mock(
+            sql_two_stage_enabled=False,
+            sql_prompt_budget_enabled=False,
+            schema_snapshot_cache_enabled=False,
+            sql_formatter_fallback_enabled=True,
+        )
+
+        with (
+            patch("backend.agents.sql.get_settings", return_value=mock_settings),
+            patch(
+                "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+                side_effect=[main_provider, formatter_provider],
+            ),
+        ):
+            agent = SQLAgent()
+
+        output = await agent(sample_sql_agent_input)
+
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "SELECT SUM(amount)" in output.generated_sql.sql
+        assert output.metadata.llm_calls == 3
+        assert main_provider.generate.await_count == 2
+        assert formatter_provider.generate.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_formatter_fallback_respects_disable_flag(self, sample_sql_agent_input):
+        """When disabled, formatter fallback should not run."""
+        malformed_response = LLMResponse(
+            content='{"explanation":"missing sql"}',
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=120, completion_tokens=20, total_tokens=140),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        main_provider = Mock()
+        main_provider.generate = AsyncMock(side_effect=[malformed_response, malformed_response])
+        main_provider.provider = "openai"
+        main_provider.model = "gpt-4o"
+
+        formatter_provider = Mock()
+        formatter_provider.generate = AsyncMock()
+        formatter_provider.provider = "openai"
+        formatter_provider.model = "gpt-4o-mini"
+
+        mock_settings = Mock()
+        mock_settings.llm = Mock(sql_formatter_model=None)
+        mock_settings.database = Mock(url=None, db_type="postgresql")
+        mock_settings.pipeline = Mock(
+            sql_two_stage_enabled=False,
+            sql_prompt_budget_enabled=False,
+            schema_snapshot_cache_enabled=False,
+            sql_formatter_fallback_enabled=False,
+        )
+
+        with (
+            patch("backend.agents.sql.get_settings", return_value=mock_settings),
+            patch(
+                "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+                side_effect=[main_provider, formatter_provider],
+            ),
+        ):
+            agent = SQLAgent()
+
+        output = await agent(sample_sql_agent_input)
+
+        assert output.needs_clarification is True
+        assert main_provider.generate.await_count == 2
+        assert formatter_provider.generate.await_count == 0
 
     @pytest.mark.asyncio
     async def test_parses_sql_from_markdown_block_when_json_missing(

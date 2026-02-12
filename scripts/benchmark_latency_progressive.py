@@ -111,6 +111,16 @@ def parse_args() -> argparse.Namespace:
         default=Path("reports"),
         help="Directory for markdown/json reports.",
     )
+    parser.add_argument(
+        "--mode",
+        choices=("cumulative", "isolated"),
+        default="cumulative",
+        help=(
+            "Benchmark mode. "
+            "'cumulative' applies stage flags progressively. "
+            "'isolated' applies each stage on top of baseline only."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -121,13 +131,17 @@ def load_queries(path: Path | None) -> list[str]:
     return [line for line in lines if line and not line.startswith("#")]
 
 
+def apply_env_values(values: dict[str, str]) -> None:
+    for key in FLAG_KEYS:
+        if key in values:
+            os.environ[key] = values[key]
+    clear_settings_cache()
+
+
 def apply_stage_env(accumulated: dict[str, str], stage: StageConfig) -> dict[str, str]:
     merged = dict(accumulated)
     merged.update(stage.env)
-    for key in FLAG_KEYS:
-        if key in merged:
-            os.environ[key] = merged[key]
-    clear_settings_cache()
+    apply_env_values(merged)
     return merged
 
 
@@ -209,12 +223,15 @@ async def run_stage(
             pass
 
 
-def render_markdown(results: list[dict[str, Any]], queries: list[str], iterations: int) -> str:
+def render_markdown(
+    results: list[dict[str, Any]], queries: list[str], iterations: int, mode: str
+) -> str:
     lines = [
         "# Progressive Latency Benchmark",
         "",
         f"- Timestamp (UTC): {datetime.now(UTC).isoformat()}",
         f"- Iterations: {iterations}",
+        f"- Mode: {mode}",
         f"- Queries per iteration: {len(queries)}",
         "",
         "## Query Suite",
@@ -259,28 +276,48 @@ async def main() -> None:
     args = parse_args()
     queries = load_queries(args.queries_file)
     stages = stage_configs()
-    env_accumulated: dict[str, str] = {}
     results: list[dict[str, Any]] = []
 
-    for stage in stages:
-        env_accumulated = apply_stage_env(env_accumulated, stage)
-        print(f"[benchmark] running {stage.name} ...")
-        stage_result = await run_stage(stage.name, queries, args.iterations)
-        results.append(stage_result)
-        print(
-            f"[benchmark] {stage.name}: "
-            f"mean={stage_result['latency_ms']['mean']:.1f}ms, "
-            f"p95={stage_result['latency_ms']['p95']:.1f}ms, "
-            f"llm={stage_result['llm_calls_mean']:.2f}"
-        )
+    if args.mode == "cumulative":
+        env_accumulated: dict[str, str] = {}
+        for stage in stages:
+            env_accumulated = apply_stage_env(env_accumulated, stage)
+            print(f"[benchmark] running {stage.name} ...")
+            stage_result = await run_stage(stage.name, queries, args.iterations)
+            results.append(stage_result)
+            print(
+                f"[benchmark] {stage.name}: "
+                f"mean={stage_result['latency_ms']['mean']:.1f}ms, "
+                f"p95={stage_result['latency_ms']['p95']:.1f}ms, "
+                f"llm={stage_result['llm_calls_mean']:.2f}"
+            )
+    else:
+        baseline = stages[0]
+        for stage in stages:
+            values = dict(baseline.env)
+            if stage.name != baseline.name:
+                values.update(stage.env)
+            apply_env_values(values)
+            print(f"[benchmark] running {stage.name} (isolated) ...")
+            stage_result = await run_stage(stage.name, queries, args.iterations)
+            results.append(stage_result)
+            print(
+                f"[benchmark] {stage.name}: "
+                f"mean={stage_result['latency_ms']['mean']:.1f}ms, "
+                f"p95={stage_result['latency_ms']['p95']:.1f}ms, "
+                f"llm={stage_result['llm_calls_mean']:.2f}"
+            )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     json_path = args.output_dir / f"latency_progressive_{ts}.json"
     md_path = args.output_dir / f"latency_progressive_{ts}.md"
 
-    json_path.write_text(json.dumps({"queries": queries, "results": results}, indent=2), encoding="utf-8")
-    md_path.write_text(render_markdown(results, queries, args.iterations), encoding="utf-8")
+    json_path.write_text(
+        json.dumps({"queries": queries, "mode": args.mode, "results": results}, indent=2),
+        encoding="utf-8",
+    )
+    md_path.write_text(render_markdown(results, queries, args.iterations, args.mode), encoding="utf-8")
 
     print(f"[benchmark] wrote {json_path}")
     print(f"[benchmark] wrote {md_path}")

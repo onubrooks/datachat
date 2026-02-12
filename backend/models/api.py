@@ -65,6 +65,14 @@ class ChatMetrics(BaseModel):
     agent_timings: dict[str, float] = Field(..., description="Per-agent execution times in ms")
     llm_calls: int = Field(..., description="Total number of LLM API calls")
     retry_count: int = Field(default=0, description="Number of SQL retries")
+    sql_formatter_fallback_calls: int = Field(
+        default=0,
+        description="Number of SQL formatter fallback attempts for malformed SQL JSON.",
+    )
+    sql_formatter_fallback_successes: int = Field(
+        default=0,
+        description="Number of successful SQL formatter fallback recoveries.",
+    )
 
 
 class ChatResponse(BaseModel):

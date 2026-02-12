@@ -104,6 +104,8 @@ class PipelineState(TypedDict, total=False):
     generated_sql: str | None
     sql_explanation: str | None
     sql_confidence: float | None
+    sql_formatter_fallback_calls: int
+    sql_formatter_fallback_successes: int
     used_datapoints: list[str]
     assumptions: list[str]
 
@@ -1024,6 +1026,12 @@ class DataChatPipeline:
                 getattr(output.generated_sql, "used_datapoint_ids", []),
             )
             state["assumptions"] = output.generated_sql.assumptions
+            state["sql_formatter_fallback_calls"] = int(
+                (output.data or {}).get("formatter_fallback_calls", 0)
+            )
+            state["sql_formatter_fallback_successes"] = int(
+                (output.data or {}).get("formatter_fallback_successes", 0)
+            )
 
             # Update metadata
             elapsed = (time.time() - start_time) * 1000
@@ -1395,11 +1403,11 @@ class DataChatPipeline:
         if "datapoint" in query or "data point" in query:
             return "context"
 
-        if intent in ("exploration", "explanation", "meta"):
-            return "context"
-
         if self._query_requires_sql(query):
             return "sql"
+
+        if intent in ("exploration", "explanation", "meta"):
+            return "context"
 
         if confidence >= 0.7:
             return "context"
@@ -1461,6 +1469,11 @@ class DataChatPipeline:
             "avg",
             "min",
             "max",
+            "rate",
+            "ratio",
+            "percent",
+            "percentage",
+            "pct",
             "trend",
             "by",
             "per",
@@ -1574,11 +1587,10 @@ class DataChatPipeline:
         return "end"
 
     def _is_simple_sql_response(self, state: PipelineState) -> bool:
-        sql = (state.get("validated_sql") or "").upper()
+        sql = (state.get("validated_sql") or "").strip()
         if not sql:
             return False
-        complex_markers = (" JOIN ", " GROUP BY ", " WITH ", " UNION ", " OVER ", " HAVING ")
-        if any(marker in sql for marker in complex_markers):
+        if re.search(r"\b(JOIN|GROUP\s+BY|WITH|UNION|OVER|HAVING)\b", sql, flags=re.IGNORECASE):
             return False
 
         query_result = state.get("query_result") or {}
@@ -2438,6 +2450,8 @@ class DataChatPipeline:
             "key_insights": [],
             "used_datapoints": [],
             "assumptions": [],
+            "sql_formatter_fallback_calls": 0,
+            "sql_formatter_fallback_successes": 0,
             "investigation_memory": None,
             "retrieved_datapoints": [],
             "context_confidence": None,
@@ -2526,6 +2540,8 @@ class DataChatPipeline:
             "key_insights": [],
             "used_datapoints": [],
             "assumptions": [],
+            "sql_formatter_fallback_calls": 0,
+            "sql_formatter_fallback_successes": 0,
             "investigation_memory": None,
             "retrieved_datapoints": [],
             "context_confidence": None,
@@ -2623,6 +2639,8 @@ class DataChatPipeline:
             "key_insights": [],
             "used_datapoints": [],
             "assumptions": [],
+            "sql_formatter_fallback_calls": 0,
+            "sql_formatter_fallback_successes": 0,
             "investigation_memory": None,
             "retrieved_datapoints": [],
             "context_confidence": None,
