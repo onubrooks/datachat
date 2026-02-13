@@ -70,6 +70,7 @@ export function ChatInterface() {
   const [isBackendReachable, setIsBackendReachable] = useState(false);
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [targetDatabaseId, setTargetDatabaseId] = useState<string | null>(null);
+  const [conversationDatabaseId, setConversationDatabaseId] = useState<string | null>(null);
   const [waitingMode, setWaitingMode] = useState<WaitingUxMode>("animated");
   const [resultLayoutMode, setResultLayoutMode] =
     useState<ResultLayoutMode>("stacked");
@@ -172,15 +173,25 @@ export function ChatInterface() {
     if (!input.trim() || isLoading || !isInitialized) return;
 
     const query = input.trim();
-    const conversationHistory = messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
+    const requestDatabaseId = targetDatabaseId || null;
+    const canReuseConversation =
+      !!conversationId &&
+      !!conversationDatabaseId &&
+      conversationDatabaseId === requestDatabaseId;
+    const conversationHistory = canReuseConversation
+      ? messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+        }))
+      : [];
 
     setInput("");
     setError(null);
     setLoading(true);
     resetAgentStatus();
+    if (!canReuseConversation) {
+      setConversationId(null);
+    }
 
     addMessage({
       role: "user",
@@ -196,8 +207,8 @@ export function ChatInterface() {
       wsClient.streamChat(
         {
           message: query,
-          conversation_id: conversationId || undefined,
-          target_database: targetDatabaseId || undefined,
+          conversation_id: canReuseConversation ? conversationId || undefined : undefined,
+          target_database: requestDatabaseId || undefined,
           conversation_history: conversationHistory,
           synthesize_simple_sql: synthesizeSimpleSql,
         },
@@ -234,6 +245,7 @@ export function ChatInterface() {
             if (response.conversation_id) {
               setConversationId(response.conversation_id);
             }
+            setConversationDatabaseId(requestDatabaseId);
             if (response.tool_approval_required && response.tool_approval_calls?.length) {
               setToolApprovalCalls(response.tool_approval_calls);
               setToolApprovalMessage(
@@ -391,6 +403,11 @@ export function ChatInterface() {
               value={targetDatabaseId ?? ""}
               onChange={(event) => {
                 const nextId = event.target.value || null;
+                if (nextId !== targetDatabaseId) {
+                  setConversationId(null);
+                  setConversationDatabaseId(null);
+                  resetAgentStatus();
+                }
                 setTargetDatabaseId(nextId);
               }}
               className="h-8 rounded-md border border-input bg-background px-2 text-xs"
@@ -401,6 +418,7 @@ export function ChatInterface() {
                 <option key={connection.connection_id} value={connection.connection_id}>
                   {connection.name}
                   {` (${connection.database_type})`}
+                  {connection.tags?.includes("env") ? " (env)" : ""}
                   {connection.is_default ? " (default)" : ""}
                 </option>
               ))}
@@ -545,6 +563,14 @@ export function ChatInterface() {
         <p className="text-xs text-muted-foreground mt-2">
           Press Enter to send
         </p>
+        {conversationId &&
+          conversationDatabaseId &&
+          targetDatabaseId &&
+          conversationDatabaseId !== targetDatabaseId && (
+            <p className="text-xs text-amber-700 mt-1">
+              Data source changed. Next query starts a fresh conversation context.
+            </p>
+          )}
       </div>
       {toolApprovalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
