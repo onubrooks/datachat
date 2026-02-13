@@ -89,7 +89,9 @@ class TestToolsEndpoint:
         assert ctx.metadata["target_database"] == "db-123"
         assert ctx.metadata["database_type"] == "postgresql"
 
-    def test_execute_tool_target_database_requires_registry(self):
+    def test_execute_tool_target_database_not_found(self, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/app")
+        get_settings.cache_clear()
         executor_mock = AsyncMock(return_value={"result": {"ok": True}})
 
         with patch(
@@ -105,8 +107,8 @@ class TestToolsEndpoint:
                 },
             )
 
-        assert response.status_code == 400
-        assert "target_database requires an active database registry" in response.json()["detail"]
+        assert response.status_code == 404
+        assert "Database connection not found: db-123" in response.json()["detail"]
         assert executor_mock.await_count == 0
 
     def test_execute_tool_fallback_infers_database_type_from_url(self, monkeypatch):

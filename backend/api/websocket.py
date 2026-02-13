@@ -13,8 +13,8 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from fastapi.encoders import jsonable_encoder
 
+from backend.api.database_context import resolve_database_type_and_url
 from backend.config import get_settings
-from backend.connectors.factory import infer_database_type
 from backend.initialization.initializer import SystemInitializer
 
 logger = logging.getLogger(__name__)
@@ -96,45 +96,25 @@ async def websocket_chat(websocket: WebSocket) -> None:
         database_url = None
         manager = app_state.get("database_manager")
         target_database = data.get("target_database")
-        if target_database:
-            if manager is None:
-                await websocket.send_json(
-                    {
-                        "event": "error",
-                        "error": "service_unavailable",
-                        "message": (
-                            "Database registry is unavailable. "
-                            "Set DATABASE_CREDENTIALS_KEY."
-                        ),
-                    }
-                )
-                await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
-                return
-            try:
-                connection = await manager.get_connection(target_database)
-            except Exception as exc:
-                await websocket.send_json(
-                    {
-                        "event": "error",
-                        "error": "invalid_target_database",
-                        "message": str(exc),
-                    }
-                )
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-                return
-            database_type = connection.database_type
-            database_url = connection.database_url.get_secret_value()
-        elif manager is not None:
-            default_connection = await manager.get_default_connection()
-            if default_connection is not None:
-                database_type = default_connection.database_type
-                database_url = default_connection.database_url.get_secret_value()
-        elif settings.database.url:
-            database_url = str(settings.database.url)
-            try:
-                database_type = infer_database_type(database_url)
-            except Exception:
-                pass
+        try:
+            resolved_type, resolved_url = await resolve_database_type_and_url(
+                target_database=target_database,
+                manager=manager,
+            )
+        except (KeyError, ValueError) as exc:
+            await websocket.send_json(
+                {
+                    "event": "error",
+                    "error": "invalid_target_database",
+                    "message": str(exc),
+                }
+            )
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        if resolved_type:
+            database_type = resolved_type
+        if resolved_url:
+            database_url = resolved_url
 
         # Get pipeline from app state
         pipeline = app_state.get("pipeline")

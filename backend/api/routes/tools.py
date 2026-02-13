@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, status
 
-from backend.connectors.factory import infer_database_type
+from backend.api.database_context import resolve_database_type_and_url
 from backend.models.api import ToolExecuteRequest, ToolExecuteResponse, ToolInfo
 from backend.tools import ToolExecutor, ToolRegistry, initialize_tools
 from backend.tools.base import ToolContext
@@ -20,50 +20,23 @@ async def _resolve_database_context(
     target_database: str | None,
 ) -> tuple[str | None, str | None]:
     from backend.api.main import app_state
-    from backend.config import get_settings
 
     manager = app_state.get("database_manager")
-    if target_database and manager is None:
+    try:
+        return await resolve_database_type_and_url(
+            target_database=target_database,
+            manager=manager,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "target_database requires an active database registry. "
-                "Configure SYSTEM_DATABASE_URL and DATABASE_CREDENTIALS_KEY."
-            ),
-        )
-
-    if manager is not None:
-        try:
-            if target_database:
-                connection = await manager.get_connection(target_database)
-            else:
-                connection = await manager.get_default_connection()
-        except KeyError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(exc),
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(exc),
-            ) from exc
-        if target_database and connection is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Database connection not found: {target_database}",
-            )
-        if connection is not None:
-            return connection.database_type, connection.database_url.get_secret_value()
-
-    settings = get_settings()
-    if settings.database.url:
-        url = str(settings.database.url)
-        try:
-            return infer_database_type(url), url
-        except Exception:
-            return settings.database.db_type, url
-    return None, None
+            detail=str(exc),
+        ) from exc
 
 
 async def _build_tool_metadata(payload: ToolExecuteRequest) -> dict:

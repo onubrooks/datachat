@@ -21,7 +21,12 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Card } from "../ui/card";
 import { useChatStore } from "@/lib/stores/chat";
-import { apiClient, wsClient, type SetupStep } from "@/lib/api";
+import {
+  apiClient,
+  wsClient,
+  type DatabaseConnection,
+  type SetupStep,
+} from "@/lib/api";
 import { SystemSetup } from "../system/SystemSetup";
 import {
   getResultLayoutMode,
@@ -34,6 +39,7 @@ import {
 import { formatWaitingChipLabel } from "./loadingUx";
 
 export function ChatInterface() {
+  const ACTIVE_DATABASE_STORAGE_KEY = "datachat.active_connection_id";
   const router = useRouter();
   const {
     messages,
@@ -62,6 +68,8 @@ export function ChatInterface() {
   const [setupCompleted, setSetupCompleted] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [isBackendReachable, setIsBackendReachable] = useState(false);
+  const [connections, setConnections] = useState<DatabaseConnection[]>([]);
+  const [targetDatabaseId, setTargetDatabaseId] = useState<string | null>(null);
   const [waitingMode, setWaitingMode] = useState<WaitingUxMode>("animated");
   const [resultLayoutMode, setResultLayoutMode] =
     useState<ResultLayoutMode>("stacked");
@@ -85,13 +93,21 @@ export function ChatInterface() {
 
   useEffect(() => {
     let isMounted = true;
-    apiClient
-      .systemStatus()
-      .then((status) => {
+    Promise.all([apiClient.systemStatus(), apiClient.listDatabases().catch(() => [])])
+      .then(([status, dbs]) => {
         if (!isMounted) return;
         setIsBackendReachable(true);
         setIsInitialized(status.is_initialized);
         setSetupSteps(status.setup_required || []);
+        setConnections(dbs);
+
+        const storedId = window.localStorage.getItem(ACTIVE_DATABASE_STORAGE_KEY);
+        const selected =
+          dbs.find((db) => db.connection_id === storedId) ||
+          dbs.find((db) => db.is_default) ||
+          dbs[0] ||
+          null;
+        setTargetDatabaseId(selected?.connection_id ?? null);
       })
       .catch((err) => {
         if (!isMounted) return;
@@ -102,6 +118,14 @@ export function ChatInterface() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!targetDatabaseId) {
+      window.localStorage.removeItem(ACTIVE_DATABASE_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(ACTIVE_DATABASE_STORAGE_KEY, targetDatabaseId);
+  }, [targetDatabaseId]);
 
   useEffect(() => {
     setWaitingMode(getWaitingUxMode());
@@ -173,6 +197,7 @@ export function ChatInterface() {
         {
           message: query,
           conversation_id: conversationId || undefined,
+          target_database: targetDatabaseId || undefined,
           conversation_history: conversationHistory,
           synthesize_simple_sql: synthesizeSimpleSql,
         },
@@ -361,6 +386,26 @@ export function ChatInterface() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {connections.length > 0 && (
+            <select
+              value={targetDatabaseId ?? ""}
+              onChange={(event) => {
+                const nextId = event.target.value || null;
+                setTargetDatabaseId(nextId);
+              }}
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              disabled={isLoading}
+              aria-label="Target database"
+            >
+              {connections.map((connection) => (
+                <option key={connection.connection_id} value={connection.connection_id}>
+                  {connection.name}
+                  {` (${connection.database_type})`}
+                  {connection.is_default ? " (default)" : ""}
+                </option>
+              ))}
+            </select>
+          )}
           <Button asChild variant="ghost" size="sm">
             <Link href="/settings">Settings</Link>
           </Button>

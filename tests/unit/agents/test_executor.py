@@ -233,6 +233,62 @@ Insights:
         assert "No columns were found for table `sales`." == result.executed_query.natural_language_answer
         assert result.metadata.llm_calls == 0
 
+    @pytest.mark.asyncio
+    async def test_information_schema_tables_summary_is_case_insensitive(
+        self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
+    ):
+        sample_input.validated_sql.sql = (
+            "SELECT table_schema, table_name FROM information_schema.tables "
+            "WHERE table_schema NOT IN ('mysql', 'performance_schema', 'information_schema', 'sys') "
+            "ORDER BY table_schema, table_name LIMIT 10"
+        )
+        mock_postgres_connector.execute = AsyncMock(
+            return_value=ConnectorQueryResult(
+                rows=[
+                    {"TABLE_SCHEMA": "banking", "TABLE_NAME": "customers"},
+                    {"TABLE_SCHEMA": "banking", "TABLE_NAME": "accounts"},
+                    {"TABLE_SCHEMA": "banking", "TABLE_NAME": "transactions"},
+                ],
+                row_count=3,
+                columns=["table_schema", "table_name"],
+                execution_time_ms=8.0,
+            )
+        )
+        mock_llm_provider.set_response("Answer: hallucinated")
+
+        result = await executor_agent.execute(sample_input)
+
+        assert result.executed_query.natural_language_answer.startswith("Found 3 table(s):")
+        assert "banking.customers" in result.executed_query.natural_language_answer
+        assert result.metadata.llm_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_information_schema_columns_summary_is_case_insensitive(
+        self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
+    ):
+        sample_input.validated_sql.sql = (
+            "SELECT table_schema, table_name, column_name, data_type "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'customers'"
+        )
+        mock_postgres_connector.execute = AsyncMock(
+            return_value=ConnectorQueryResult(
+                rows=[
+                    {"TABLE_SCHEMA": "banking", "TABLE_NAME": "customers", "COLUMN_NAME": "id"},
+                    {"TABLE_SCHEMA": "banking", "TABLE_NAME": "customers", "COLUMN_NAME": "email"},
+                ],
+                row_count=2,
+                columns=["table_schema", "table_name", "column_name"],
+                execution_time_ms=8.0,
+            )
+        )
+        mock_llm_provider.set_response("Answer: hallucinated")
+
+        result = await executor_agent.execute(sample_input)
+
+        assert "table has 2 column(s): id, email." in result.executed_query.natural_language_answer
+        assert result.metadata.llm_calls == 0
+
     # ============================================================================
     # Timeout Tests
     # ============================================================================

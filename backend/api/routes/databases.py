@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
 
+from backend.api.database_context import (
+    environment_connection_id,
+    list_available_connections,
+)
 from backend.database.manager import DatabaseConnectionManager
 from backend.models.database import (
     DatabaseConnection,
@@ -47,14 +51,29 @@ async def create_database_connection(
 
 @router.get("/databases", response_model=list[DatabaseConnection])
 async def list_database_connections() -> list[DatabaseConnection]:
-    """List all active database connections."""
-    manager = _get_manager()
-    return await manager.list_connections()
+    """List active registry connections plus DATABASE_URL fallback."""
+    from backend.api.main import app_state
+
+    manager = app_state.get("database_manager")
+    return await list_available_connections(manager)
 
 
 @router.get("/databases/{connection_id}", response_model=DatabaseConnection)
 async def get_database_connection(connection_id: str) -> DatabaseConnection:
     """Retrieve a single connection by ID."""
+    from backend.api.main import app_state
+
+    manager = app_state.get("database_manager")
+    if connection_id == environment_connection_id():
+        connections = await list_available_connections(manager)
+        for connection in connections:
+            if str(connection.connection_id) == connection_id:
+                return connection
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Connection not found: {connection_id}",
+        )
+
     manager = _get_manager()
     try:
         return await manager.get_connection(connection_id)
@@ -74,6 +93,14 @@ async def set_default_database(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="is_default must be true to set default connection",
         )
+    if connection_id == environment_connection_id():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Environment Database is derived from DATABASE_URL and cannot be set "
+                "as an explicit registry default."
+            ),
+        )
     manager = _get_manager()
     try:
         await manager.set_default(connection_id)
@@ -86,6 +113,11 @@ async def set_default_database(
 @router.delete("/databases/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_database_connection(connection_id: str) -> None:
     """Delete a database connection."""
+    if connection_id == environment_connection_id():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Environment Database is derived from DATABASE_URL and cannot be deleted here.",
+        )
     manager = _get_manager()
     try:
         await manager.remove_connection(connection_id)

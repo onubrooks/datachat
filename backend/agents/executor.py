@@ -593,7 +593,7 @@ class ExecutorAgent(BaseAgent):
             )
             column_values = []
             for row in query_result.rows:
-                value = row.get("column_name")
+                value = self._row_get(row, "column_name")
                 if value is not None:
                     column_values.append(str(value))
             unique_columns = list(dict.fromkeys(column_values))
@@ -613,8 +613,8 @@ class ExecutorAgent(BaseAgent):
         if "information_schema.tables" in lower_sql:
             table_names = []
             for row in query_result.rows:
-                table = row.get("table_name")
-                schema = row.get("table_schema")
+                table = self._row_get(row, "table_name")
+                schema = self._row_get(row, "table_schema")
                 if table is None:
                     continue
                 table_names.append(f"{schema}.{table}" if schema else str(table))
@@ -633,7 +633,7 @@ class ExecutorAgent(BaseAgent):
             )
 
         if query_result.row_count == 1 and query_result.columns == ["row_count"]:
-            value = query_result.rows[0].get("row_count")
+            value = self._row_get(query_result.rows[0], "row_count")
             table_name = self._extract_table_name_from_sql(sql)
             if table_name:
                 return (f"Table `{table_name}` has {value} row(s).", [])
@@ -647,6 +647,18 @@ class ExecutorAgent(BaseAgent):
                     [],
                 )
 
+        return None
+
+    def _row_get(self, row: Any, key: str) -> Any:
+        """Fetch row values with case-insensitive key fallback."""
+        if not isinstance(row, dict):
+            return None
+        if key in row:
+            return row[key]
+        lowered = key.lower()
+        for candidate, value in row.items():
+            if str(candidate).lower() == lowered:
+                return value
         return None
 
     def _extract_table_name_from_sql(self, sql: str) -> str | None:

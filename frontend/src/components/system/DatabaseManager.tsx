@@ -19,6 +19,11 @@ import {
 const api = new DataChatAPI();
 const WS_BASE_URL =
   process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
+const ENV_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada";
+
+const isEnvironmentConnection = (connection: DatabaseConnection): boolean =>
+  String(connection.connection_id) === ENV_CONNECTION_ID ||
+  (connection.tags || []).includes("env");
 
 export function DatabaseManager() {
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
@@ -90,14 +95,55 @@ export function DatabaseManager() {
   const refresh = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    let latestError: string | null = null;
+    let dbs: DatabaseConnection[] = [];
+
     try {
-      const [dbs, pendingPoints, approvedPoints] = await Promise.all([
-        api.listDatabases(),
-        api.listPendingDatapoints(),
-        api.listDatapoints(),
-      ]);
+      dbs = await api.listDatabases();
       setConnections(dbs);
-      setPending(pendingPoints);
+    } catch (err) {
+      latestError =
+        err instanceof Error ? err.message : String(err);
+      setConnections([]);
+    }
+
+    if (dbs.length > 0) {
+      try {
+        const defaultConnection = dbs.find((item) => item.is_default) || dbs[0];
+        if (!isEnvironmentConnection(defaultConnection)) {
+          const latestJob = await api.getLatestProfilingJob(defaultConnection.connection_id);
+          setJob(latestJob);
+        } else {
+          setJob(null);
+        }
+      } catch (err) {
+        latestError = latestError || ((err as Error).message);
+      }
+    } else {
+      setJob(null);
+    }
+
+    setIsLoading(false);
+
+    const [pendingResult, approvedResult, syncResult] = await Promise.allSettled([
+      api.listPendingDatapoints(),
+      api.listDatapoints(),
+      api.getSyncStatus(),
+    ]);
+
+    if (pendingResult.status === "fulfilled") {
+      setPending(pendingResult.value);
+    } else {
+      latestError =
+        latestError ||
+        (pendingResult.reason instanceof Error
+          ? pendingResult.reason.message
+          : String(pendingResult.reason));
+      setPending([]);
+    }
+
+    if (approvedResult.status === "fulfilled") {
+      const approvedPoints = approvedResult.value;
       setApproved((current) =>
         approvedPoints.length > 0 || !preserveApprovedOnEmpty
           ? dedupeApproved(approvedPoints)
@@ -106,28 +152,26 @@ export function DatabaseManager() {
       if (approvedPoints.length > 0) {
         setPreserveApprovedOnEmpty(true);
       }
-      if (dbs.length > 0) {
-        const defaultConnection = dbs.find((item) => item.is_default) || dbs[0];
-        const latestJob = await api.getLatestProfilingJob(
-          defaultConnection.connection_id
-        );
-        setJob(latestJob);
-      } else {
-        setJob(null);
-      }
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setIsLoading(false);
+    } else {
+      latestError =
+        latestError ||
+        (approvedResult.reason instanceof Error
+          ? approvedResult.reason.message
+          : String(approvedResult.reason));
     }
 
-    try {
-      const status = await api.getSyncStatus();
-      setSyncStatus(status);
+    if (syncResult.status === "fulfilled") {
+      setSyncStatus(syncResult.value);
       setSyncError(null);
-    } catch (err) {
-      setSyncError((err as Error).message);
+    } else {
+      setSyncError(
+        syncResult.reason instanceof Error
+          ? syncResult.reason.message
+          : String(syncResult.reason)
+      );
     }
+
+    setError(latestError);
   }, [preserveApprovedOnEmpty]);
 
   const handleToolProfile = async () => {
@@ -338,6 +382,12 @@ export function DatabaseManager() {
 
   const handleProfile = async (connectionId: string) => {
     setError(null);
+    if (connectionId === ENV_CONNECTION_ID) {
+      setError(
+        "Environment Database uses DATABASE_URL and cannot be profiled from Database Manager."
+      );
+      return;
+    }
     try {
       const started = await api.startProfiling(connectionId, {
         sample_size: 100,
@@ -625,6 +675,12 @@ export function DatabaseManager() {
               key={connection.connection_id}
               className="flex flex-col gap-2 border-b border-border pb-3"
             >
+              {String(connection.connection_id) === ENV_CONNECTION_ID && (
+                <div className="text-xs text-muted-foreground">
+                  Loaded from <code>DATABASE_URL</code>. Manage this value in your environment
+                  file.
+                </div>
+              )}
               <div className="flex items-center justify-between">
                 <div>
                   <div className="font-medium">{connection.name}</div>
@@ -642,24 +698,47 @@ export function DatabaseManager() {
                 <Button
                   variant="secondary"
                   onClick={async () => {
-                    await api.setDefaultDatabase(connection.connection_id);
-                    await refresh();
+                    if (isEnvironmentConnection(connection)) {
+                      setError(
+                        "Environment Database uses DATABASE_URL and cannot be set as a registry default."
+                      );
+                      return;
+                    }
+                    try {
+                      await api.setDefaultDatabase(connection.connection_id);
+                      await refresh();
+                    } catch (err) {
+                      setError((err as Error).message);
+                    }
                   }}
+                  disabled={isEnvironmentConnection(connection)}
                 >
                   Set Default
                 </Button>
                 <Button
                   variant="secondary"
                   onClick={() => handleProfile(connection.connection_id)}
+                  disabled={isEnvironmentConnection(connection)}
                 >
                   Profile
                 </Button>
                 <Button
                   variant="destructive"
                   onClick={async () => {
-                    await api.deleteDatabase(connection.connection_id);
-                    await refresh();
+                    if (isEnvironmentConnection(connection)) {
+                      setError(
+                        "Environment Database uses DATABASE_URL and cannot be deleted here."
+                      );
+                      return;
+                    }
+                    try {
+                      await api.deleteDatabase(connection.connection_id);
+                      await refresh();
+                    } catch (err) {
+                      setError((err as Error).message);
+                    }
                   }}
+                  disabled={isEnvironmentConnection(connection)}
                 >
                   Delete
                 </Button>
