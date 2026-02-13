@@ -107,6 +107,38 @@ class TestPendingApprovalContracts:
         assert response.json()["status"] == "approved"
         store.update_pending_status.assert_awaited_once()
 
+    def test_approve_pending_rejects_empty_edit_payload(self, client):
+        pending_id = uuid4()
+        pending = PendingDataPoint(
+            pending_id=pending_id,
+            profile_id=uuid4(),
+            datapoint=_valid_business_datapoint(),
+            confidence=0.9,
+            status="pending",
+            created_at=datetime.now(UTC),
+        )
+
+        store = AsyncMock()
+        store.list_pending.return_value = [pending]
+        store.update_pending_status = AsyncMock()
+        store.get_profile = AsyncMock(return_value=MagicMock(connection_id=uuid4()))
+        vector_store = AsyncMock()
+        graph = MagicMock()
+
+        with (
+            patch("backend.api.routes.profiling._get_store", return_value=store),
+            patch("backend.api.routes.profiling._get_vector_store", return_value=vector_store),
+            patch("backend.api.routes.profiling._get_knowledge_graph", return_value=graph),
+        ):
+            response = client.post(
+                f"/api/v1/datapoints/pending/{pending_id}/approve",
+                json={"datapoint": {}},
+            )
+
+        assert response.status_code == 400
+        assert "Invalid DataPoint payload" in response.json()["detail"]
+        store.update_pending_status.assert_not_awaited()
+
     def test_bulk_approve_blocks_when_any_pending_contract_invalid(self, client):
         valid_pending = PendingDataPoint(
             pending_id=uuid4(),
@@ -206,6 +238,57 @@ class TestPendingApprovalContracts:
         store.list_pending.assert_awaited_once_with(
             status="pending", connection_id=connection_id
         )
-        store.bulk_update_pending.assert_awaited_once_with(
-            status="approved", connection_id=connection_id
+        store.bulk_update_pending.assert_awaited_once()
+        kwargs = store.bulk_update_pending.await_args.kwargs
+        assert kwargs["status"] == "approved"
+        assert kwargs["connection_id"] == connection_id
+        assert kwargs["pending_ids"] == [pending.pending_id]
+
+    def test_bulk_approve_validates_and_scopes_fallback_rows(self, client):
+        connection_id = uuid4()
+        profile_id = uuid4()
+        initial_pending = PendingDataPoint(
+            pending_id=uuid4(),
+            profile_id=profile_id,
+            datapoint=_valid_business_datapoint(),
+            confidence=0.9,
+            status="pending",
+            created_at=datetime.now(UTC),
         )
+        fallback_pending = PendingDataPoint(
+            pending_id=uuid4(),
+            profile_id=profile_id,
+            datapoint=_valid_business_datapoint(),
+            confidence=0.8,
+            status="approved",
+            created_at=datetime.now(UTC),
+        )
+
+        store = AsyncMock()
+        store.list_pending.return_value = [initial_pending]
+        store.bulk_update_pending.return_value = [fallback_pending]
+        store.get_profile = AsyncMock(return_value=MagicMock(connection_id=connection_id))
+        vector_store = AsyncMock()
+        graph = MagicMock()
+
+        with (
+            patch("backend.api.routes.profiling._get_store", return_value=store),
+            patch("backend.api.routes.profiling._get_vector_store", return_value=vector_store),
+            patch("backend.api.routes.profiling._get_knowledge_graph", return_value=graph),
+            patch(
+                "backend.api.routes.profiling._remove_existing_datapoints_for_table",
+                return_value=[],
+            ),
+            patch("backend.sync.orchestrator.save_datapoint_to_disk"),
+        ):
+            response = client.post(
+                f"/api/v1/datapoints/pending/bulk-approve?connection_id={connection_id}"
+            )
+
+        assert response.status_code == 200
+        store.bulk_update_pending.assert_awaited_once()
+        kwargs = store.bulk_update_pending.await_args.kwargs
+        assert kwargs["pending_ids"] == [initial_pending.pending_id]
+        vector_store.add_datapoints.assert_awaited_once()
+        added = vector_store.add_datapoints.await_args.args[0]
+        assert added[0].metadata["connection_id"] == str(connection_id)

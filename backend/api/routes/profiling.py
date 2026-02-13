@@ -520,7 +520,11 @@ async def approve_datapoint(
             detail=f"Pending DataPoint not found: {pending_id}",
         )
 
-    candidate_payload = payload.datapoint if payload and payload.datapoint else pending_item.datapoint
+    candidate_payload = (
+        payload.datapoint
+        if payload is not None and payload.datapoint is not None
+        else pending_item.datapoint
+    )
     from backend.models.datapoint import DataPoint
 
     try:
@@ -612,13 +616,28 @@ async def bulk_approve_datapoints(
         datapoints_by_pending_id[item.pending_id] = datapoint
 
     approved = await store.bulk_update_pending(
-        status="approved", connection_id=connection_id
+        status="approved",
+        connection_id=connection_id,
+        pending_ids=list(datapoints_by_pending_id.keys()),
     )
-    datapoints = [
-        datapoints_by_pending_id.get(item.pending_id)
-        or TypeAdapter(DataPoint).validate_python(item.datapoint)
-        for item in approved
-    ]
+    datapoints: list[DataPoint] = []
+    for item in approved:
+        datapoint = datapoints_by_pending_id.get(item.pending_id)
+        if datapoint is None:
+            try:
+                datapoint = TypeAdapter(DataPoint).validate_python(item.datapoint)
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Invalid DataPoint payload in approved item "
+                        f"{item.pending_id}: {exc.errors()[0]['msg']}"
+                    ),
+                ) from exc
+            _validate_datapoint_contract_or_400(datapoint)
+            profile = await store.get_profile(item.profile_id)
+            _attach_connection_metadata(datapoint, profile.connection_id)
+        datapoints.append(datapoint)
     if datapoints:
         exclude_ids = {datapoint.datapoint_id for datapoint in datapoints}
         removed_ids: set[str] = set()

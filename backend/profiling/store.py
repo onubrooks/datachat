@@ -404,37 +404,75 @@ class ProfilingStore:
         self,
         status: str,
         connection_id: UUID | None = None,
+        pending_ids: list[UUID] | None = None,
     ) -> list[PendingDataPoint]:
         self._ensure_pool()
         reviewed_at = datetime.now(UTC)
+        id_filter = [pending_id for pending_id in (pending_ids or []) if pending_id]
+        if pending_ids is not None and not id_filter:
+            return []
         if connection_id is None:
-            rows = await self._pool.fetch(
-                """
-                UPDATE pending_datapoints
-                SET status = $1, reviewed_at = $2
-                WHERE status = 'pending'
-                RETURNING pending_id, profile_id, datapoint, confidence, status,
-                          created_at, reviewed_at, review_note
-                """,
-                status,
-                reviewed_at,
-            )
+            if id_filter:
+                rows = await self._pool.fetch(
+                    """
+                    UPDATE pending_datapoints
+                    SET status = $1, reviewed_at = $2
+                    WHERE status = 'pending'
+                      AND pending_id = ANY($3::uuid[])
+                    RETURNING pending_id, profile_id, datapoint, confidence, status,
+                              created_at, reviewed_at, review_note
+                    """,
+                    status,
+                    reviewed_at,
+                    id_filter,
+                )
+            else:
+                rows = await self._pool.fetch(
+                    """
+                    UPDATE pending_datapoints
+                    SET status = $1, reviewed_at = $2
+                    WHERE status = 'pending'
+                    RETURNING pending_id, profile_id, datapoint, confidence, status,
+                              created_at, reviewed_at, review_note
+                    """,
+                    status,
+                    reviewed_at,
+                )
         else:
-            rows = await self._pool.fetch(
-                """
-                UPDATE pending_datapoints AS p
-                SET status = $1, reviewed_at = $2
-                FROM profiling_profiles AS pr
-                WHERE p.profile_id = pr.profile_id
-                  AND p.status = 'pending'
-                  AND pr.connection_id = $3
-                RETURNING p.pending_id, p.profile_id, p.datapoint, p.confidence, p.status,
-                          p.created_at, p.reviewed_at, p.review_note
-                """,
-                status,
-                reviewed_at,
-                connection_id,
-            )
+            if id_filter:
+                rows = await self._pool.fetch(
+                    """
+                    UPDATE pending_datapoints AS p
+                    SET status = $1, reviewed_at = $2
+                    FROM profiling_profiles AS pr
+                    WHERE p.profile_id = pr.profile_id
+                      AND p.status = 'pending'
+                      AND pr.connection_id = $3
+                      AND p.pending_id = ANY($4::uuid[])
+                    RETURNING p.pending_id, p.profile_id, p.datapoint, p.confidence, p.status,
+                              p.created_at, p.reviewed_at, p.review_note
+                    """,
+                    status,
+                    reviewed_at,
+                    connection_id,
+                    id_filter,
+                )
+            else:
+                rows = await self._pool.fetch(
+                    """
+                    UPDATE pending_datapoints AS p
+                    SET status = $1, reviewed_at = $2
+                    FROM profiling_profiles AS pr
+                    WHERE p.profile_id = pr.profile_id
+                      AND p.status = 'pending'
+                      AND pr.connection_id = $3
+                    RETURNING p.pending_id, p.profile_id, p.datapoint, p.confidence, p.status,
+                              p.created_at, p.reviewed_at, p.review_note
+                    """,
+                    status,
+                    reviewed_at,
+                    connection_id,
+                )
         return [self._row_to_pending(row) for row in rows]
 
     async def delete_pending_for_profile(self, profile_id: UUID) -> None:
