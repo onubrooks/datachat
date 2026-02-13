@@ -28,6 +28,7 @@ Planned (not yet implemented as full product features):
 - `LEVELS.md` - maturity model with implementation status.
 - `PRD.md` - delivery-tracking PRD (shipped vs planned).
 - `METADATAOPS_FOUNDATION.md` - philosophy, priorities, and contributor alignment for metadata quality + observability.
+- `PHASE1_KPI_GATES.md` - CI and release KPI gates for Phase 1 operational hardening.
 - `OPERATIONS.md` - deployment and operational guidance.
 - `DEMO_PLAYBOOK.md` - demo setup and persona flows.
 - `DATAPOINT_SCHEMA.md` - DataPoint model and conventions.

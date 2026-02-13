@@ -226,6 +226,24 @@ python scripts/benchmark_latency_progressive.py --iterations 2 --mode isolated -
 - `reports/latency_progressive_<timestamp>.json`
 - `reports/latency_progressive_<timestamp>.md`
 
+### 5. `phase1_kpi_gate.py` - Phase 1 CI/Release Gates
+
+**Purpose**: Enforce Phase 1 (core runtime) KPI checks in CI and release verification.
+
+**Commands**:
+```bash
+python scripts/phase1_kpi_gate.py --mode ci
+python scripts/phase1_kpi_gate.py --mode release --api-base http://localhost:8000
+```
+
+**Config**: `config/phase1_kpi.json`
+
+**Checks include**:
+- core API parity test suite
+- deterministic MySQL summary regressions
+- connection type/url mismatch validation
+- release eval thresholds (intent + catalog)
+
 **Notes**:
 
 - Uses your current `DATABASE_URL` / configured target DB.

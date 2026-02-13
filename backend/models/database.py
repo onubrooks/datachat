@@ -44,6 +44,17 @@ class DatabaseConnectionCreate(BaseModel):
     is_default: bool = Field(default=False, description="Set as default connection")
 
 
+class DatabaseConnectionUpdate(BaseModel):
+    """Payload for updating an existing connection."""
+
+    name: str | None = Field(default=None, min_length=1, description="User-friendly name")
+    database_url: SecretStr | None = Field(default=None, description="Database URL")
+    database_type: Literal["postgresql", "clickhouse", "mysql"] | None = Field(
+        default=None, description="Database engine type"
+    )
+    description: str | None = Field(default=None, description="Optional description")
+
+
 class DatabaseConnectionUpdateDefault(BaseModel):
     """Payload for setting the default connection."""
 

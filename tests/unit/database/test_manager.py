@@ -151,3 +151,58 @@ class TestDatabaseConnectionManager:
 
         assert connection.database_type == "mysql"
         manager._validate_connection.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_validate_connection_rejects_type_url_mismatch(self, encryption_key, pool):
+        manager = DatabaseConnectionManager(encryption_key=encryption_key, pool=pool)
+
+        with pytest.raises(ValueError, match="does not match URL scheme"):
+            await manager._validate_connection(
+                database_type="postgresql",
+                database_url="mysql://user:pass@localhost:3306/app",
+            )
+
+    @pytest.mark.asyncio
+    async def test_update_connection_updates_fields(self, encryption_key, pool):
+        manager = DatabaseConnectionManager(encryption_key=encryption_key, pool=pool)
+        manager._validate_connection = AsyncMock()
+
+        old_url = "postgresql://user:pass@localhost:5432/warehouse"
+        old_row = {
+            "connection_id": uuid4(),
+            "name": "Warehouse",
+            "database_url_encrypted": manager._encrypt_url(old_url),
+            "database_type": "postgresql",
+            "is_active": True,
+            "is_default": False,
+            "tags": [],
+            "description": "old",
+            "created_at": "2024-01-01T00:00:00Z",
+            "last_profiled": None,
+            "datapoint_count": 0,
+        }
+        new_url = "mysql://user:pass@localhost:3306/warehouse"
+        updated_row = {
+            **old_row,
+            "name": "Warehouse V2",
+            "database_url_encrypted": manager._encrypt_url(new_url),
+            "database_type": "mysql",
+            "description": "new",
+        }
+        pool.fetchrow = AsyncMock(side_effect=[old_row, updated_row])
+
+        updated = await manager.update_connection(
+            old_row["connection_id"],
+            updates={
+                "name": "Warehouse V2",
+                "database_url": new_url,
+                "database_type": "mysql",
+                "description": "new",
+            },
+        )
+
+        assert updated.name == "Warehouse V2"
+        assert updated.database_type == "mysql"
+        assert updated.database_url.get_secret_value() == new_url
+        assert updated.description == "new"
+        manager._validate_connection.assert_awaited_once_with("mysql", new_url)
