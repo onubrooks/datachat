@@ -12,6 +12,8 @@ import pytest
 from click.testing import CliRunner
 
 from backend.cli import (
+    _apply_datapoint_scope,
+    _register_cli_connection,
     _resolve_target_database_url,
     _should_exit_chat,
     _split_sql_statements,
@@ -106,6 +108,20 @@ class TestCLIBasics:
             "SELECT 1",
             "INSERT INTO test_table(id) VALUES (1)",
         ]
+
+    def test_apply_datapoint_scope_connection(self):
+        datapoint = MagicMock()
+        datapoint.metadata = {"source": "test"}
+        _apply_datapoint_scope([datapoint], connection_id="conn-123")
+        assert datapoint.metadata["connection_id"] == "conn-123"
+        assert datapoint.metadata["scope"] == "database"
+
+    def test_apply_datapoint_scope_global(self):
+        datapoint = MagicMock()
+        datapoint.metadata = {"connection_id": "conn-123", "source": "test"}
+        _apply_datapoint_scope([datapoint], global_scope=True)
+        assert "connection_id" not in datapoint.metadata
+        assert datapoint.metadata["scope"] == "global"
 
 
 class TestDemoCommand:
@@ -411,6 +427,63 @@ class TestConnectCommand:
         assert result.exit_code == 0
         register_mock.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_register_cli_connection_preserves_existing_name_without_override(self):
+        """Existing curated names should not be overwritten unless --name is set."""
+        existing = MagicMock()
+        existing.name = "Curated Name"
+        existing.database_type = "postgresql"
+        existing.is_default = True
+        existing.connection_id = "conn-123"
+        existing.database_url.get_secret_value.return_value = (
+            "postgresql://user:pass@localhost:5432/testdb"
+        )
+
+        manager = AsyncMock()
+        manager.list_connections.return_value = [existing]
+
+        with (
+            patch("backend.cli._resolve_system_database_url", return_value=("postgresql://system", "settings")),
+            patch("backend.cli.DatabaseConnectionManager", return_value=manager),
+        ):
+            registered, message = await _register_cli_connection(
+                "postgresql://user:pass@localhost:5432/testdb",
+                name=None,
+                set_default=False,
+            )
+
+        assert registered is True
+        assert "using existing connection" in message
+        manager.update_connection.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_register_cli_connection_updates_existing_name_with_override(self):
+        """Explicit --name should update existing connection name."""
+        existing = MagicMock()
+        existing.name = "Old Name"
+        existing.database_type = "postgresql"
+        existing.is_default = True
+        existing.connection_id = "conn-123"
+        existing.database_url.get_secret_value.return_value = (
+            "postgresql://user:pass@localhost:5432/testdb"
+        )
+
+        manager = AsyncMock()
+        manager.list_connections.return_value = [existing]
+
+        with (
+            patch("backend.cli._resolve_system_database_url", return_value=("postgresql://system", "settings")),
+            patch("backend.cli.DatabaseConnectionManager", return_value=manager),
+        ):
+            registered, _ = await _register_cli_connection(
+                "postgresql://user:pass@localhost:5432/testdb",
+                name="New Curated Name",
+                set_default=False,
+            )
+
+        assert registered is True
+        manager.update_connection.assert_awaited_once()
+
 
 class TestAskCommand:
     """Test ask command."""
@@ -506,6 +579,8 @@ class TestDataPointCommands:
         result = runner.invoke(datapoint, ["sync", "--help"])
         assert result.exit_code == 0
         assert "--datapoints-dir" in result.output
+        assert "--connection-id" in result.output
+        assert "--global-scope" in result.output
         assert "--strict-contracts / --no-strict-contracts" in result.output
         assert "--fail-on-contract-warnings" in result.output
 

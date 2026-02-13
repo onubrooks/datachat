@@ -568,10 +568,13 @@ class VectorStore:
         if datapoint.metadata:
             source_tier = datapoint.metadata.get("source_tier")
             source_path = datapoint.metadata.get("source_path")
+            connection_id = datapoint.metadata.get("connection_id")
             if source_tier:
                 metadata["source_tier"] = str(source_tier)
             if source_path:
                 metadata["source_path"] = str(source_path)
+            if connection_id:
+                metadata["connection_id"] = str(connection_id)
 
         # Add type-specific metadata
         if hasattr(datapoint, "table_name"):

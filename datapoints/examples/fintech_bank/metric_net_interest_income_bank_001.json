@@ -3,9 +3,17 @@
   "type": "Business",
   "name": "Net Interest Income",
   "owner": "finance-analytics@example.com",
-  "tags": ["fintech", "income", "interest"],
+  "tags": [
+    "fintech",
+    "income",
+    "interest"
+  ],
   "metadata": {
-    "source": "fintech-seed"
+    "source": "fintech-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
   },
   "calculation": "SUM(bank_loan_payments.interest_component) FILTER (WHERE bank_loan_payments.status = 'posted')",
   "synonyms": [

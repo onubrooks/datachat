@@ -3,9 +3,17 @@
   "type": "Business",
   "name": "Gross Margin",
   "owner": "finance-analytics@example.com",
-  "tags": ["grocery", "margin", "profitability"],
+  "tags": [
+    "grocery",
+    "margin",
+    "profitability"
+  ],
   "metadata": {
-    "source": "grocery-seed"
+    "source": "grocery-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
   },
   "calculation": "SUM(st.total_amount - (st.quantity * p.unit_cost)) / NULLIF(SUM(st.total_amount), 0)",
   "synonyms": [

@@ -140,6 +140,7 @@ class KnowledgeGraph:
             tags=datapoint.tags or [],
             source_tier=(datapoint.metadata or {}).get("source_tier"),
             source_path=(datapoint.metadata or {}).get("source_path"),
+            connection_id=(datapoint.metadata or {}).get("connection_id"),
             freshness=getattr(datapoint, "freshness", None),
             row_count=getattr(datapoint, "row_count", None),
         )
@@ -196,6 +197,7 @@ class KnowledgeGraph:
             tags=datapoint.tags or [],
             source_tier=(datapoint.metadata or {}).get("source_tier"),
             source_path=(datapoint.metadata or {}).get("source_path"),
+            connection_id=(datapoint.metadata or {}).get("connection_id"),
         )
         nodes_added += 1
 
@@ -248,6 +250,7 @@ class KnowledgeGraph:
             tags=datapoint.tags or [],
             source_tier=(datapoint.metadata or {}).get("source_tier"),
             source_path=(datapoint.metadata or {}).get("source_path"),
+            connection_id=(datapoint.metadata or {}).get("connection_id"),
         )
         nodes_added += 1
 

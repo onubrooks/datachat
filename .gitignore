@@ -13,3 +13,4 @@ node_modules/
 chroma_data/
 datapoints/managed/
 *.log
+manual_testing.txt

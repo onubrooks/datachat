@@ -8,9 +8,10 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from backend.database.manager import DatabaseConnectionManager
+from backend.knowledge.contracts import ContractIssue, validate_datapoint_contract
 from backend.profiling.generator import DataPointGenerator
 from backend.profiling.models import GenerationProgress, PendingDataPoint, ProfilingProgress
 from backend.profiling.profiler import SchemaProfiler
@@ -185,6 +186,35 @@ def _to_pending_response(pending: PendingDataPoint) -> PendingDataPointResponse:
         status=pending.status,
         review_note=pending.review_note,
     )
+
+
+def _issue_to_dict(issue: ContractIssue) -> dict[str, str]:
+    return {
+        "code": issue.code,
+        "message": issue.message,
+        "severity": issue.severity,
+        "field": issue.field or "",
+    }
+
+
+def _validate_datapoint_contract_or_400(datapoint) -> None:
+    report = validate_datapoint_contract(datapoint, strict=False)
+    if report.is_valid:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "message": "DataPoint contract validation failed.",
+            "datapoint_id": report.datapoint_id,
+            "contract_errors": [_issue_to_dict(issue) for issue in report.errors],
+        },
+    )
+
+
+def _attach_connection_metadata(datapoint, connection_id: UUID) -> None:
+    metadata = datapoint.metadata if isinstance(datapoint.metadata, dict) else {}
+    metadata["connection_id"] = str(connection_id)
+    datapoint.metadata = metadata
 
 
 def _select_generation_tables(
@@ -455,9 +485,20 @@ async def list_profile_tables(profile_id: UUID) -> ProfileTablesResponse:
 
 
 @router.get("/datapoints/pending", response_model=PendingDataPointListResponse)
-async def list_pending_datapoints() -> PendingDataPointListResponse:
+async def list_pending_datapoints(
+    status_filter: str = "pending",
+    connection_id: UUID | None = None,
+) -> PendingDataPointListResponse:
     store = _get_store()
-    pending = await store.list_pending(status="pending")
+    normalized_status = status_filter.strip().lower() if status_filter else ""
+    allowed_statuses = {"pending", "approved", "rejected", "all"}
+    if normalized_status not in allowed_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid status_filter. Use pending, approved, rejected, or all.",
+        )
+    pending_status = None if normalized_status == "all" else normalized_status
+    pending = await store.list_pending(status=pending_status, connection_id=connection_id)
     return PendingDataPointListResponse(
         pending=[_to_pending_response(item) for item in pending]
     )
@@ -471,17 +512,37 @@ async def approve_datapoint(
     vector_store = _get_vector_store()
     graph = _get_knowledge_graph()
 
+    pending_items = await store.list_pending(status="pending")
+    pending_item = next((item for item in pending_items if item.pending_id == pending_id), None)
+    if pending_item is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pending DataPoint not found: {pending_id}",
+        )
+
+    candidate_payload = payload.datapoint if payload and payload.datapoint else pending_item.datapoint
+    from backend.models.datapoint import DataPoint
+
+    try:
+        datapoint = TypeAdapter(DataPoint).validate_python(candidate_payload)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid DataPoint payload: {exc.errors()[0]['msg']}",
+        ) from exc
+    _validate_datapoint_contract_or_400(datapoint)
+    profile = await store.get_profile(pending_item.profile_id)
+    _attach_connection_metadata(datapoint, profile.connection_id)
+
     pending = await store.update_pending_status(
         pending_id,
         status="approved",
         review_note=payload.review_note if payload else None,
-        datapoint=payload.datapoint if payload else None,
+        datapoint=datapoint.model_dump(mode="json", by_alias=True),
     )
 
-    from backend.models.datapoint import DataPoint
     from backend.sync.orchestrator import save_datapoint_to_disk
 
-    datapoint = TypeAdapter(DataPoint).validate_python(pending.datapoint)
     table_keys = _extract_table_keys(datapoint)
     if table_keys:
         removed_ids: set[str] = set()
@@ -517,17 +578,47 @@ async def reject_datapoint(
 
 
 @router.post("/datapoints/pending/bulk-approve", response_model=PendingDataPointListResponse)
-async def bulk_approve_datapoints() -> PendingDataPointListResponse:
+async def bulk_approve_datapoints(
+    connection_id: UUID | None = None,
+) -> PendingDataPointListResponse:
     store = _get_store()
     vector_store = _get_vector_store()
     graph = _get_knowledge_graph()
 
-    approved = await store.bulk_update_pending(status="approved")
-
     from backend.models.datapoint import DataPoint
     from backend.sync.orchestrator import save_datapoint_to_disk
 
-    datapoints = [TypeAdapter(DataPoint).validate_python(item.datapoint) for item in approved]
+    pending_items = await store.list_pending(
+        status="pending", connection_id=connection_id
+    )
+    datapoints_by_pending_id: dict[UUID, DataPoint] = {}
+    profile_connection_ids: dict[UUID, UUID] = {}
+    for item in pending_items:
+        try:
+            datapoint = TypeAdapter(DataPoint).validate_python(item.datapoint)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Invalid DataPoint payload in pending item {item.pending_id}: "
+                    f"{exc.errors()[0]['msg']}"
+                ),
+            ) from exc
+        _validate_datapoint_contract_or_400(datapoint)
+        if item.profile_id not in profile_connection_ids:
+            profile = await store.get_profile(item.profile_id)
+            profile_connection_ids[item.profile_id] = profile.connection_id
+        _attach_connection_metadata(datapoint, profile_connection_ids[item.profile_id])
+        datapoints_by_pending_id[item.pending_id] = datapoint
+
+    approved = await store.bulk_update_pending(
+        status="approved", connection_id=connection_id
+    )
+    datapoints = [
+        datapoints_by_pending_id.get(item.pending_id)
+        or TypeAdapter(DataPoint).validate_python(item.datapoint)
+        for item in approved
+    ]
     if datapoints:
         exclude_ids = {datapoint.datapoint_id for datapoint in datapoints}
         removed_ids: set[str] = set()

@@ -86,3 +86,39 @@ class TestDatapointEndpoints:
         assert datapoints[0]["datapoint_id"] == duplicate_id
         assert datapoints[0]["name"] == "Managed Products"
         assert datapoints[0]["source_tier"] == "managed"
+
+    def test_trigger_sync_accepts_database_scope(self, client):
+        orchestrator = AsyncMock()
+        orchestrator.enqueue_sync_all.return_value = "11111111-1111-1111-1111-111111111111"
+
+        with patch("backend.api.routes.datapoints._get_orchestrator", return_value=orchestrator):
+            response = client.post(
+                "/api/v1/sync",
+                json={"scope": "database", "connection_id": "db-123"},
+            )
+
+        assert response.status_code == 200
+        orchestrator.enqueue_sync_all.assert_called_once_with(
+            scope="database", connection_id="db-123"
+        )
+
+    def test_trigger_sync_rejects_database_scope_without_connection(self, client):
+        orchestrator = AsyncMock()
+
+        with patch("backend.api.routes.datapoints._get_orchestrator", return_value=orchestrator):
+            response = client.post("/api/v1/sync", json={"scope": "database"})
+
+        assert response.status_code == 400
+        assert "connection_id is required" in response.json()["detail"]
+
+    def test_trigger_sync_rejects_connection_for_global_scope(self, client):
+        orchestrator = AsyncMock()
+
+        with patch("backend.api.routes.datapoints._get_orchestrator", return_value=orchestrator):
+            response = client.post(
+                "/api/v1/sync",
+                json={"scope": "global", "connection_id": "db-123"},
+            )
+
+        assert response.status_code == 400
+        assert "only allowed when scope=database" in response.json()["detail"]

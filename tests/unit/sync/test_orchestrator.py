@@ -128,3 +128,29 @@ async def test_status_tracking_updates(tmp_path: Path):
     assert status["total_datapoints"] == 1
     assert status["processed_datapoints"] == 1
     assert job.finished_at is not None
+
+
+@pytest.mark.asyncio
+async def test_full_sync_applies_database_scope_metadata(tmp_path: Path):
+    vector_store = AsyncMock()
+    vector_store.clear = AsyncMock()
+    vector_store.add_datapoints = AsyncMock()
+
+    graph = MagicMock()
+    graph.clear = MagicMock()
+    graph.add_datapoint = MagicMock()
+
+    datapoints_dir = tmp_path / "datapoints"
+    _write_datapoint(datapoints_dir / "table_orders_001.json", _schema_datapoint("table_orders_001"))
+
+    orchestrator = SyncOrchestrator(
+        vector_store=vector_store,
+        knowledge_graph=graph,
+        datapoints_dir=datapoints_dir,
+    )
+
+    await orchestrator.sync_all(scope="database", connection_id="conn-fintech")
+
+    synced_datapoints = vector_store.add_datapoints.await_args.args[0]
+    assert synced_datapoints[0].metadata["scope"] == "database"
+    assert synced_datapoints[0].metadata["connection_id"] == "conn-fintech"

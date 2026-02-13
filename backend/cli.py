@@ -62,6 +62,7 @@ from backend.tools.base import ToolContext
 
 console = Console()
 API_BASE_URL = os.getenv("DATA_CHAT_API_URL", "http://localhost:8000")
+ENV_DATABASE_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada"
 
 
 def configure_cli_logging() -> None:
@@ -216,6 +217,29 @@ def _build_postgres_connector(connection_string: str) -> PostgresConnector:
     )
 
 
+def _apply_datapoint_scope(
+    datapoints: list[Any],
+    *,
+    connection_id: str | None = None,
+    global_scope: bool = False,
+) -> None:
+    """
+    Apply retrieval scope metadata to DataPoints in-place.
+
+    - connection_id -> metadata.connection_id=<id>, metadata.scope=database
+    - global_scope -> metadata.scope=global and remove metadata.connection_id
+    """
+    for datapoint in datapoints:
+        metadata = datapoint.metadata if isinstance(datapoint.metadata, dict) else {}
+        if global_scope:
+            metadata["scope"] = "global"
+            metadata.pop("connection_id", None)
+        elif connection_id:
+            metadata["scope"] = "database"
+            metadata["connection_id"] = str(connection_id)
+        datapoint.metadata = metadata
+
+
 def _default_connection_name(connection_string: str) -> str:
     """Build a stable default registry name from connection URL."""
     from urllib.parse import urlparse
@@ -254,7 +278,8 @@ async def _register_cli_connection(
 
     try:
         inferred_type = infer_database_type(connection_string)
-        target_name = name.strip() if name and name.strip() else _default_connection_name(connection_string)
+        explicit_name = name.strip() if name and name.strip() else None
+        target_name = explicit_name or _default_connection_name(connection_string)
         existing = None
         for connection in await manager.list_connections():
             if connection.database_url.get_secret_value() == connection_string:
@@ -263,8 +288,9 @@ async def _register_cli_connection(
 
         if existing is not None:
             updates: dict[str, str | None] = {}
-            if target_name and existing.name != target_name:
-                updates["name"] = target_name
+            # Preserve curated existing names unless user explicitly overrides with --name.
+            if explicit_name and existing.name != explicit_name:
+                updates["name"] = explicit_name
             if existing.database_type != inferred_type:
                 updates["database_type"] = inferred_type
             if updates:
@@ -1655,6 +1681,11 @@ def demo(dataset: str, persona: str, reset: bool, no_workspace: bool):
         datapoints = loader.load_directory(datapoints_dir)
         if not datapoints:
             raise click.ClickException("No demo DataPoints loaded.")
+        _apply_datapoint_scope(
+            datapoints,
+            connection_id=ENV_DATABASE_CONNECTION_ID,
+            global_scope=False,
+        )
 
         vector_store = VectorStore()
         await vector_store.initialize()
@@ -2177,6 +2208,20 @@ def add_datapoint(
     help="Directory containing DataPoint JSON files",
 )
 @click.option(
+    "--connection-id",
+    default=None,
+    help=(
+        "Attach DataPoints to a specific database connection id "
+        "(for per-database retrieval scoping)."
+    ),
+)
+@click.option(
+    "--global-scope",
+    is_flag=True,
+    default=False,
+    help="Mark synced DataPoints as global/shared across all databases.",
+)
+@click.option(
     "--strict-contracts/--no-strict-contracts",
     default=False,
     help="Treat advisory contract gaps as errors.",
@@ -2189,6 +2234,8 @@ def add_datapoint(
 )
 def sync_datapoints(
     datapoints_dir: str,
+    connection_id: str | None,
+    global_scope: bool,
     strict_contracts: bool,
     fail_on_contract_warnings: bool,
 ):
@@ -2219,6 +2266,23 @@ def sync_datapoints(
             if not datapoints:
                 console.print("[yellow]No valid DataPoints found[/yellow]")
                 return
+
+            if connection_id and global_scope:
+                raise click.ClickException(
+                    "--connection-id and --global-scope are mutually exclusive."
+                )
+            if connection_id or global_scope:
+                _apply_datapoint_scope(
+                    datapoints,
+                    connection_id=connection_id,
+                    global_scope=global_scope,
+                )
+                if global_scope:
+                    console.print("[dim]Applied scope: global[/dim]")
+                else:
+                    console.print(
+                        f"[dim]Applied scope: database ({connection_id})[/dim]"
+                    )
 
             console.print(f"[green]✓ Loaded {len(datapoints)} DataPoints[/green]")
             reports = validate_contracts(datapoints, strict=strict_contracts)

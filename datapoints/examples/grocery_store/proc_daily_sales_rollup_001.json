@@ -3,9 +3,16 @@
   "type": "Process",
   "name": "Daily Sales Rollup",
   "owner": "platform-data@example.com",
-  "tags": ["grocery", "sales", "pipeline"],
+  "tags": [
+    "grocery",
+    "sales",
+    "pipeline"
+  ],
   "metadata": {
-    "source": "grocery-seed"
+    "source": "grocery-seed",
+    "grain": "pipeline_execution",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
   },
   "schedule": "15 2 * * *",
   "data_freshness": "Daily by 02:45 local time",

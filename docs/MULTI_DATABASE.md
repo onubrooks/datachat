@@ -110,6 +110,37 @@ curl -X POST http://localhost:8000/api/v1/tools/execute \
 - If `target_database` is provided but registry is unavailable, request fails (no silent fallback).
 - If `target_database` is invalid/unknown, request fails with `400/404`.
 
+## DataPoint Scoping (Important)
+
+DataChat keeps one shared vector index, but retrieval is scoped at runtime:
+
+- Keep DataPoints that match `metadata.connection_id == target_database`
+- Keep explicitly shared/global DataPoints (`metadata.scope=global` or `metadata.shared=true`)
+- If no scoped/global DataPoints are available for a query, legacy unscoped DataPoints can still be used as fallback
+
+To avoid cross-database context bleed, scope DataPoints during sync:
+
+```bash
+# Scope DataPoints to one database connection
+datachat dp sync \
+  --datapoints-dir datapoints/examples/fintech_bank \
+  --connection-id <connection-id>
+```
+
+For intentionally shared reference DataPoints:
+
+```bash
+datachat dp sync \
+  --datapoints-dir datapoints/shared \
+  --global-scope
+```
+
+UI equivalent:
+
+- Open `Database Management` -> `Sync Status`
+- Choose `Scope: selected database` or `Scope: global/shared`
+- Click `Sync Now`
+
 ## Operational Recommendation
 
 Use registry mode for team environments and any setup where accidental default-db execution is risky.

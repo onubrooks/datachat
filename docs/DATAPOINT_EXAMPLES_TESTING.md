@@ -258,6 +258,37 @@ Expected:
 
 - queries execute without DataPoints
 - `answer_source` is `sql` for deterministic metadata intents
+
+## 11) Global/shared DataPoints manual checks
+
+Global reference DataPoints are stored here:
+
+- `datapoints/examples/global_reference`
+
+Load them as shared/global:
+
+```bash
+datachat dp sync --datapoints-dir datapoints/examples/global_reference --global-scope
+```
+
+Or in UI `Database Management`:
+
+1. In `Sync Status`, set `Scope: global/shared`.
+2. Click `Sync Now`.
+
+Then test from **both** grocery and fintech selected databases:
+
+```bash
+datachat ask "How is gross margin calculated?"
+datachat ask "What is loan default rate?"
+datachat ask "Define failed transaction rate."
+```
+
+Expected:
+
+- `answer_source` should be `context` (definition-driven) unless SQL is explicitly required.
+- The same definition intent should work across different selected databases.
+- Global definitions should not force table-specific SQL when no tables are requested.
 - generated SQL uses MySQL-compatible catalog queries (`information_schema.*`)
 
 Optional automated check:

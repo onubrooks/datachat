@@ -139,6 +139,7 @@ def run_release_gate(config: dict[str, Any], api_base: str) -> int:
     failures = 0
     intent_latency_values: list[float] = []
     intent_llm_values: list[float] = []
+    intent_eval_runs = 0
 
     for run in eval_runs:
         command = _build_eval_command(
@@ -154,32 +155,63 @@ def run_release_gate(config: dict[str, Any], api_base: str) -> int:
             continue
 
         if run["mode"] == "intent":
+            intent_eval_runs += 1
             latency = _parse_metric(result.stdout, r"Avg latency:\s*([0-9.]+)ms")
             llm_calls = _parse_metric(result.stdout, r"Avg LLM calls:\s*([0-9.]+)")
             if latency is not None:
                 intent_latency_values.append(latency)
+            elif release_config.get("intent_avg_latency_ms_max") is not None:
+                failures += 1
+                print(
+                    "Intent latency metric missing from eval output. "
+                    "Cannot verify intent_avg_latency_ms_max."
+                )
             if llm_calls is not None:
                 intent_llm_values.append(llm_calls)
+            elif release_config.get("intent_avg_llm_calls_max") is not None:
+                failures += 1
+                print(
+                    "Intent LLM-call metric missing from eval output. "
+                    "Cannot verify intent_avg_llm_calls_max."
+                )
 
     max_latency = release_config.get("intent_avg_latency_ms_max")
-    if max_latency is not None and intent_latency_values:
-        measured = max(intent_latency_values)
-        if measured > float(max_latency):
+    if max_latency is not None:
+        if intent_eval_runs == 0:
             failures += 1
             print(
-                "Intent latency threshold failed: "
-                f"{measured:.1f}ms > {float(max_latency):.1f}ms"
+                "Intent latency threshold configured but no intent eval run was executed."
             )
+        elif not intent_latency_values:
+            failures += 1
+            print("Intent latency threshold configured but no parseable latency metric was found.")
+        else:
+            measured = max(intent_latency_values)
+            if measured > float(max_latency):
+                failures += 1
+                print(
+                    "Intent latency threshold failed: "
+                    f"{measured:.1f}ms > {float(max_latency):.1f}ms"
+                )
 
     max_llm_calls = release_config.get("intent_avg_llm_calls_max")
-    if max_llm_calls is not None and intent_llm_values:
-        measured = max(intent_llm_values)
-        if measured > float(max_llm_calls):
+    if max_llm_calls is not None:
+        if intent_eval_runs == 0:
             failures += 1
             print(
-                "Intent LLM-call threshold failed: "
-                f"{measured:.2f} > {float(max_llm_calls):.2f}"
+                "Intent LLM-call threshold configured but no intent eval run was executed."
             )
+        elif not intent_llm_values:
+            failures += 1
+            print("Intent LLM-call threshold configured but no parseable LLM metric was found.")
+        else:
+            measured = max(intent_llm_values)
+            if measured > float(max_llm_calls):
+                failures += 1
+                print(
+                    "Intent LLM-call threshold failed: "
+                    f"{measured:.2f} > {float(max_llm_calls):.2f}"
+                )
 
     if failures:
         print(f"\nRelease KPI gate failed: {failures} checks failed.")

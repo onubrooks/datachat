@@ -47,6 +47,8 @@ export function DatabaseManager() {
   const [generationJob, setGenerationJob] = useState<GenerationJob | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncScopeMode, setSyncScopeMode] = useState<"auto" | "global" | "database">("auto");
+  const [syncScopeConnectionId, setSyncScopeConnectionId] = useState<string | null>(null);
   const [expandedPendingId, setExpandedPendingId] = useState<string | null>(null);
   const [pendingEdits, setPendingEdits] = useState<Record<string, string>>({});
   const [isGenerating, setIsGenerating] = useState(false);
@@ -55,7 +57,7 @@ export function DatabaseManager() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
-  const [preserveApprovedOnEmpty, setPreserveApprovedOnEmpty] = useState(true);
+  const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
@@ -82,7 +84,7 @@ export function DatabaseManager() {
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [depth, setDepth] = useState("metrics_basic");
 
-  const dedupeApproved = (items: DataPointSummary[]) => {
+  const dedupeApproved = useCallback((items: DataPointSummary[]) => {
     const seen = new Map<string, DataPointSummary>();
     for (const item of items) {
       const key = String(item.datapoint_id);
@@ -91,7 +93,19 @@ export function DatabaseManager() {
       }
     }
     return Array.from(seen.values());
-  };
+  }, []);
+
+  const mapPendingToSummary = useCallback(
+    (items: PendingDataPoint[]): DataPointSummary[] =>
+      dedupeApproved(
+        items.map((item) => ({
+          datapoint_id: String(item.datapoint.datapoint_id || item.pending_id),
+          type: String(item.datapoint.type || "Unknown"),
+          name: item.datapoint.name ? String(item.datapoint.name) : null,
+        }))
+      ),
+    [dedupeApproved]
+  );
 
   const showNotice = (message: string) => {
     setNotice(message);
@@ -128,10 +142,24 @@ export function DatabaseManager() {
     }
 
     if (dbs.length > 0) {
+      const hasExistingSelection = !!selectedConnectionId && dbs.some(
+        (item) => item.connection_id === selectedConnectionId
+      );
+      const resolvedConnectionId = hasExistingSelection
+        ? selectedConnectionId
+        : (dbs.find((item) => item.is_default) || dbs[0]).connection_id;
+      if (resolvedConnectionId !== selectedConnectionId) {
+        setSelectedConnectionId(resolvedConnectionId);
+      }
+      const selectedConnection = dbs.find(
+        (item) => item.connection_id === resolvedConnectionId
+      );
+
       try {
-        const defaultConnection = dbs.find((item) => item.is_default) || dbs[0];
-        if (!isEnvironmentConnection(defaultConnection)) {
-          const latestJob = await api.getLatestProfilingJob(defaultConnection.connection_id);
+        if (selectedConnection && !isEnvironmentConnection(selectedConnection)) {
+          const latestJob = await api.getLatestProfilingJob(
+            selectedConnection.connection_id
+          );
           setJob(latestJob);
         } else {
           setJob(null);
@@ -139,60 +167,64 @@ export function DatabaseManager() {
       } catch (err) {
         latestError = latestError || ((err as Error).message);
       }
+
+      if (selectedConnection && !isEnvironmentConnection(selectedConnection)) {
+        const [pendingResult, approvedResult] = await Promise.allSettled([
+          api.listPendingDatapoints({
+            statusFilter: "pending",
+            connectionId: selectedConnection.connection_id,
+          }),
+          api.listPendingDatapoints({
+            statusFilter: "approved",
+            connectionId: selectedConnection.connection_id,
+          }),
+        ]);
+
+        if (pendingResult.status === "fulfilled") {
+          setPending(pendingResult.value);
+        } else {
+          latestError =
+            latestError ||
+            (pendingResult.reason instanceof Error
+              ? pendingResult.reason.message
+              : String(pendingResult.reason));
+          setPending([]);
+        }
+
+        if (approvedResult.status === "fulfilled") {
+          setApproved(mapPendingToSummary(approvedResult.value));
+        } else {
+          latestError =
+            latestError ||
+            (approvedResult.reason instanceof Error
+              ? approvedResult.reason.message
+              : String(approvedResult.reason));
+          setApproved([]);
+        }
+      } else {
+        setPending([]);
+        setApproved([]);
+      }
     } else {
+      if (selectedConnectionId !== null) {
+        setSelectedConnectionId(null);
+      }
       setJob(null);
+      setPending([]);
+      setApproved([]);
+    }
+
+    try {
+      const status = await api.getSyncStatus();
+      setSyncStatus(status);
+      setSyncError(null);
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : String(err));
     }
 
     setIsLoading(false);
-
-    const [pendingResult, approvedResult, syncResult] = await Promise.allSettled([
-      api.listPendingDatapoints(),
-      api.listDatapoints(),
-      api.getSyncStatus(),
-    ]);
-
-    if (pendingResult.status === "fulfilled") {
-      setPending(pendingResult.value);
-    } else {
-      latestError =
-        latestError ||
-        (pendingResult.reason instanceof Error
-          ? pendingResult.reason.message
-          : String(pendingResult.reason));
-      setPending([]);
-    }
-
-    if (approvedResult.status === "fulfilled") {
-      const approvedPoints = approvedResult.value;
-      setApproved((current) =>
-        approvedPoints.length > 0 || !preserveApprovedOnEmpty
-          ? dedupeApproved(approvedPoints)
-          : current
-      );
-      if (approvedPoints.length > 0) {
-        setPreserveApprovedOnEmpty(true);
-      }
-    } else {
-      latestError =
-        latestError ||
-        (approvedResult.reason instanceof Error
-          ? approvedResult.reason.message
-          : String(approvedResult.reason));
-    }
-
-    if (syncResult.status === "fulfilled") {
-      setSyncStatus(syncResult.value);
-      setSyncError(null);
-    } else {
-      setSyncError(
-        syncResult.reason instanceof Error
-          ? syncResult.reason.message
-          : String(syncResult.reason)
-      );
-    }
-
     setError(latestError);
-  }, [preserveApprovedOnEmpty]);
+  }, [mapPendingToSummary, selectedConnectionId]);
 
   const handleToolProfile = async () => {
     setToolApprovalOpen(true);
@@ -254,6 +286,22 @@ export function DatabaseManager() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!connections.length) {
+      setSyncScopeConnectionId(null);
+      return;
+    }
+    if (
+      syncScopeConnectionId &&
+      connections.some((connection) => connection.connection_id === syncScopeConnectionId)
+    ) {
+      return;
+    }
+    const defaultConnection =
+      connections.find((connection) => connection.is_default) || connections[0];
+    setSyncScopeConnectionId(defaultConnection.connection_id);
+  }, [connections, syncScopeConnectionId]);
 
   useEffect(() => {
     if (!job || job.status === "completed" || job.status === "failed") {
@@ -409,6 +457,7 @@ export function DatabaseManager() {
       return;
     }
     try {
+      setSelectedConnectionId(connectionId);
       const started = await api.startProfiling(connectionId, {
         sample_size: 100,
       });
@@ -584,7 +633,11 @@ export function DatabaseManager() {
     setIsBulkApproving(true);
     const snapshot = pending;
     try {
-      const approved = await api.bulkApproveDatapoints();
+      const scopeConnectionId =
+        selectedConnection && !isEnvironmentConnection(selectedConnection)
+          ? selectedConnection.connection_id
+          : null;
+      const approved = await api.bulkApproveDatapoints(scopeConnectionId);
       if (approved.length) {
         setPending([]);
         setApproved((current) => [
@@ -600,7 +653,7 @@ export function DatabaseManager() {
             index
         ));
         showNotice(
-          `Approved ${approved.length} DataPoints. Existing DataPoints for the same tables were replaced.`
+          `Approved ${approved.length} DataPoints for ${selectedConnection?.name || "selected source"}. Existing DataPoints for the same tables were replaced.`
         );
       }
       await refresh();
@@ -626,7 +679,13 @@ export function DatabaseManager() {
     setSyncError(null);
     setIsSyncing(true);
     try {
-      await api.triggerSync();
+      if (syncScopeMode === "database" && !syncScopeConnectionId) {
+        throw new Error("Select a connection for database-scoped sync.");
+      }
+      await api.triggerSync({
+        scope: syncScopeMode,
+        connection_id: syncScopeMode === "database" ? syncScopeConnectionId : null,
+      });
       const status = await api.getSyncStatus();
       setSyncStatus(status);
     } catch (err) {
@@ -648,7 +707,7 @@ export function DatabaseManager() {
     setError(null);
     try {
       await api.systemReset();
-      setPreserveApprovedOnEmpty(false);
+      setSelectedConnectionId(null);
       setApproved([]);
       setPending([]);
       await refresh();
@@ -674,6 +733,10 @@ export function DatabaseManager() {
       }));
     }
   };
+
+  const selectedConnection = connections.find(
+    (connection) => connection.connection_id === selectedConnectionId
+  );
 
   return (
     <div className="space-y-6 p-6">
@@ -901,6 +964,38 @@ export function DatabaseManager() {
       </Card>
 
       <Card className="p-4 space-y-3">
+        <h2 className="text-sm font-semibold">Active Data Source</h2>
+        <p className="text-xs text-muted-foreground">
+          Pending and approved profiling DataPoints are scoped to this connection.
+        </p>
+        <select
+          className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+          value={selectedConnectionId || ""}
+          onChange={(event) => setSelectedConnectionId(event.target.value || null)}
+          aria-label="Active Data Source"
+        >
+          {connections.map((connection) => (
+            <option key={connection.connection_id} value={connection.connection_id}>
+              {connection.name} ({connection.database_type})
+              {connection.is_default ? " · default" : ""}
+              {isEnvironmentConnection(connection) ? " · env" : ""}
+            </option>
+          ))}
+        </select>
+        {!selectedConnection && (
+          <p className="text-xs text-muted-foreground">
+            No connection selected.
+          </p>
+        )}
+        {selectedConnection && isEnvironmentConnection(selectedConnection) && (
+          <p className="text-xs text-muted-foreground">
+            Environment connection is chat-only here. Profiling draft DataPoints are available
+            on managed connections.
+          </p>
+        )}
+      </Card>
+
+      <Card className="p-4 space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold">Sync Status</h2>
           <Button
@@ -914,6 +1009,38 @@ export function DatabaseManager() {
                 ? "Sync Again"
                 : "Sync Now"}
           </Button>
+        </div>
+        <div className="grid gap-2 md:grid-cols-2">
+          <select
+            className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+            value={syncScopeMode}
+            onChange={(event) =>
+              setSyncScopeMode(event.target.value as "auto" | "global" | "database")
+            }
+            aria-label="Sync Scope"
+          >
+            <option value="auto">Scope: keep file metadata (auto)</option>
+            <option value="database">Scope: selected database</option>
+            <option value="global">Scope: global/shared</option>
+          </select>
+          <select
+            className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+            value={syncScopeConnectionId || ""}
+            onChange={(event) => setSyncScopeConnectionId(event.target.value || null)}
+            aria-label="Sync Scope Connection"
+            disabled={syncScopeMode !== "database"}
+          >
+            {connections.map((connection) => (
+              <option key={connection.connection_id} value={connection.connection_id}>
+                {connection.name} ({connection.database_type})
+                {connection.is_default ? " · default" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="text-xs text-muted-foreground">
+          Database scope stamps synced DataPoints with a connection id.
+          Global scope marks them shared across all databases.
         </div>
         {job && (
           <div className="rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
@@ -1122,10 +1249,17 @@ export function DatabaseManager() {
 
       <Card className="p-4 space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Approved DataPoints</h2>
+          <h2 className="text-sm font-semibold">
+            Approved DataPoints (Selected Source)
+          </h2>
           <div className="text-xs text-muted-foreground">
             {approved.length} total
           </div>
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {selectedConnection
+            ? `Showing approved profiling DataPoints for ${selectedConnection.name}.`
+            : "Select a connection to view approved profiling DataPoints."}
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Button
@@ -1220,7 +1354,7 @@ export function DatabaseManager() {
         )}
         {approved.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            No approved DataPoints yet.
+            No approved DataPoints found for the selected source.
           </p>
         )}
         {approved.length > 0 && (
@@ -1241,16 +1375,30 @@ export function DatabaseManager() {
 
       <Card className="p-4 space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Pending DataPoints</h2>
+          <h2 className="text-sm font-semibold">
+            Pending DataPoints (Selected Source)
+          </h2>
           <Button
             onClick={handleBulkApprove}
-            disabled={pending.length === 0 || isBulkApproving}
+            disabled={
+              pending.length === 0 ||
+              isBulkApproving ||
+              !selectedConnection ||
+              isEnvironmentConnection(selectedConnection)
+            }
           >
             {isBulkApproving ? "Approving..." : "Bulk Approve"}
           </Button>
         </div>
+        {selectedConnection && isEnvironmentConnection(selectedConnection) && (
+          <p className="text-xs text-muted-foreground">
+            Select a managed connection to review pending profiling DataPoints.
+          </p>
+        )}
         {pending.length === 0 && (
-          <p className="text-sm text-muted-foreground">No pending DataPoints.</p>
+          <p className="text-sm text-muted-foreground">
+            No pending DataPoints for the selected source.
+          </p>
         )}
         <div className="space-y-3">
           {pending.map((item) => (

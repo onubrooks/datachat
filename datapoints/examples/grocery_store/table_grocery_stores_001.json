@@ -3,9 +3,16 @@
   "type": "Schema",
   "name": "Grocery Stores",
   "owner": "ops-data@example.com",
-  "tags": ["grocery", "stores", "dimension"],
+  "tags": [
+    "grocery",
+    "stores",
+    "dimension"
+  ],
   "metadata": {
-    "source": "grocery-seed"
+    "source": "grocery-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
   },
   "table_name": "public.grocery_stores",
   "schema": "public",
