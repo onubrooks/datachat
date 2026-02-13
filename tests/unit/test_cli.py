@@ -382,6 +382,35 @@ class TestConnectCommand:
             assert result.exit_code == 0
             assert "5432" in result.output  # Default port
 
+    def test_connect_registers_in_registry_by_default(self, runner):
+        """Connect should attempt registry registration for UI/CLI parity."""
+        with patch(
+            "backend.cli._register_cli_connection",
+            new=AsyncMock(return_value=(True, "Registry: added connection abc")),
+        ) as register_mock:
+            result = runner.invoke(
+                connect,
+                ["postgresql://user:pass@localhost:5432/testdb"],
+            )
+
+        assert result.exit_code == 0
+        assert "Registry: added connection abc" in result.output
+        register_mock.assert_awaited_once()
+
+    def test_connect_skips_registry_with_flag(self, runner):
+        """Connect should skip registry registration when explicitly disabled."""
+        with patch(
+            "backend.cli._register_cli_connection",
+            new=AsyncMock(return_value=(True, "Registry: added connection abc")),
+        ) as register_mock:
+            result = runner.invoke(
+                connect,
+                ["--no-register", "postgresql://user:pass@localhost:5432/testdb"],
+            )
+
+        assert result.exit_code == 0
+        register_mock.assert_not_awaited()
+
 
 class TestAskCommand:
     """Test ask command."""

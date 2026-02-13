@@ -427,7 +427,8 @@ export function DatabaseManager() {
     }
     setEditingConnectionId(connection.connection_id);
     setEditingName(connection.name);
-    setEditingDatabaseUrl(connection.database_url);
+    // Secret URLs are masked in API responses; leave empty unless user provides a new URL.
+    setEditingDatabaseUrl("");
     setEditingDatabaseType(connection.database_type);
     setEditingDescription(connection.description || "");
   };
@@ -445,12 +446,25 @@ export function DatabaseManager() {
     setError(null);
     setIsSavingEdit(true);
     try {
-      await api.updateDatabase(editingConnectionId, {
-        name: editingName.trim(),
-        database_url: editingDatabaseUrl.trim(),
-        database_type: editingDatabaseType,
-        description: editingDescription.trim() || null,
-      });
+      const payload: {
+        name?: string;
+        database_url?: string;
+        database_type?: string;
+        description?: string | null;
+      } = {};
+      if (editingName.trim()) {
+        payload.name = editingName.trim();
+      }
+      if (editingDescription.trim()) {
+        payload.description = editingDescription.trim();
+      } else {
+        payload.description = null;
+      }
+      if (editingDatabaseUrl.trim()) {
+        payload.database_url = editingDatabaseUrl.trim();
+        payload.database_type = editingDatabaseType;
+      }
+      await api.updateDatabase(editingConnectionId, payload);
       showNotice("Connection updated successfully.");
       handleCancelEdit();
       await refresh();
@@ -834,7 +848,7 @@ export function DatabaseManager() {
                       onChange={(event) => setEditingName(event.target.value)}
                     />
                     <Input
-                      placeholder="postgresql://user:pass@host:5432/db"
+                      placeholder="Leave blank to keep current URL"
                       value={editingDatabaseUrl}
                       onChange={(event) => {
                         const nextUrl = event.target.value;
@@ -866,8 +880,7 @@ export function DatabaseManager() {
                       onClick={handleSaveEdit}
                       disabled={
                         isSavingEdit ||
-                        !editingName.trim() ||
-                        !editingDatabaseUrl.trim()
+                        !editingName.trim()
                       }
                     >
                       {isSavingEdit ? "Saving..." : "Save"}
