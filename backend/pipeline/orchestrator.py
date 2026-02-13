@@ -1780,6 +1780,7 @@ class DataChatPipeline:
                 "metric": None,
                 "time_range": None,
             },
+            "target_subquery_index": None,
         }
 
         if not history:
@@ -1817,6 +1818,18 @@ class DataChatPipeline:
 
         if previous_user_text:
             summary["last_goal"] = previous_user_text
+
+        target_subquery_index = None
+        for question in last_clarifying_questions:
+            target_subquery_index = self._extract_subquery_index(question)
+            if target_subquery_index:
+                break
+        if target_subquery_index and previous_user_text:
+            split_prior = self._split_multi_query(previous_user_text)
+            if 1 <= target_subquery_index <= len(split_prior):
+                previous_user_text = split_prior[target_subquery_index - 1]
+                summary["last_goal"] = previous_user_text
+                summary["target_subquery_index"] = target_subquery_index
 
         if last_clarifying_questions and self._is_short_followup(query):
             cleaned_hint = self._clean_hint(query)
@@ -1875,6 +1888,8 @@ class DataChatPipeline:
         questions = summary.get("last_clarifying_questions") or []
         if questions:
             parts.append(f"last_questions={'; '.join(questions[:2])}")
+        if summary.get("target_subquery_index"):
+            parts.append(f"target_subquery=Q{summary['target_subquery_index']}")
         if not parts:
             return None
         return "Intent summary: " + " | ".join(parts)
@@ -2564,7 +2579,8 @@ class DataChatPipeline:
             parts = [segment for segment in parts if segment]
         if len(parts) <= 1:
             connector_split = re.split(
-                r"\s+(?:and then|then|also|plus)\s+",
+                r"\s+(?:and then|then|also|plus|and)\s+"
+                r"(?=(?:what|how|show|list|give|define|explain|which|who|where|when|is|are|do|does|count|sum)\b)",
                 text,
                 flags=re.IGNORECASE,
             )
@@ -2584,6 +2600,16 @@ class DataChatPipeline:
         if len(normalized) <= 1:
             return [text]
         return normalized
+
+    def _extract_subquery_index(self, text: str) -> int | None:
+        match = re.search(r"\[q(\d+)\]", text.strip(), flags=re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            value = int(match.group(1))
+        except ValueError:
+            return None
+        return value if value > 0 else None
 
     async def _run_single_query(
         self,

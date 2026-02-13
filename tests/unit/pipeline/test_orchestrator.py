@@ -257,6 +257,31 @@ class TestPipelineExecution:
 
         assert [item["datapoint_id"] for item in filtered] == ["metric_fintech_1"]
 
+    def test_split_multi_query_avoids_false_split_for_single_analytic_request(self, pipeline):
+        parts = pipeline._split_multi_query("Show gross margin and net margin by category")
+        assert parts == ["Show gross margin and net margin by category"]
+
+    def test_split_multi_query_splits_when_second_clause_is_new_intent(self, pipeline):
+        parts = pipeline._split_multi_query("List tables and show columns in customers")
+        assert parts == ["List tables", "show columns in customers"]
+
+    def test_clarification_followup_targets_tagged_subquery(self, pipeline):
+        history = [
+            {"role": "user", "content": "List tables and show columns"},
+            {
+                "role": "assistant",
+                "content": (
+                    "I need a bit more detail to generate SQL:\n"
+                    "- [Q2] Which table should I list columns for?"
+                ),
+            },
+        ]
+
+        summary = pipeline._build_intent_summary("customers", history)
+
+        assert summary["target_subquery_index"] == 2
+        assert summary["resolved_query"] == "Show columns in customers"
+
     def test_filter_datapoints_by_target_connection(self, pipeline):
         datapoints = [
             {
