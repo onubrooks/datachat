@@ -27,6 +27,7 @@ Planned (not yet implemented as full product features):
 - `MULTI_DATABASE.md` - connection registry and per-request routing.
 - `LEVELS.md` - maturity model with implementation status.
 - `PRD.md` - delivery-tracking PRD (shipped vs planned).
+- `CAPABILITY_CONTRACT.md` - shipped runtime capability matrix (supported/partial/planned).
 - `METADATAOPS_FOUNDATION.md` - philosophy, priorities, and contributor alignment for metadata quality + observability.
 - `PHASE1_KPI_GATES.md` - CI and release KPI gates for Phase 1 operational hardening.
 - `OPERATIONS.md` - deployment and operational guidance.

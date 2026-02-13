@@ -167,6 +167,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             tool_approval_calls=result.get("tool_approval_calls", []),
             metrics=metrics,
             conversation_id=conversation_id,
+            sub_answers=result.get("sub_answers", []),
         )
 
         logger.info(
@@ -297,6 +298,7 @@ def _resolve_answer_confidence(result: dict[str, Any], source: str) -> float:
         "clarification": 0.2,
         "system": 0.8,
         "approval": 0.5,
+        "multi": 0.65,
         "error": 0.0,
     }
     return defaults.get(source, 0.5)

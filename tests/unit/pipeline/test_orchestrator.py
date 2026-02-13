@@ -220,6 +220,16 @@ class TestPipelineExecution:
         assert result["query_result"]["row_count"] == 1
 
     @pytest.mark.asyncio
+    async def test_pipeline_decomposes_multi_question_prompt(self, mock_agents):
+        result = await mock_agents.run("Show me top rows? What is total revenue?")
+
+        assert len(result.get("sub_answers", [])) == 2
+        assert "multiple questions" in result["natural_language_answer"].lower()
+        assert result["answer_source"] == "multi"
+        assert mock_agents.classifier.execute.await_count == 2
+        assert mock_agents.sql.execute.await_count == 2
+
+    @pytest.mark.asyncio
     async def test_filter_datapoints_by_live_schema_uses_related_tables(self, pipeline):
         datapoints = [
             {
