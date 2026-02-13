@@ -11,6 +11,16 @@ import type { ChatMessage, ChatResponse, AgentUpdate } from "../api";
 export interface Message extends ChatMessage {
   id: string;
   timestamp: Date;
+  sub_answers?: Array<{
+    index: number;
+    query: string;
+    answer: string;
+    answer_source?: string | null;
+    answer_confidence?: number | null;
+    sql?: string | null;
+    clarifying_questions?: string[];
+    error?: string | null;
+  }>;
   sql?: string | null;
   data?: Record<string, unknown[]> | null;
   visualization_hint?: string | null;
@@ -228,6 +238,7 @@ export const useChatStore = create<ChatState>()(
         content: response.answer,
         timestamp: new Date(),
         clarifying_questions: response.clarifying_questions,
+        sub_answers: response.sub_answers,
         sql: response.sql,
         data: response.data,
         visualization_hint: response.visualization_hint,

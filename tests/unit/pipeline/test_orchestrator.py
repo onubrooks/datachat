@@ -220,6 +220,16 @@ class TestPipelineExecution:
         assert result["query_result"]["row_count"] == 1
 
     @pytest.mark.asyncio
+    async def test_pipeline_decomposes_multi_question_prompt(self, mock_agents):
+        result = await mock_agents.run("Show me top rows? What is total revenue?")
+
+        assert len(result.get("sub_answers", [])) == 2
+        assert "multiple questions" in result["natural_language_answer"].lower()
+        assert result["answer_source"] == "multi"
+        assert mock_agents.classifier.execute.await_count == 2
+        assert mock_agents.sql.execute.await_count == 2
+
+    @pytest.mark.asyncio
     async def test_filter_datapoints_by_live_schema_uses_related_tables(self, pipeline):
         datapoints = [
             {
@@ -246,6 +256,31 @@ class TestPipelineExecution:
         )
 
         assert [item["datapoint_id"] for item in filtered] == ["metric_fintech_1"]
+
+    def test_split_multi_query_avoids_false_split_for_single_analytic_request(self, pipeline):
+        parts = pipeline._split_multi_query("Show gross margin and net margin by category")
+        assert parts == ["Show gross margin and net margin by category"]
+
+    def test_split_multi_query_splits_when_second_clause_is_new_intent(self, pipeline):
+        parts = pipeline._split_multi_query("List tables and show columns in customers")
+        assert parts == ["List tables", "show columns in customers"]
+
+    def test_clarification_followup_targets_tagged_subquery(self, pipeline):
+        history = [
+            {"role": "user", "content": "List tables and show columns"},
+            {
+                "role": "assistant",
+                "content": (
+                    "I need a bit more detail to generate SQL:\n"
+                    "- [Q2] Which table should I list columns for?"
+                ),
+            },
+        ]
+
+        summary = pipeline._build_intent_summary("customers", history)
+
+        assert summary["target_subquery_index"] == 2
+        assert summary["resolved_query"] == "Show columns in customers"
 
     def test_filter_datapoints_by_target_connection(self, pipeline):
         datapoints = [

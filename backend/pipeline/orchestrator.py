@@ -146,6 +146,7 @@ class PipelineState(TypedDict, total=False):
     agent_timings: dict[str, float]
     llm_calls: int
     schema_refresh_attempted: bool
+    sub_answers: list[dict[str, Any]]
 
 
 # ============================================================================
@@ -219,6 +220,7 @@ class DataChatPipeline:
         self.tooling_enabled = self.config.tools.enabled
         self.tool_planner_enabled = self.config.tools.planner_enabled
         initialize_tools(self.config.tools.policy_path)
+        self.max_subqueries = 3
 
         # Build LangGraph
         self.graph = self._build_graph()
@@ -1778,6 +1780,7 @@ class DataChatPipeline:
                 "metric": None,
                 "time_range": None,
             },
+            "target_subquery_index": None,
         }
 
         if not history:
@@ -1815,6 +1818,18 @@ class DataChatPipeline:
 
         if previous_user_text:
             summary["last_goal"] = previous_user_text
+
+        target_subquery_index = None
+        for question in last_clarifying_questions:
+            target_subquery_index = self._extract_subquery_index(question)
+            if target_subquery_index:
+                break
+        if target_subquery_index and previous_user_text:
+            split_prior = self._split_multi_query(previous_user_text)
+            if 1 <= target_subquery_index <= len(split_prior):
+                previous_user_text = split_prior[target_subquery_index - 1]
+                summary["last_goal"] = previous_user_text
+                summary["target_subquery_index"] = target_subquery_index
 
         if last_clarifying_questions and self._is_short_followup(query):
             cleaned_hint = self._clean_hint(query)
@@ -1873,6 +1888,8 @@ class DataChatPipeline:
         questions = summary.get("last_clarifying_questions") or []
         if questions:
             parts.append(f"last_questions={'; '.join(questions[:2])}")
+        if summary.get("target_subquery_index"):
+            parts.append(f"target_subquery=Q{summary['target_subquery_index']}")
         if not parts:
             return None
         return "Intent summary: " + " | ".join(parts)
@@ -2482,6 +2499,263 @@ class DataChatPipeline:
             content = str(getattr(msg, "content", ""))
         return role, content.strip()
 
+    def _build_initial_state(
+        self,
+        *,
+        query: str,
+        conversation_history: list[Message] | None,
+        database_type: str,
+        database_url: str | None,
+        target_connection_id: str | None,
+        synthesize_simple_sql: bool | None,
+        correlation_prefix: str,
+    ) -> PipelineState:
+        return {
+            "query": query,
+            "original_query": None,
+            "conversation_history": conversation_history or [],
+            "database_type": database_type,
+            "database_url": database_url,
+            "target_connection_id": target_connection_id,
+            "user_id": "anonymous",
+            "correlation_id": f"{correlation_prefix}-{int(time.time() * 1000)}",
+            "tool_approved": False,
+            "intent_gate": None,
+            "intent_summary": None,
+            "clarification_turn_count": 0,
+            "clarification_limit": self.max_clarifications,
+            "fast_path": False,
+            "skip_response_synthesis": False,
+            "synthesize_simple_sql": synthesize_simple_sql,
+            "current_agent": None,
+            "error": None,
+            "total_cost": 0.0,
+            "total_latency_ms": 0.0,
+            "agent_timings": {},
+            "llm_calls": 0,
+            "retry_count": 0,
+            "retries_exhausted": False,
+            "clarification_needed": False,
+            "clarifying_questions": [],
+            "entities": [],
+            "validation_passed": False,
+            "validation_errors": [],
+            "validation_warnings": [],
+            "key_insights": [],
+            "used_datapoints": [],
+            "assumptions": [],
+            "sql_formatter_fallback_calls": 0,
+            "sql_formatter_fallback_successes": 0,
+            "investigation_memory": None,
+            "retrieved_datapoints": [],
+            "context_confidence": None,
+            "context_needs_sql": None,
+            "context_preface": None,
+            "context_evidence": [],
+            "answer_source": None,
+            "answer_confidence": None,
+            "evidence": [],
+            "tool_plan": None,
+            "tool_calls": [],
+            "tool_results": [],
+            "tool_error": None,
+            "tool_used": False,
+            "tool_approval_required": False,
+            "tool_approval_message": None,
+            "tool_approval_calls": [],
+            "sub_answers": [],
+        }
+
+    def _split_multi_query(self, query: str) -> list[str]:
+        text = (query or "").strip()
+        if not text:
+            return []
+        if len(text) < 20:
+            return [text]
+
+        parts: list[str] = []
+        if text.count("?") >= 1:
+            parts = [segment.strip(" ?\n\t") for segment in re.split(r"\?\s*", text)]
+            parts = [segment for segment in parts if segment]
+        if len(parts) <= 1:
+            connector_split = re.split(
+                r"\s+(?:and then|then|also|plus|and)\s+"
+                r"(?=(?:what|how|show|list|give|define|explain|which|who|where|when|is|are|do|does|count|sum)\b)",
+                text,
+                flags=re.IGNORECASE,
+            )
+            connector_split = [segment.strip(" .") for segment in connector_split if segment.strip()]
+            if len(connector_split) > 1:
+                parts = connector_split
+
+        if len(parts) <= 1:
+            return [text]
+
+        normalized: list[str] = []
+        for part in parts[: self.max_subqueries]:
+            candidate = part.strip(" .")
+            if not candidate or len(candidate) < 4:
+                continue
+            normalized.append(candidate)
+        if len(normalized) <= 1:
+            return [text]
+        return normalized
+
+    def _extract_subquery_index(self, text: str) -> int | None:
+        match = re.search(r"\[q(\d+)\]", text.strip(), flags=re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            value = int(match.group(1))
+        except ValueError:
+            return None
+        return value if value > 0 else None
+
+    async def _run_single_query(
+        self,
+        *,
+        query: str,
+        conversation_history: list[Message] | None = None,
+        database_type: str = "postgresql",
+        database_url: str | None = None,
+        target_connection_id: str | None = None,
+        synthesize_simple_sql: bool | None = None,
+    ) -> PipelineState:
+        initial_state = self._build_initial_state(
+            query=query,
+            conversation_history=conversation_history,
+            database_type=database_type,
+            database_url=database_url,
+            target_connection_id=target_connection_id,
+            synthesize_simple_sql=synthesize_simple_sql,
+            correlation_prefix="local",
+        )
+
+        logger.info(f"Starting pipeline for query: {query[:100]}...")
+        start_time = time.time()
+        result = await self.graph.ainvoke(initial_state)
+        self._normalize_answer_metadata(result)
+        total_time = (time.time() - start_time) * 1000
+        logger.info(
+            f"Pipeline complete in {total_time:.1f}ms ({result.get('llm_calls', 0)} LLM calls)"
+        )
+        return result
+
+    def _build_sub_answer(self, index: int, query: str, result: PipelineState) -> dict[str, Any]:
+        answer = result.get("natural_language_answer")
+        if not answer:
+            if result.get("error"):
+                answer = f"I encountered an error: {result.get('error')}"
+            else:
+                answer = "No answer generated"
+        return {
+            "index": index,
+            "query": query,
+            "answer": answer,
+            "answer_source": result.get("answer_source"),
+            "answer_confidence": result.get("answer_confidence"),
+            "sql": result.get("validated_sql") or result.get("generated_sql"),
+            "clarifying_questions": result.get("clarifying_questions", []),
+            "error": result.get("error"),
+        }
+
+    def _aggregate_multi_results(
+        self,
+        *,
+        original_query: str,
+        sub_results: list[PipelineState],
+        sub_answers: list[dict[str, Any]],
+        conversation_history: list[Message] | None,
+        database_type: str,
+        database_url: str | None,
+        target_connection_id: str | None,
+        synthesize_simple_sql: bool | None,
+    ) -> PipelineState:
+        merged = self._build_initial_state(
+            query=original_query,
+            conversation_history=conversation_history,
+            database_type=database_type,
+            database_url=database_url,
+            target_connection_id=target_connection_id,
+            synthesize_simple_sql=synthesize_simple_sql,
+            correlation_prefix="local",
+        )
+        merged["sub_answers"] = sub_answers
+
+        section_lines = ["I handled your request as multiple questions:"]
+        for item in sub_answers:
+            section_lines.append(f"\n{item['index']}. {item['query']}")
+            section_lines.append(str(item.get("answer") or "No answer generated"))
+        merged["natural_language_answer"] = "\n".join(section_lines).strip()
+
+        clarifications: list[str] = []
+        for item in sub_answers:
+            for question in item.get("clarifying_questions", []):
+                clarifications.append(f"[Q{item['index']}] {question}")
+        merged["clarifying_questions"] = clarifications
+        merged["clarification_needed"] = bool(clarifications)
+
+        merged["answer_source"] = "multi"
+
+        confidence_values = [
+            float(item.get("answer_confidence"))
+            for item in sub_answers
+            if item.get("answer_confidence") is not None
+        ]
+        if confidence_values:
+            merged["answer_confidence"] = max(0.0, min(1.0, sum(confidence_values) / len(confidence_values)))
+
+        merged["llm_calls"] = sum(int(result.get("llm_calls", 0) or 0) for result in sub_results)
+        merged["retry_count"] = sum(int(result.get("retry_count", 0) or 0) for result in sub_results)
+        merged["total_latency_ms"] = sum(
+            float(result.get("total_latency_ms", 0.0) or 0.0) for result in sub_results
+        )
+        merged["sql_formatter_fallback_calls"] = sum(
+            int(result.get("sql_formatter_fallback_calls", 0) or 0) for result in sub_results
+        )
+        merged["sql_formatter_fallback_successes"] = sum(
+            int(result.get("sql_formatter_fallback_successes", 0) or 0) for result in sub_results
+        )
+
+        merged_agent_timings: dict[str, float] = {}
+        for result in sub_results:
+            for agent, duration in (result.get("agent_timings") or {}).items():
+                merged_agent_timings[agent] = merged_agent_timings.get(agent, 0.0) + float(duration or 0.0)
+        merged["agent_timings"] = merged_agent_timings
+
+        all_sources: list[dict[str, Any]] = []
+        seen_source_ids: set[str] = set()
+        all_evidence: list[dict[str, Any]] = []
+        seen_evidence_ids: set[tuple[str, str]] = set()
+        errors: list[str] = []
+        for result in sub_results:
+            for dp in result.get("retrieved_datapoints", []):
+                datapoint_id = str(dp.get("datapoint_id", ""))
+                if datapoint_id and datapoint_id not in seen_source_ids:
+                    seen_source_ids.add(datapoint_id)
+                    all_sources.append(dp)
+            for item in result.get("evidence", []):
+                key = (str(item.get("datapoint_id", "")), str(item.get("reason", "")))
+                if key not in seen_evidence_ids:
+                    seen_evidence_ids.add(key)
+                    all_evidence.append(item)
+            if result.get("error"):
+                errors.append(str(result["error"]))
+
+        merged["retrieved_datapoints"] = all_sources
+        merged["evidence"] = all_evidence
+        merged["validation_errors"] = [
+            item for result in sub_results for item in result.get("validation_errors", [])
+        ]
+        merged["validation_warnings"] = [
+            item for result in sub_results for item in result.get("validation_warnings", [])
+        ]
+        if errors and not merged["natural_language_answer"]:
+            merged["error"] = errors[0]
+
+        self._normalize_answer_metadata(merged)
+        return merged
+
     # ========================================================================
     # Public API
     # ========================================================================
@@ -2507,74 +2781,41 @@ class DataChatPipeline:
         Returns:
             Final pipeline state with all outputs
         """
-        initial_state: PipelineState = {
-            "query": query,
-            "original_query": None,
-            "conversation_history": conversation_history or [],
-            "database_type": database_type,
-            "database_url": database_url,
-            "target_connection_id": target_connection_id,
-            "user_id": "anonymous",
-            "correlation_id": f"local-{int(time.time() * 1000)}",
-            "tool_approved": False,
-            "intent_gate": None,
-            "intent_summary": None,
-            "clarification_turn_count": 0,
-            "clarification_limit": self.max_clarifications,
-            "fast_path": False,
-            "skip_response_synthesis": False,
-            "synthesize_simple_sql": synthesize_simple_sql,
-            "current_agent": None,
-            "error": None,
-            "total_cost": 0.0,
-            "total_latency_ms": 0.0,
-            "agent_timings": {},
-            "llm_calls": 0,
-            "retry_count": 0,
-            "retries_exhausted": False,
-            "clarification_needed": False,
-            "clarifying_questions": [],
-            "entities": [],
-            "validation_passed": False,
-            "validation_errors": [],
-            "validation_warnings": [],
-            "key_insights": [],
-            "used_datapoints": [],
-            "assumptions": [],
-            "sql_formatter_fallback_calls": 0,
-            "sql_formatter_fallback_successes": 0,
-            "investigation_memory": None,
-            "retrieved_datapoints": [],
-            "context_confidence": None,
-            "context_needs_sql": None,
-            "context_preface": None,
-            "context_evidence": [],
-            "answer_source": None,
-            "answer_confidence": None,
-            "evidence": [],
-            "tool_plan": None,
-            "tool_calls": [],
-            "tool_results": [],
-            "tool_error": None,
-            "tool_used": False,
-            "tool_approval_required": False,
-            "tool_approval_message": None,
-            "tool_approval_calls": [],
-        }
+        parts = self._split_multi_query(query)
+        if len(parts) <= 1:
+            return await self._run_single_query(
+                query=query,
+                conversation_history=conversation_history,
+                database_type=database_type,
+                database_url=database_url,
+                target_connection_id=target_connection_id,
+                synthesize_simple_sql=synthesize_simple_sql,
+            )
 
-        logger.info(f"Starting pipeline for query: {query[:100]}...")
-        start_time = time.time()
+        sub_results: list[PipelineState] = []
+        sub_answers: list[dict[str, Any]] = []
+        for index, part in enumerate(parts, start=1):
+            result = await self._run_single_query(
+                query=part,
+                conversation_history=conversation_history,
+                database_type=database_type,
+                database_url=database_url,
+                target_connection_id=target_connection_id,
+                synthesize_simple_sql=synthesize_simple_sql,
+            )
+            sub_results.append(result)
+            sub_answers.append(self._build_sub_answer(index, part, result))
 
-        # Run graph
-        result = await self.graph.ainvoke(initial_state)
-        self._normalize_answer_metadata(result)
-
-        total_time = (time.time() - start_time) * 1000
-        logger.info(
-            f"Pipeline complete in {total_time:.1f}ms ({result.get('llm_calls', 0)} LLM calls)"
+        return self._aggregate_multi_results(
+            original_query=query,
+            sub_results=sub_results,
+            sub_answers=sub_answers,
+            conversation_history=conversation_history,
+            database_type=database_type,
+            database_url=database_url,
+            target_connection_id=target_connection_id,
+            synthesize_simple_sql=synthesize_simple_sql,
         )
-
-        return result
 
     async def stream(
         self,
@@ -2599,60 +2840,33 @@ class DataChatPipeline:
         Yields:
             Status updates with current agent and progress
         """
-        initial_state: PipelineState = {
-            "query": query,
-            "original_query": None,
-            "conversation_history": conversation_history or [],
-            "database_type": database_type,
-            "database_url": database_url,
-            "target_connection_id": target_connection_id,
-            "user_id": "anonymous",
-            "correlation_id": f"stream-{int(time.time() * 1000)}",
-            "tool_approved": False,
-            "intent_gate": None,
-            "intent_summary": None,
-            "clarification_turn_count": 0,
-            "clarification_limit": self.max_clarifications,
-            "fast_path": False,
-            "skip_response_synthesis": False,
-            "synthesize_simple_sql": synthesize_simple_sql,
-            "current_agent": None,
-            "error": None,
-            "total_cost": 0.0,
-            "total_latency_ms": 0.0,
-            "agent_timings": {},
-            "llm_calls": 0,
-            "retry_count": 0,
-            "retries_exhausted": False,
-            "clarification_needed": False,
-            "clarifying_questions": [],
-            "entities": [],
-            "validation_passed": False,
-            "validation_errors": [],
-            "validation_warnings": [],
-            "key_insights": [],
-            "used_datapoints": [],
-            "assumptions": [],
-            "sql_formatter_fallback_calls": 0,
-            "sql_formatter_fallback_successes": 0,
-            "investigation_memory": None,
-            "retrieved_datapoints": [],
-            "context_confidence": None,
-            "context_needs_sql": None,
-            "context_preface": None,
-            "context_evidence": [],
-            "answer_source": None,
-            "answer_confidence": None,
-            "evidence": [],
-            "tool_plan": None,
-            "tool_calls": [],
-            "tool_results": [],
-            "tool_error": None,
-            "tool_used": False,
-            "tool_approval_required": False,
-            "tool_approval_message": None,
-            "tool_approval_calls": [],
-        }
+        parts = self._split_multi_query(query)
+        if len(parts) > 1:
+            result = await self.run(
+                query=query,
+                conversation_history=conversation_history,
+                database_type=database_type,
+                database_url=database_url,
+                target_connection_id=target_connection_id,
+                synthesize_simple_sql=synthesize_simple_sql,
+            )
+            yield {
+                "node": "MultiQueryAggregator",
+                "current_agent": "MultiQueryAggregator",
+                "status": "completed",
+                "state": result,
+            }
+            return
+
+        initial_state = self._build_initial_state(
+            query=query,
+            conversation_history=conversation_history,
+            database_type=database_type,
+            database_url=database_url,
+            target_connection_id=target_connection_id,
+            synthesize_simple_sql=synthesize_simple_sql,
+            correlation_prefix="stream",
+        )
 
         logger.info(f"Starting streaming pipeline for query: {query[:100]}...")
 
@@ -2700,60 +2914,34 @@ class DataChatPipeline:
         """
         from datetime import datetime
 
-        initial_state: PipelineState = {
-            "query": query,
-            "original_query": None,
-            "conversation_history": conversation_history or [],
-            "database_type": database_type,
-            "database_url": database_url,
-            "target_connection_id": target_connection_id,
-            "user_id": "anonymous",
-            "correlation_id": f"stream-{int(time.time() * 1000)}",
-            "tool_approved": False,
-            "intent_gate": None,
-            "intent_summary": None,
-            "clarification_turn_count": 0,
-            "clarification_limit": self.max_clarifications,
-            "fast_path": False,
-            "skip_response_synthesis": False,
-            "synthesize_simple_sql": synthesize_simple_sql,
-            "current_agent": None,
-            "error": None,
-            "total_cost": 0.0,
-            "total_latency_ms": 0.0,
-            "agent_timings": {},
-            "llm_calls": 0,
-            "retry_count": 0,
-            "retries_exhausted": False,
-            "clarification_needed": False,
-            "clarifying_questions": [],
-            "entities": [],
-            "validation_passed": False,
-            "validation_errors": [],
-            "validation_warnings": [],
-            "key_insights": [],
-            "used_datapoints": [],
-            "assumptions": [],
-            "sql_formatter_fallback_calls": 0,
-            "sql_formatter_fallback_successes": 0,
-            "investigation_memory": None,
-            "retrieved_datapoints": [],
-            "context_confidence": None,
-            "context_needs_sql": None,
-            "context_preface": None,
-            "context_evidence": [],
-            "answer_source": None,
-            "answer_confidence": None,
-            "evidence": [],
-            "tool_plan": None,
-            "tool_calls": [],
-            "tool_results": [],
-            "tool_error": None,
-            "tool_used": False,
-            "tool_approval_required": False,
-            "tool_approval_message": None,
-            "tool_approval_calls": [],
-        }
+        parts = self._split_multi_query(query)
+        if len(parts) > 1:
+            if event_callback:
+                await event_callback(
+                    "decompose_complete",
+                    {
+                        "parts": parts,
+                        "part_count": len(parts),
+                    },
+                )
+            return await self.run(
+                query=query,
+                conversation_history=conversation_history,
+                database_type=database_type,
+                database_url=database_url,
+                target_connection_id=target_connection_id,
+                synthesize_simple_sql=synthesize_simple_sql,
+            )
+
+        initial_state = self._build_initial_state(
+            query=query,
+            conversation_history=conversation_history,
+            database_type=database_type,
+            database_url=database_url,
+            target_connection_id=target_connection_id,
+            synthesize_simple_sql=synthesize_simple_sql,
+            correlation_prefix="stream",
+        )
 
         logger.info(f"Starting streaming pipeline for query: {query[:100]}...")
         pipeline_start = time.time()
@@ -2886,6 +3074,7 @@ class DataChatPipeline:
                 "clarification": 0.2,
                 "system": 0.8,
                 "approval": 0.5,
+                "multi": 0.65,
                 "error": 0.0,
             }
             state["answer_confidence"] = defaults.get(source, 0.5)

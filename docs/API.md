@@ -47,6 +47,22 @@ Notes:
 - `synthesize_simple_sql` is optional. When `false`, simple SQL answers skip
   response synthesis for lower latency.
 - When no DataPoints are loaded, responses include a live schema mode notice.
+- Single prompts with multiple questions may be decomposed (up to 3 sub-questions).
+  In that case, response includes `sub_answers` and an aggregated `answer`.
+
+Response fields (selected):
+
+- `answer`: final aggregated answer text.
+- `clarifying_questions`: follow-up questions, tagged per sub-question when decomposed.
+- `sub_answers`: per-subquestion entries with:
+  - `index`
+  - `query`
+  - `answer`
+  - `answer_source`
+  - `answer_confidence`
+  - `sql`
+  - `clarifying_questions`
+  - `error`
 
 ## Database Connections
 

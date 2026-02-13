@@ -75,6 +75,24 @@ class ChatMetrics(BaseModel):
     )
 
 
+class SubAnswer(BaseModel):
+    """One sub-answer produced from a decomposed multi-question prompt."""
+
+    index: int = Field(..., description="1-based index of the sub-question")
+    query: str = Field(..., description="Resolved sub-question text")
+    answer: str = Field(..., description="Natural language answer for this sub-question")
+    answer_source: str | None = Field(default=None, description="Source for this sub-answer")
+    answer_confidence: float | None = Field(
+        default=None, description="Confidence score for this sub-answer"
+    )
+    sql: str | None = Field(default=None, description="SQL generated for this sub-answer")
+    clarifying_questions: list[str] = Field(
+        default_factory=list,
+        description="Clarifying questions for this sub-answer",
+    )
+    error: str | None = Field(default=None, description="Error tied to this sub-answer")
+
+
 class ChatResponse(BaseModel):
     """Response model for chat endpoint."""
 
@@ -115,6 +133,10 @@ class ChatResponse(BaseModel):
     )
     metrics: ChatMetrics | None = Field(None, description="Performance metrics")
     conversation_id: str | None = Field(None, description="Conversation ID for follow-up")
+    sub_answers: list[SubAnswer] = Field(
+        default_factory=list,
+        description="Per-question answers when a prompt is decomposed into multiple questions.",
+    )
 
     model_config = {
         "json_schema_extra": {

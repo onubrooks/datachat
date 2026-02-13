@@ -50,6 +50,16 @@ export interface ValidationWarning {
 export interface ChatResponse {
   answer: string;
   clarifying_questions?: string[];
+  sub_answers?: {
+    index: number;
+    query: string;
+    answer: string;
+    answer_source?: string | null;
+    answer_confidence?: number | null;
+    sql?: string | null;
+    clarifying_questions?: string[];
+    error?: string | null;
+  }[];
   sql: string | null;
   data: Record<string, unknown[]> | null;
   visualization_hint: string | null;

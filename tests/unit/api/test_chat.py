@@ -144,6 +144,64 @@ class TestChatEndpoint:
                 assert len(data["sources"]) == 1
                 assert data["sources"][0]["datapoint_id"] == "table_fact_sales_001"
                 assert data["metrics"]["llm_calls"] == 3
+                assert "sub_answers" in data
+
+    @pytest.mark.asyncio
+    async def test_chat_returns_sub_answers_when_pipeline_decomposes_query(
+        self, client, initialized_status
+    ):
+        pipeline_result = {
+            "query": "List stores and total revenue",
+            "natural_language_answer": "I handled your request as multiple questions...",
+            "answer_source": "multi",
+            "answer_confidence": 0.75,
+            "sub_answers": [
+                {
+                    "index": 1,
+                    "query": "List stores",
+                    "answer": "Found 3 stores.",
+                    "answer_source": "sql",
+                    "answer_confidence": 0.9,
+                    "sql": "SELECT * FROM stores LIMIT 3",
+                    "clarifying_questions": [],
+                },
+                {
+                    "index": 2,
+                    "query": "What is total revenue?",
+                    "answer": "Total revenue is 1000.",
+                    "answer_source": "context",
+                    "answer_confidence": 0.6,
+                    "sql": None,
+                    "clarifying_questions": [],
+                },
+            ],
+            "retrieved_datapoints": [],
+            "total_latency_ms": 2000.0,
+            "agent_timings": {"sql": 1000.0},
+            "llm_calls": 2,
+            "retry_count": 0,
+            "error": None,
+        }
+        with patch(
+            "backend.api.routes.chat.SystemInitializer.status",
+            new=AsyncMock(return_value=initialized_status),
+        ):
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
+                response = client.post(
+                    "/api/v1/chat",
+                    json={"message": "List stores and total revenue"},
+                )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["answer_source"] == "multi"
+        assert len(body["sub_answers"]) == 2
+        assert body["sub_answers"][0]["query"] == "List stores"
 
     @pytest.mark.asyncio
     async def test_chat_handles_conversation_history(

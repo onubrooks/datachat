@@ -83,6 +83,18 @@ Example flow:
 2. When prompted, answer with a table: `sales`
 3. Follow up with a column or limit if asked (for example: `amount`, `first 2 rows`)
 
+Multi-question prompt (single round trip):
+
+```bash
+datachat ask "List active accounts and what is total deposits?"
+```
+
+Expected:
+
+- One response with a combined answer.
+- If decomposition applies, output includes numbered sub-answers internally and
+  clarifications can be tagged by sub-question (`[Q1]`, `[Q2]`).
+
 For long outputs, use a pager to keep the answer at the top and scroll as needed:
 
 ```bash
