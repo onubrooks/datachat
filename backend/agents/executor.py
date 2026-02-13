@@ -20,13 +20,11 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from backend.agents.base import BaseAgent
 from backend.config import get_settings
 from backend.connectors.base import BaseConnector, QueryError
-from backend.connectors.clickhouse import ClickHouseConnector
-from backend.connectors.postgres import PostgresConnector
+from backend.connectors.factory import create_connector
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
 from backend.models import (
@@ -193,38 +191,18 @@ class ExecutorAgent(BaseAgent):
         Returns:
             Database connector instance
         """
-        if database_type == "postgresql":
-            if database_url:
-                db_url = database_url
-            elif self.config.database.url:
-                db_url = str(self.config.database.url)
-            else:
-                raise ValueError("DATABASE_URL is not configured for query execution.")
-            parsed = urlparse(db_url.replace("postgresql+asyncpg://", "postgresql://"))
-            if not parsed.hostname:
-                raise ValueError("Invalid PostgreSQL database URL.")
-            connector = PostgresConnector(
-                host=parsed.hostname,
-                port=parsed.port or 5432,
-                database=parsed.path.lstrip("/") if parsed.path else "datachat",
-                user=parsed.username or "postgres",
-                password=parsed.password or "",
-            )
-        elif database_type == "clickhouse":
-            if not database_url:
-                raise ValueError("ClickHouse requires a database URL.")
-            parsed = urlparse(database_url)
-            if not parsed.hostname:
-                raise ValueError("Invalid ClickHouse database URL.")
-            connector = ClickHouseConnector(
-                host=parsed.hostname,
-                port=parsed.port or 8123,
-                database=parsed.path.lstrip("/") if parsed.path else "default",
-                user=parsed.username or "default",
-                password=parsed.password or "",
-            )
+        if database_url:
+            db_url = database_url
+        elif self.config.database.url:
+            db_url = str(self.config.database.url)
         else:
-            raise ValueError(f"Unsupported database type: {database_type}")
+            raise ValueError("DATABASE_URL is not configured for query execution.")
+
+        connector = create_connector(
+            database_url=db_url,
+            database_type=database_type,
+            pool_size=self.config.database.pool_size,
+        )
 
         await connector.connect()
         return connector
@@ -615,7 +593,7 @@ class ExecutorAgent(BaseAgent):
             )
             column_values = []
             for row in query_result.rows:
-                value = row.get("column_name")
+                value = self._row_get(row, "column_name")
                 if value is not None:
                     column_values.append(str(value))
             unique_columns = list(dict.fromkeys(column_values))
@@ -635,8 +613,8 @@ class ExecutorAgent(BaseAgent):
         if "information_schema.tables" in lower_sql:
             table_names = []
             for row in query_result.rows:
-                table = row.get("table_name")
-                schema = row.get("table_schema")
+                table = self._row_get(row, "table_name")
+                schema = self._row_get(row, "table_schema")
                 if table is None:
                     continue
                 table_names.append(f"{schema}.{table}" if schema else str(table))
@@ -655,7 +633,7 @@ class ExecutorAgent(BaseAgent):
             )
 
         if query_result.row_count == 1 and query_result.columns == ["row_count"]:
-            value = query_result.rows[0].get("row_count")
+            value = self._row_get(query_result.rows[0], "row_count")
             table_name = self._extract_table_name_from_sql(sql)
             if table_name:
                 return (f"Table `{table_name}` has {value} row(s).", [])
@@ -669,6 +647,18 @@ class ExecutorAgent(BaseAgent):
                     [],
                 )
 
+        return None
+
+    def _row_get(self, row: Any, key: str) -> Any:
+        """Fetch row values with case-insensitive key fallback."""
+        if not isinstance(row, dict):
+            return None
+        if key in row:
+            return row[key]
+        lowered = key.lower()
+        for candidate, value in row.items():
+            if str(candidate).lower() == lowered:
+                return value
         return None
 
     def _extract_table_name_from_sql(self, sql: str) -> str | None:

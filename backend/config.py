@@ -17,9 +17,10 @@ import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from pydantic import Field, PostgresDsn, field_validator, model_validator
+from pydantic import AnyUrl, Field, PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -159,9 +160,9 @@ class DatabaseSettings(BaseSettings):
         description="Target database type for SQL generation and validation.",
         validation_alias="DATABASE_TYPE",
     )
-    url: PostgresDsn | None = Field(
+    url: AnyUrl | None = Field(
         None,
-        description="Target PostgreSQL connection URL (the database you query)",
+        description="Target database connection URL (the database you query)",
     )
     pool_size: int = Field(
         default=5,
@@ -192,7 +193,7 @@ class DatabaseSettings(BaseSettings):
 
     @field_validator("url", mode="before")
     @classmethod
-    def normalize_url(cls, v: str | PostgresDsn | None) -> str | PostgresDsn | None:
+    def normalize_url(cls, v: str | AnyUrl | None) -> str | AnyUrl | None:
         """Treat empty strings as missing."""
         if v == "":
             return None
@@ -200,11 +201,16 @@ class DatabaseSettings(BaseSettings):
 
     @field_validator("url")
     @classmethod
-    def validate_url(cls, v: PostgresDsn | None) -> PostgresDsn | None:
-        """Validate database URL scheme."""
+    def validate_url(cls, v: AnyUrl | None) -> AnyUrl | None:
+        """Validate supported database URL schemes."""
         if v is None:
             return v
-        # PostgresDsn already validates the scheme, but we can add custom logic if needed
+        parsed = urlparse(str(v))
+        scheme = parsed.scheme.split("+")[0].lower() if parsed.scheme else ""
+        if scheme not in {"postgres", "postgresql", "clickhouse", "mysql"}:
+            raise ValueError("DATABASE_URL must use postgresql, clickhouse, or mysql scheme.")
+        if not parsed.hostname:
+            raise ValueError("DATABASE_URL must include a host.")
         return v
 
 

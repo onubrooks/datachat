@@ -49,6 +49,19 @@ def test_catalog_plan_list_tables_query():
     assert "information_schema.tables" in (plan.sql or "")
 
 
+def test_catalog_plan_list_tables_query_mysql():
+    service = CatalogIntelligence()
+    plan = service.plan_query(
+        query="list tables",
+        database_type="mysql",
+        investigation_memory=_memory(),
+    )
+    assert plan is not None
+    assert plan.operation == "list_tables"
+    assert "information_schema.tables" in (plan.sql or "")
+    assert "performance_schema" in (plan.sql or "")
+
+
 def test_catalog_plan_row_count_requires_table():
     service = CatalogIntelligence()
     plan = service.plan_query(

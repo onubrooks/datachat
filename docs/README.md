@@ -15,7 +15,7 @@ Implemented now:
 Planned (not yet implemented as full product features):
 
 - workspace/folder indexing and codebase understanding workflows
-- runtime connectors for MySQL/BigQuery/Redshift
+- runtime connectors for BigQuery/Redshift
 - Levels 3-5 automation features
 
 ## Document Map
@@ -27,6 +27,7 @@ Planned (not yet implemented as full product features):
 - `MULTI_DATABASE.md` - connection registry and per-request routing.
 - `LEVELS.md` - maturity model with implementation status.
 - `PRD.md` - delivery-tracking PRD (shipped vs planned).
+- `METADATAOPS_FOUNDATION.md` - philosophy, priorities, and contributor alignment for metadata quality + observability.
 - `OPERATIONS.md` - deployment and operational guidance.
 - `DEMO_PLAYBOOK.md` - demo setup and persona flows.
 - `DATAPOINT_SCHEMA.md` - DataPoint model and conventions.

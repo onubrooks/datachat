@@ -236,3 +236,37 @@ Useful reset options:
 - Keep user datapoints: `--keep-user-datapoints`
 - Keep example/demo datapoints: `--keep-example-datapoints`
 - Fully clear example/demo datapoints too: `--clear-example-datapoints`
+
+## 10) MySQL credentials-only manual checks
+
+Set target DB:
+
+```env
+DATABASE_URL=mysql://root:password@localhost:3306/datachat_demo
+```
+
+Then run:
+
+```bash
+datachat ask "list all available tables"
+datachat ask "show columns in customers"
+datachat ask "show me 3 rows from customers"
+datachat ask "how many rows are in customers"
+```
+
+Expected:
+
+- queries execute without DataPoints
+- `answer_source` is `sql` for deterministic metadata intents
+- generated SQL uses MySQL-compatible catalog queries (`information_schema.*`)
+
+Optional automated check:
+
+```bash
+python scripts/eval_runner.py \
+  --mode catalog \
+  --dataset eval/catalog/mysql_credentials.json \
+  --min-sql-match-rate 0.70 \
+  --min-source-match-rate 0.80 \
+  --min-clarification-match-rate 0.80
+```

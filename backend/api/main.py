@@ -25,9 +25,9 @@ from backend.agents.base import AgentError
 from backend.api import websocket
 from backend.api.routes import chat, databases, datapoints, health, profiling, system, tools
 from backend.config import get_settings
+from backend.connectors.base import BaseConnector, QueryError
 from backend.connectors.base import ConnectionError as ConnectorConnectionError
-from backend.connectors.base import QueryError
-from backend.connectors.postgres import PostgresConnector
+from backend.connectors.factory import create_connector
 from backend.knowledge.graph import KnowledgeGraph
 from backend.knowledge.retriever import Retriever
 from backend.knowledge.vectors import VectorStore
@@ -86,17 +86,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         # Initialize database connector
         logger.info("Initializing database connector...")
-        from urllib.parse import urlparse
-
         if config.database.url:
             db_url_str = str(config.database.url)
-            parsed = urlparse(db_url_str)
-            connector = PostgresConnector(
-                host=parsed.hostname or "localhost",
-                port=parsed.port or 5432,
-                database=parsed.path.lstrip("/") if parsed.path else "datachat",
-                user=parsed.username or "postgres",
-                password=parsed.password or "",
+            connector = create_connector(
+                database_url=db_url_str,
+                pool_size=config.database.pool_size,
             )
             await connector.connect()
             app_state["connector"] = connector
@@ -321,7 +315,7 @@ def get_pipeline() -> DataChatPipeline:
     return app_state["pipeline"]
 
 
-def get_connector() -> PostgresConnector:
+def get_connector() -> BaseConnector:
     """Get the initialized database connector."""
     if app_state["connector"] is None:
         raise RuntimeError("Connector not initialized")

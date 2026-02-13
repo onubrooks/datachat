@@ -57,16 +57,36 @@ class TestDatabaseEndpoints:
         manager.add_connection.assert_awaited_once()
 
     def test_list_connections(self, client, sample_connection):
-        manager = AsyncMock()
-        manager.list_connections = AsyncMock(return_value=[sample_connection])
-
-        with patch("backend.api.routes.databases._get_manager", return_value=manager):
+        with patch(
+            "backend.api.main.app_state",
+            {"database_manager": None},
+        ), patch(
+            "backend.api.routes.databases.list_available_connections",
+            new=AsyncMock(return_value=[sample_connection]),
+        ):
             response = client.get("/api/v1/databases")
 
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 1
         assert data[0]["name"] == "Warehouse"
+
+    def test_get_environment_connection(self, client, sample_connection):
+        env_connection_id = str(sample_connection.connection_id)
+        with patch(
+            "backend.api.main.app_state",
+            {"database_manager": None},
+        ), patch(
+            "backend.api.routes.databases.environment_connection_id",
+            return_value=env_connection_id,
+        ), patch(
+            "backend.api.routes.databases.list_available_connections",
+            new=AsyncMock(return_value=[sample_connection]),
+        ):
+            response = client.get(f"/api/v1/databases/{env_connection_id}")
+
+        assert response.status_code == 200
+        assert response.json()["name"] == "Warehouse"
 
     def test_get_connection(self, client, sample_connection):
         manager = AsyncMock()
@@ -101,6 +121,19 @@ class TestDatabaseEndpoints:
         assert response.status_code == 204
         manager.set_default.assert_awaited_once()
 
+    def test_set_default_environment_connection_returns_bad_request(self, client):
+        with patch(
+            "backend.api.routes.databases.environment_connection_id",
+            return_value="00000000-0000-0000-0000-00000000dada",
+        ):
+            response = client.put(
+                "/api/v1/databases/00000000-0000-0000-0000-00000000dada/default",
+                json={"is_default": True},
+            )
+
+        assert response.status_code == 400
+        assert "Environment Database" in response.json()["detail"]
+
     def test_delete_connection(self, client, sample_connection):
         manager = AsyncMock()
         manager.remove_connection = AsyncMock(return_value=None)
@@ -112,6 +145,18 @@ class TestDatabaseEndpoints:
 
         assert response.status_code == 204
         manager.remove_connection.assert_awaited_once()
+
+    def test_delete_environment_connection_returns_bad_request(self, client):
+        with patch(
+            "backend.api.routes.databases.environment_connection_id",
+            return_value="00000000-0000-0000-0000-00000000dada",
+        ):
+            response = client.delete(
+                "/api/v1/databases/00000000-0000-0000-0000-00000000dada"
+            )
+
+        assert response.status_code == 400
+        assert "Environment Database" in response.json()["detail"]
 
     def test_create_connection_validation_error(self, client):
         manager = AsyncMock()

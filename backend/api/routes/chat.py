@@ -11,6 +11,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
+from backend.api.database_context import resolve_database_type_and_url
+from backend.config import get_settings
 from backend.initialization.initializer import SystemInitializer
 from backend.models.api import ChatMetrics, ChatRequest, ChatResponse, DataSource
 
@@ -43,32 +45,29 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
         # Get pipeline from app state
         from backend.api.main import app_state
 
-        database_type = "postgresql"
+        settings = get_settings()
+        database_type = settings.database.db_type
         database_url = None
         manager = app_state.get("database_manager")
-        if chat_request.target_database:
-            if manager is None:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Database registry is unavailable. Set DATABASE_CREDENTIALS_KEY.",
-                )
-            try:
-                connection = await manager.get_connection(chat_request.target_database)
-            except KeyError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-                ) from exc
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-                ) from exc
-            database_type = connection.database_type
-            database_url = connection.database_url.get_secret_value()
-        elif manager is not None:
-            default_connection = await manager.get_default_connection()
-            if default_connection is not None:
-                database_type = default_connection.database_type
-                database_url = default_connection.database_url.get_secret_value()
+        try:
+            resolved_type, resolved_url = await resolve_database_type_and_url(
+                target_database=chat_request.target_database,
+                manager=manager,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        if resolved_type:
+            database_type = resolved_type
+        if resolved_url:
+            database_url = resolved_url
 
         initializer = SystemInitializer(app_state)
         status_state = await initializer.status()

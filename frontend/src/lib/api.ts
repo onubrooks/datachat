@@ -381,8 +381,10 @@ export class DataChatAPI {
       }
     );
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: response.statusText }));
-      throw new Error(error.message || `HTTP ${response.status}`);
+      const error = await response.json().catch(() => ({}));
+      const message =
+        error.message || error.detail || response.statusText || `HTTP ${response.status}`;
+      throw new Error(message);
     }
   }
 
@@ -392,8 +394,10 @@ export class DataChatAPI {
       { method: "DELETE" }
     );
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: response.statusText }));
-      throw new Error(error.message || `HTTP ${response.status}`);
+      const error = await response.json().catch(() => ({}));
+      const message =
+        error.message || error.detail || response.statusText || `HTTP ${response.status}`;
+      throw new Error(message);
     }
   }
 

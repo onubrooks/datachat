@@ -27,10 +27,32 @@ Database runtime support:
 
 - PostgreSQL
 - ClickHouse
+- MySQL
 
 Notes:
 
-- MySQL/BigQuery/Redshift catalog templates exist, but runtime connector execution is pending.
+- BigQuery/Redshift catalog templates exist, but runtime connector execution is pending.
+
+## Level 1.5: MetadataOps Foundation (Cross-Level)
+
+Status: `In Progress`
+
+Purpose:
+
+- Treat metadata authoring quality and observability as a product surface.
+- Reduce failures by improving source quality and traceability before adding more agent complexity.
+
+Scope:
+
+- metadata contracts and linting gates
+- metadata authoring/review lifecycle
+- CI evaluation gates (retrieval, qa, intent, catalog)
+- retrieval and answer trace observability
+- runtime telemetry loops for clarification/fallback failure modes
+
+Delivery rule:
+
+- major Level 3-5 expansion should follow this foundation lane, not bypass it
 
 ## Level 2: Context Enhancement (DataPoints)
 
@@ -83,5 +105,6 @@ Not shipped yet.
 For production use now:
 
 1. Start with Level 1 credentials-only to validate connectivity and query quality.
-2. Add Level 2 DataPoints for critical business metrics and terms.
-3. Treat Levels 3-5 as roadmap items, not current guarantees.
+2. Prioritize Level 1.5 foundation controls (contracts + eval + observability).
+3. Add Level 2 DataPoints for critical business metrics and terms.
+4. Treat Levels 3-5 as roadmap items, not current guarantees.
