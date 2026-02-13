@@ -48,6 +48,7 @@ from rich.table import Table
 from backend.config import clear_settings_cache, get_settings
 from backend.connectors.factory import create_connector, infer_database_type
 from backend.connectors.postgres import PostgresConnector
+from backend.database.manager import DatabaseConnectionManager
 from backend.initialization.initializer import SystemInitializer
 from backend.knowledge.datapoints import DataPointLoader
 from backend.knowledge.graph import KnowledgeGraph
@@ -212,6 +213,78 @@ def _build_postgres_connector(connection_string: str) -> PostgresConnector:
         user=parsed.username or "postgres",
         password=parsed.password or "",
     )
+
+
+def _default_connection_name(connection_string: str) -> str:
+    """Build a stable default registry name from connection URL."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(connection_string)
+    host = parsed.hostname or "localhost"
+    database = parsed.path.lstrip("/") if parsed.path else "datachat"
+    return f"{host}/{database}"
+
+
+async def _register_cli_connection(
+    connection_string: str,
+    *,
+    name: str | None,
+    set_default: bool,
+) -> tuple[bool, str]:
+    """
+    Register a CLI connection in the system registry when available.
+
+    Returns:
+        (registered, message)
+    """
+    settings = get_settings()
+    system_db_url, _ = _resolve_system_database_url(settings)
+    if not system_db_url:
+        return (
+            False,
+            "Registry skipped: SYSTEM_DATABASE_URL is not configured.",
+        )
+
+    manager = DatabaseConnectionManager(system_database_url=system_db_url)
+    try:
+        await manager.initialize()
+    except Exception as exc:
+        return (False, f"Registry unavailable: {exc}")
+
+    try:
+        inferred_type = infer_database_type(connection_string)
+        target_name = name.strip() if name and name.strip() else _default_connection_name(connection_string)
+        existing = None
+        for connection in await manager.list_connections():
+            if connection.database_url.get_secret_value() == connection_string:
+                existing = connection
+                break
+
+        if existing is not None:
+            updates: dict[str, str | None] = {}
+            if target_name and existing.name != target_name:
+                updates["name"] = target_name
+            if existing.database_type != inferred_type:
+                updates["database_type"] = inferred_type
+            if updates:
+                await manager.update_connection(existing.connection_id, updates=updates)
+            if set_default and not existing.is_default:
+                await manager.set_default(existing.connection_id)
+            return (True, f"Registry: using existing connection {existing.connection_id}")
+
+        created = await manager.add_connection(
+            name=target_name,
+            database_url=connection_string,
+            database_type=inferred_type,
+            tags=["managed", "cli"],
+            description="Added via datachat connect",
+            is_default=set_default,
+        )
+        return (True, f"Registry: added connection {created.connection_id}")
+    except Exception as exc:
+        return (False, f"Registry skipped: {exc}")
+    finally:
+        await manager.close()
 
 
 def _split_sql_statements(sql_text: str) -> list[str]:
@@ -910,7 +983,18 @@ def ask(
 
 @cli.command()
 @click.argument("connection_string")
-def connect(connection_string: str):
+@click.option("--name", default=None, help="Optional registry display name.")
+@click.option(
+    "--register/--no-register",
+    default=True,
+    help="Also register this connection in the system registry when available.",
+)
+@click.option(
+    "--set-default/--no-set-default",
+    default=True,
+    help="When registering, mark this connection as default.",
+)
+def connect(connection_string: str, name: str | None, register: bool, set_default: bool):
     """Set database connection string.
 
     Example:
@@ -928,13 +1012,23 @@ def connect(connection_string: str):
             )
             sys.exit(1)
 
-        # Save connection string
+        # Save connection string for runtime defaults
         state.set_connection_string(connection_string)
         console.print("[green]✓ Connection string saved[/green]")
         console.print(f"Host: {parsed.hostname}")
         console.print(f"Port: {parsed.port or 5432}")
         console.print(f"Database: {parsed.path.lstrip('/')}")
         console.print(f"User: {parsed.username}")
+        if register:
+            registered, message = asyncio.run(
+                _register_cli_connection(
+                    connection_string,
+                    name=name,
+                    set_default=set_default,
+                )
+            )
+            style = "green" if registered else "yellow"
+            console.print(f"[{style}]{message}[/{style}]")
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")

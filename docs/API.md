@@ -56,6 +56,13 @@ Notes:
 - `PUT /databases/{id}/default` - Set default connection.
 - `DELETE /databases/{id}` - Remove a connection.
 
+Notes:
+
+- If `DATABASE_URL` is configured, `GET /databases` also returns a virtual
+  `Environment Database` entry (read-only in registry endpoints).
+- `POST /databases` validates that `database_type` matches the URL scheme
+  (`postgresql://`, `mysql://`, `clickhouse://`) and returns `400` on mismatch.
+
 ## Profiling and DataPoint Generation
 
 - `POST /databases/{id}/profile` - Start profiling a database.

@@ -8,10 +8,12 @@ from backend.api.database_context import (
     environment_connection_id,
     list_available_connections,
 )
+from backend.connectors.base import ConnectionError as ConnectorConnectionError
 from backend.database.manager import DatabaseConnectionManager
 from backend.models.database import (
     DatabaseConnection,
     DatabaseConnectionCreate,
+    DatabaseConnectionUpdate,
     DatabaseConnectionUpdateDefault,
 )
 
@@ -47,6 +49,11 @@ async def create_database_connection(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ConnectorConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to connect to database: {exc}",
+        ) from exc
 
 
 @router.get("/databases", response_model=list[DatabaseConnection])
@@ -81,6 +88,50 @@ async def get_database_connection(connection_id: str) -> DatabaseConnection:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.patch("/databases/{connection_id}", response_model=DatabaseConnection)
+async def update_database_connection(
+    connection_id: str,
+    payload: DatabaseConnectionUpdate,
+) -> DatabaseConnection:
+    """Update an existing connection."""
+    if connection_id == environment_connection_id():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Environment Database is derived from DATABASE_URL and cannot be edited here.",
+        )
+    update_payload = payload.model_dump(exclude_unset=True)
+    if not update_payload:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one field must be provided for update.",
+        )
+    if update_payload.get("name") is None:
+        update_payload.pop("name", None)
+    if update_payload.get("database_type") is None:
+        update_payload.pop("database_type", None)
+    if "database_url" in update_payload and update_payload["database_url"] is not None:
+        update_payload["database_url"] = update_payload["database_url"].get_secret_value()
+    if update_payload.get("database_url") is None:
+        update_payload.pop("database_url", None)
+    if not update_payload:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one non-empty field must be provided for update.",
+        )
+    manager = _get_manager()
+    try:
+        return await manager.update_connection(connection_id, updates=update_payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ConnectorConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to connect to database: {exc}",
+        ) from exc
 
 
 @router.put("/databases/{connection_id}/default", status_code=status.HTTP_204_NO_CONTENT)

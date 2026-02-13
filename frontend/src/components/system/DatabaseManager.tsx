@@ -25,6 +25,20 @@ const isEnvironmentConnection = (connection: DatabaseConnection): boolean =>
   String(connection.connection_id) === ENV_CONNECTION_ID ||
   (connection.tags || []).includes("env");
 
+const inferDatabaseTypeFromUrl = (value: string): string | null => {
+  const normalized = value.trim().toLowerCase();
+  if (normalized.startsWith("postgresql://") || normalized.startsWith("postgres://")) {
+    return "postgresql";
+  }
+  if (normalized.startsWith("mysql://")) {
+    return "mysql";
+  }
+  if (normalized.startsWith("clickhouse://")) {
+    return "clickhouse";
+  }
+  return null;
+};
+
 export function DatabaseManager() {
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [pending, setPending] = useState<PendingDataPoint[]>([]);
@@ -58,6 +72,12 @@ export function DatabaseManager() {
   const [databaseType, setDatabaseType] = useState("postgresql");
   const [description, setDescription] = useState("");
   const [isDefault, setIsDefault] = useState(false);
+  const [editingConnectionId, setEditingConnectionId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [editingDatabaseUrl, setEditingDatabaseUrl] = useState("");
+  const [editingDatabaseType, setEditingDatabaseType] = useState("postgresql");
+  const [editingDescription, setEditingDescription] = useState("");
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [profileTables, setProfileTables] = useState<string[]>([]);
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [depth, setDepth] = useState("metrics_basic");
@@ -398,6 +418,63 @@ export function DatabaseManager() {
     }
   };
 
+  const handleStartEdit = (connection: DatabaseConnection) => {
+    if (isEnvironmentConnection(connection)) {
+      setError(
+        "Environment Database uses DATABASE_URL and cannot be edited from Database Manager."
+      );
+      return;
+    }
+    setEditingConnectionId(connection.connection_id);
+    setEditingName(connection.name);
+    // Secret URLs are masked in API responses; leave empty unless user provides a new URL.
+    setEditingDatabaseUrl("");
+    setEditingDatabaseType(connection.database_type);
+    setEditingDescription(connection.description || "");
+  };
+
+  const handleCancelEdit = () => {
+    setEditingConnectionId(null);
+    setEditingName("");
+    setEditingDatabaseUrl("");
+    setEditingDatabaseType("postgresql");
+    setEditingDescription("");
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingConnectionId) return;
+    setError(null);
+    setIsSavingEdit(true);
+    try {
+      const payload: {
+        name?: string;
+        database_url?: string;
+        database_type?: string;
+        description?: string | null;
+      } = {};
+      if (editingName.trim()) {
+        payload.name = editingName.trim();
+      }
+      if (editingDescription.trim()) {
+        payload.description = editingDescription.trim();
+      } else {
+        payload.description = null;
+      }
+      if (editingDatabaseUrl.trim()) {
+        payload.database_url = editingDatabaseUrl.trim();
+        payload.database_type = editingDatabaseType;
+      }
+      await api.updateDatabase(editingConnectionId, payload);
+      showNotice("Connection updated successfully.");
+      handleCancelEdit();
+      await refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   const handleGenerate = async () => {
     if (!job?.profile_id) return;
     setError(null);
@@ -638,13 +715,25 @@ export function DatabaseManager() {
           <Input
             placeholder="postgresql://user:pass@host:5432/db"
             value={databaseUrl}
-            onChange={(event) => setDatabaseUrl(event.target.value)}
+            onChange={(event) => {
+              const nextUrl = event.target.value;
+              setDatabaseUrl(nextUrl);
+              const inferredType = inferDatabaseTypeFromUrl(nextUrl);
+              if (inferredType) {
+                setDatabaseType(inferredType);
+              }
+            }}
           />
-          <Input
-            placeholder="Database Type (postgresql, clickhouse)"
+          <select
+            className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
             value={databaseType}
             onChange={(event) => setDatabaseType(event.target.value)}
-          />
+            aria-label="Database Type"
+          >
+            <option value="postgresql">postgresql</option>
+            <option value="mysql">mysql</option>
+            <option value="clickhouse">clickhouse</option>
+          </select>
           <Input
             placeholder="Description (optional)"
             value={description}
@@ -697,6 +786,13 @@ export function DatabaseManager() {
               <div className="flex flex-wrap gap-2">
                 <Button
                   variant="secondary"
+                  onClick={() => handleStartEdit(connection)}
+                  disabled={isEnvironmentConnection(connection)}
+                >
+                  Edit
+                </Button>
+                <Button
+                  variant="secondary"
                   onClick={async () => {
                     if (isEnvironmentConnection(connection)) {
                       setError(
@@ -743,6 +839,62 @@ export function DatabaseManager() {
                   Delete
                 </Button>
               </div>
+              {editingConnectionId === connection.connection_id && (
+                <div className="mt-2 space-y-2 rounded-md border border-border p-3">
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <Input
+                      placeholder="Name"
+                      value={editingName}
+                      onChange={(event) => setEditingName(event.target.value)}
+                    />
+                    <Input
+                      placeholder="Leave blank to keep current URL"
+                      value={editingDatabaseUrl}
+                      onChange={(event) => {
+                        const nextUrl = event.target.value;
+                        setEditingDatabaseUrl(nextUrl);
+                        const inferredType = inferDatabaseTypeFromUrl(nextUrl);
+                        if (inferredType) {
+                          setEditingDatabaseType(inferredType);
+                        }
+                      }}
+                    />
+                    <select
+                      className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      value={editingDatabaseType}
+                      onChange={(event) => setEditingDatabaseType(event.target.value)}
+                      aria-label="Edit Database Type"
+                    >
+                      <option value="postgresql">postgresql</option>
+                      <option value="mysql">mysql</option>
+                      <option value="clickhouse">clickhouse</option>
+                    </select>
+                    <Input
+                      placeholder="Description (optional)"
+                      value={editingDescription}
+                      onChange={(event) => setEditingDescription(event.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      onClick={handleSaveEdit}
+                      disabled={
+                        isSavingEdit ||
+                        !editingName.trim()
+                      }
+                    >
+                      {isSavingEdit ? "Saving..." : "Save"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={handleCancelEdit}
+                      disabled={isSavingEdit}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>

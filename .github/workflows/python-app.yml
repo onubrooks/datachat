@@ -38,3 +38,7 @@ jobs:
       - name: Test with pytest
         run: |
           pytest
+
+      - name: Phase 1 KPI gate (CI)
+        run: |
+          python scripts/phase1_kpi_gate.py --mode ci

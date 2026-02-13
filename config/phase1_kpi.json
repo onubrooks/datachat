@@ -1,0 +1,38 @@
+{
+  "phase": "phase1-core-runtime",
+  "ci_checks": [
+    {
+      "name": "core-api-parity",
+      "command": "pytest -q tests/unit/api/test_chat.py tests/unit/api/test_databases.py tests/unit/api/test_tools.py tests/unit/api/test_database_context.py"
+    },
+    {
+      "name": "deterministic-mysql-summaries",
+      "command": "pytest -q tests/unit/agents/test_executor.py -k information_schema"
+    },
+    {
+      "name": "connection-type-validation",
+      "command": "pytest -q tests/unit/database/test_manager.py -k mismatch"
+    }
+  ],
+  "release_checks": {
+    "intent_avg_latency_ms_max": 12000.0,
+    "intent_avg_llm_calls_max": 4.0,
+    "eval_runs": [
+      {
+        "name": "intent-credentials",
+        "mode": "intent",
+        "dataset": "eval/intent_credentials.json"
+      },
+      {
+        "name": "catalog-mysql",
+        "mode": "catalog",
+        "dataset": "eval/catalog/mysql_credentials.json",
+        "thresholds": {
+          "min_sql_match_rate": 0.7,
+          "min_source_match_rate": 0.8,
+          "min_clarification_match_rate": 0.8
+        }
+      }
+    ]
+  }
+}

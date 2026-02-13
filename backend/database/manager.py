@@ -10,7 +10,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from pydantic import SecretStr
 
 from backend.config import get_settings
-from backend.connectors.factory import create_connector
+from backend.connectors.factory import create_connector, infer_database_type, resolve_database_type
 from backend.models.database import DatabaseConnection
 
 _CREATE_TABLE_SQL = """
@@ -81,7 +81,8 @@ class DatabaseConnectionManager:
     ) -> DatabaseConnection:
         """Add a new database connection after validation."""
         self._ensure_pool()
-        await self._validate_connection(database_type, database_url)
+        normalized_database_type = resolve_database_type(database_type, database_url)
+        await self._validate_connection(normalized_database_type, database_url)
 
         connection_id = uuid4()
         created_at = datetime.now(UTC)
@@ -126,7 +127,7 @@ class DatabaseConnectionManager:
                     connection_id,
                     name,
                     encrypted_url,
-                    database_type,
+                    normalized_database_type,
                     is_default,
                     tags,
                     description,
@@ -249,6 +250,75 @@ class DatabaseConnectionManager:
         if deleted == 0:
             raise KeyError(f"Connection not found: {connection_id}")
 
+    async def update_connection(
+        self,
+        connection_id: UUID | str,
+        *,
+        updates: dict[str, str | None],
+    ) -> DatabaseConnection:
+        """Update editable connection fields."""
+        self._ensure_pool()
+        connection_uuid = self._coerce_uuid(connection_id)
+        existing = await self.get_connection(connection_uuid)
+
+        name = updates.get("name", existing.name)
+        url_updated = "database_url" in updates
+        type_updated = "database_type" in updates
+        description_updated = "description" in updates
+
+        database_url = (
+            str(updates.get("database_url"))
+            if url_updated
+            else existing.database_url.get_secret_value()
+        )
+        if type_updated:
+            database_type = resolve_database_type(
+                str(updates.get("database_type")),
+                database_url,
+            )
+        elif url_updated:
+            database_type = infer_database_type(database_url)
+        else:
+            database_type = existing.database_type
+
+        if url_updated or type_updated:
+            await self._validate_connection(database_type, database_url)
+
+        description = updates.get("description") if description_updated else existing.description
+        encrypted_url = self._encrypt_url(database_url)
+
+        row = await self._pool.fetchrow(
+            """
+            UPDATE database_connections
+            SET
+                name = $2,
+                database_url_encrypted = $3,
+                database_type = $4,
+                description = $5
+            WHERE connection_id = $1
+            RETURNING
+                connection_id,
+                name,
+                database_url_encrypted,
+                database_type,
+                is_active,
+                is_default,
+                tags,
+                description,
+                created_at,
+                last_profiled,
+                datapoint_count
+            """,
+            connection_uuid,
+            name,
+            encrypted_url,
+            database_type,
+            description,
+        )
+        if row is None:
+            raise KeyError(f"Connection not found: {connection_id}")
+        return self._row_to_connection(row)
+
     def _row_to_connection(self, row: asyncpg.Record) -> DatabaseConnection:
         decrypted_url = self._decrypt_url(row["database_url_encrypted"])
         return DatabaseConnection(
@@ -266,6 +336,13 @@ class DatabaseConnectionManager:
         )
 
     async def _validate_connection(self, database_type: str, database_url: str) -> None:
+        inferred_database_type = infer_database_type(database_url)
+        if inferred_database_type != database_type:
+            raise ValueError(
+                "Database type does not match URL scheme: "
+                f"received '{database_type}', inferred '{inferred_database_type}' from "
+                f"'{database_url}'."
+            )
         connector = create_connector(database_url=database_url, database_type=database_type)
 
         try:

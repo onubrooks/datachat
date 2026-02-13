@@ -174,6 +174,13 @@ export interface DatabaseConnectionCreate {
   is_default?: boolean;
 }
 
+export interface DatabaseConnectionUpdate {
+  name?: string;
+  database_url?: string;
+  database_type?: string;
+  description?: string | null;
+}
+
 export interface ProfilingProgress {
   total_tables: number;
   tables_completed: number;
@@ -365,8 +372,31 @@ export class DataChatAPI {
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: response.statusText }));
-      throw new Error(error.message || `HTTP ${response.status}`);
+      const error = await response.json().catch(() => ({}));
+      const message =
+        error.message || error.detail || response.statusText || `HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return response.json();
+  }
+
+  async updateDatabase(
+    connectionId: string,
+    payload: DatabaseConnectionUpdate
+  ): Promise<DatabaseConnection> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/databases/${connectionId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      const message =
+        error.message || error.detail || response.statusText || `HTTP ${response.status}`;
+      throw new Error(message);
     }
     return response.json();
   }

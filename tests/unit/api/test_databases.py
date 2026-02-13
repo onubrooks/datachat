@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from backend.api.main import app
+from backend.connectors.base import ConnectionError as ConnectorConnectionError
 from backend.models.database import DatabaseConnection
 
 
@@ -121,6 +122,50 @@ class TestDatabaseEndpoints:
         assert response.status_code == 204
         manager.set_default.assert_awaited_once()
 
+    def test_update_connection(self, client, sample_connection):
+        manager = AsyncMock()
+        manager.update_connection = AsyncMock(return_value=sample_connection)
+
+        with patch("backend.api.routes.databases._get_manager", return_value=manager):
+            response = client.patch(
+                f"/api/v1/databases/{sample_connection.connection_id}",
+                json={
+                    "name": "Warehouse",
+                    "database_url": "postgresql://user:pass@localhost:5432/warehouse",
+                    "database_type": "postgresql",
+                    "description": "Updated",
+                },
+            )
+
+        assert response.status_code == 200
+        manager.update_connection.assert_awaited_once()
+
+    def test_update_connection_empty_payload_returns_bad_request(self, client, sample_connection):
+        manager = AsyncMock()
+        manager.update_connection = AsyncMock(return_value=sample_connection)
+
+        with patch("backend.api.routes.databases._get_manager", return_value=manager):
+            response = client.patch(
+                f"/api/v1/databases/{sample_connection.connection_id}",
+                json={},
+            )
+
+        assert response.status_code == 400
+        assert "At least one field" in response.json()["detail"]
+
+    def test_update_environment_connection_returns_bad_request(self, client):
+        with patch(
+            "backend.api.routes.databases.environment_connection_id",
+            return_value="00000000-0000-0000-0000-00000000dada",
+        ):
+            response = client.patch(
+                "/api/v1/databases/00000000-0000-0000-0000-00000000dada",
+                json={"name": "Nope"},
+            )
+
+        assert response.status_code == 400
+        assert "Environment Database" in response.json()["detail"]
+
     def test_set_default_environment_connection_returns_bad_request(self, client):
         with patch(
             "backend.api.routes.databases.environment_connection_id",
@@ -173,3 +218,22 @@ class TestDatabaseEndpoints:
             )
 
         assert response.status_code == 400
+
+    def test_create_connection_connection_error_returns_bad_request(self, client):
+        manager = AsyncMock()
+        manager.add_connection = AsyncMock(
+            side_effect=ConnectorConnectionError("dial tcp timeout")
+        )
+
+        with patch("backend.api.routes.databases._get_manager", return_value=manager):
+            response = client.post(
+                "/api/v1/databases",
+                json={
+                    "name": "Warehouse",
+                    "database_url": "postgresql://user:pass@localhost:5432/warehouse",
+                    "database_type": "postgresql",
+                },
+            )
+
+        assert response.status_code == 400
+        assert "Failed to connect to database" in response.json()["detail"]
