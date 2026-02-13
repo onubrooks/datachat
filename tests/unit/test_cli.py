@@ -469,6 +469,8 @@ class TestDataPointCommands:
         result = runner.invoke(datapoint, ["add", "--help"])
         assert result.exit_code == 0
         assert "Add a DataPoint from a JSON file" in result.output
+        assert "--strict-contracts / --no-strict-contracts" in result.output
+        assert "--fail-on-contract-warnings" in result.output
 
     def test_dp_add_validates_type(self, runner, tmp_path):
         """Test that dp add validates DataPoint type."""
@@ -491,11 +493,21 @@ class TestDataPointCommands:
         assert result.exit_code == 0
         assert "Rebuild vector store and knowledge graph" in result.output
 
+    def test_dp_lint_command_exists(self, runner):
+        """Test that dp lint command exists."""
+        result = runner.invoke(datapoint, ["lint", "--help"])
+        assert result.exit_code == 0
+        assert "Lint DataPoint contract quality" in result.output
+        assert "--strict-contracts / --no-strict-contracts" in result.output
+        assert "--fail-on-contract-warnings" in result.output
+
     def test_dp_sync_has_datapoints_dir_option(self, runner):
         """Test that dp sync has --datapoints-dir option."""
         result = runner.invoke(datapoint, ["sync", "--help"])
         assert result.exit_code == 0
         assert "--datapoints-dir" in result.output
+        assert "--strict-contracts / --no-strict-contracts" in result.output
+        assert "--fail-on-contract-warnings" in result.output
 
 
 class TestStatusCommand:

@@ -50,6 +50,7 @@ from backend.connectors.factory import create_connector, infer_database_type
 from backend.connectors.postgres import PostgresConnector
 from backend.database.manager import DatabaseConnectionManager
 from backend.initialization.initializer import SystemInitializer
+from backend.knowledge.contracts import DataPointContractReport, validate_contracts
 from backend.knowledge.datapoints import DataPointLoader
 from backend.knowledge.graph import KnowledgeGraph
 from backend.knowledge.retriever import Retriever
@@ -2102,7 +2103,23 @@ def generation_status(job_id: str):
 @datapoint.command(name="add")
 @click.argument("datapoint_type", type=click.Choice(["schema", "business", "process"]))
 @click.argument("file", type=click.Path(exists=True))
-def add_datapoint(datapoint_type: str, file: str):
+@click.option(
+    "--strict-contracts/--no-strict-contracts",
+    default=False,
+    help="Treat advisory contract gaps as errors.",
+)
+@click.option(
+    "--fail-on-contract-warnings",
+    is_flag=True,
+    default=False,
+    help="Fail when contract warnings are present.",
+)
+def add_datapoint(
+    datapoint_type: str,
+    file: str,
+    strict_contracts: bool,
+    fail_on_contract_warnings: bool,
+):
     """Add a DataPoint from a JSON file.
 
     DATAPOINT_TYPE: schema, business, or process
@@ -2122,6 +2139,13 @@ def add_datapoint(datapoint_type: str, file: str):
                     f"[red]Error: DataPoint type '{datapoint.type}' "
                     f"doesn't match specified type '{datapoint_type}'[/red]"
                 )
+                sys.exit(1)
+
+            reports = validate_contracts([datapoint], strict=strict_contracts)
+            if not _print_contract_reports(
+                reports,
+                fail_on_warnings=fail_on_contract_warnings,
+            ):
                 sys.exit(1)
 
             # Add to vector store
@@ -2152,7 +2176,22 @@ def add_datapoint(datapoint_type: str, file: str):
     default="datapoints",
     help="Directory containing DataPoint JSON files",
 )
-def sync_datapoints(datapoints_dir: str):
+@click.option(
+    "--strict-contracts/--no-strict-contracts",
+    default=False,
+    help="Treat advisory contract gaps as errors.",
+)
+@click.option(
+    "--fail-on-contract-warnings",
+    is_flag=True,
+    default=False,
+    help="Fail when contract warnings are present.",
+)
+def sync_datapoints(
+    datapoints_dir: str,
+    strict_contracts: bool,
+    fail_on_contract_warnings: bool,
+):
     """Rebuild vector store and knowledge graph from DataPoints directory."""
 
     async def run_sync():
@@ -2182,6 +2221,12 @@ def sync_datapoints(datapoints_dir: str):
                 return
 
             console.print(f"[green]✓ Loaded {len(datapoints)} DataPoints[/green]")
+            reports = validate_contracts(datapoints, strict=strict_contracts)
+            if not _print_contract_reports(
+                reports,
+                fail_on_warnings=fail_on_contract_warnings,
+            ):
+                sys.exit(1)
 
             # Rebuild vector store
             console.print("\n[cyan]Rebuilding vector store...[/cyan]")
@@ -2239,6 +2284,106 @@ def sync_datapoints(datapoints_dir: str):
             sys.exit(1)
 
     asyncio.run(run_sync())
+
+
+@datapoint.command(name="lint")
+@click.option(
+    "--datapoints-dir",
+    default="datapoints",
+    help="Directory containing DataPoint JSON files",
+)
+@click.option(
+    "--strict-contracts/--no-strict-contracts",
+    default=False,
+    help="Treat advisory contract gaps as errors.",
+)
+@click.option(
+    "--fail-on-contract-warnings",
+    is_flag=True,
+    default=False,
+    help="Fail when contract warnings are present.",
+)
+def lint_datapoints(
+    datapoints_dir: str,
+    strict_contracts: bool,
+    fail_on_contract_warnings: bool,
+):
+    """Lint DataPoint contract quality without mutating vector store/graph."""
+
+    async def run_lint():
+        try:
+            datapoints_path = Path(datapoints_dir)
+            if not datapoints_path.exists():
+                console.print(f"[red]Directory not found: {datapoints_dir}[/red]")
+                sys.exit(1)
+
+            loader = DataPointLoader()
+            datapoints = loader.load_directory(datapoints_path)
+            stats = loader.get_stats()
+
+            if stats["failed_count"] > 0:
+                console.print(
+                    f"[yellow]⚠ {stats['failed_count']} DataPoints failed to load[/yellow]"
+                )
+                for error in stats["failed_files"]:
+                    console.print(
+                        f"  [red]• {error['path']}: {error['error']}[/red]"
+                    )
+            if not datapoints:
+                console.print("[yellow]No valid DataPoints found[/yellow]")
+                sys.exit(1)
+
+            reports = validate_contracts(datapoints, strict=strict_contracts)
+            if not _print_contract_reports(
+                reports,
+                fail_on_warnings=fail_on_contract_warnings,
+            ):
+                sys.exit(1)
+        except Exception as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            sys.exit(1)
+
+    asyncio.run(run_lint())
+
+
+def _print_contract_reports(
+    reports: list[DataPointContractReport],
+    *,
+    fail_on_warnings: bool,
+) -> bool:
+    """Print contract validation output and return pass/fail."""
+    total_errors = 0
+    total_warnings = 0
+    for report in reports:
+        for issue in report.issues:
+            label = issue.severity.upper()
+            field_hint = f" ({issue.field})" if issue.field else ""
+            message = (
+                f"[{label}] {report.datapoint_id}: {issue.code}{field_hint} - {issue.message}"
+            )
+            if issue.severity == "error":
+                total_errors += 1
+                console.print(f"[red]{message}[/red]")
+            else:
+                total_warnings += 1
+                console.print(f"[yellow]{message}[/yellow]")
+
+    if total_errors == 0 and total_warnings == 0:
+        console.print("[green]✓ Contract lint passed with no issues[/green]")
+        return True
+
+    summary = (
+        "Contract lint summary: "
+        f"errors={total_errors}, warnings={total_warnings}, datapoints={len(reports)}"
+    )
+    if total_errors > 0:
+        console.print(f"[red]{summary}[/red]")
+        return False
+    if fail_on_warnings and total_warnings > 0:
+        console.print(f"[red]{summary} (failing on warnings)[/red]")
+        return False
+    console.print(f"[yellow]{summary}[/yellow]")
+    return True
 
 
 # ============================================================================

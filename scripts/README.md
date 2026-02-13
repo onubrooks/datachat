@@ -250,6 +250,24 @@ python scripts/phase1_kpi_gate.py --mode release --api-base http://localhost:800
 - Applies stage flags via `PIPELINE_*` env vars in-process and rebuilds settings per stage.
 - See `docs/LATENCY_TUNING.md` for env var guidance and rollout recommendations.
 
+### 5. `lint_datapoints.py` - DataPoint Contract Lint
+
+**Purpose**: Validate DataPoint metadata contracts (quality + governance fields) before sync/runtime usage.
+
+**Usage**:
+
+```bash
+python scripts/lint_datapoints.py --path datapoints --recursive
+python scripts/lint_datapoints.py --path datapoints --recursive --strict
+python scripts/lint_datapoints.py --path datapoints --recursive --fail-on-warnings
+```
+
+**Notes**:
+
+- `--strict` escalates advisory metadata gaps to errors.
+- `--fail-on-warnings` is useful for tightening CI gradually.
+- same contract checks are now wired into `datachat dp add` and `datachat dp sync`.
+
 ## Common Issues & Solutions
 
 ### Issue: `ModuleNotFoundError: No module named 'openai'`
