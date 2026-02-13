@@ -42,7 +42,30 @@ DataChat provides a natural-language interface for operational and analytics dat
 
 ## In Scope Next (Near-Term)
 
-1. Connector expansion beyond PostgreSQL/ClickHouse runtime.
+### Priority 0: MetadataOps Foundation (Ship before major Level 3-5 expansion)
+
+1. **Metadata contracts + linting (authoring quality gate)**
+   - Enforce required metadata fields (grain, units, freshness, owner, exclusions, confidence notes).
+   - Fail DataPoint ingest/sync when contracts are violated.
+2. **Metadata authoring lifecycle controls**
+   - Add review/versioning conventions and ownership workflow for managed/user DataPoints.
+   - Prevent silent overrides and ambiguous duplicate definitions.
+3. **AI-readiness evaluation in CI**
+   - Expand eval gates for intent/retrieval/sql/source/clarification behavior.
+   - Require thresholded eval pass before merge for retrieval/prompt changes.
+4. **Governance metadata APIs**
+   - Expose lineage/freshness/quality metadata as queryable API surfaces.
+   - Ensure agents can consume governance context instead of inferring it.
+5. **RAG observability and traceability**
+   - Persist retrieval traces (source path/tier/version, score, fallback route).
+   - Add deterministic debug views for why a source was selected.
+6. **Runtime telemetry loops**
+   - Track clarification churn, wrong-table selections, fallback rates, and low-confidence hotspots.
+   - Use telemetry to prioritize metadata improvements over prompt tweaks.
+
+### Priority 1: Platform expansion after foundation KPIs are green
+
+1. Connector expansion beyond current runtime engines.
 2. Improved deterministic handling for additional catalog intents.
 3. Better answer quality for semantic metrics in low-context environments.
 
@@ -77,6 +100,18 @@ Planned but not released:
 - Clarification flow prevents obvious misfires for ambiguous prompts.
 - `target_database` routing is deterministic and test-covered.
 - Tool execution fails safely when context/approval requirements are not met.
+
+## Success Metrics (Foundation Lane)
+
+- Metadata contract lint pass rate: >= 95% on managed/user DataPoints.
+- Eval pass rate: retrieval/qa/intent/catalog suites pass configured thresholds in CI.
+- Retrieval trace coverage: >= 95% of responses include inspectable source provenance.
+- Clarification churn: repeated clarification loops reduced release-over-release.
+- Wrong-table regressions: no uncaught critical regressions in deterministic intent tests.
+
+## Delivery Gate for Advanced Levels
+
+Before major Level 3-5 feature expansion, foundation lane metrics must be green for at least one full release cycle.
 
 ## Documentation Contract
 

@@ -24,11 +24,15 @@ Implemented now:
   - runtime context injection for built-in tools
   - planner argument coercion to schema types
 - DataPoint-driven retrieval and synthesis enhancements
+- Metadata quality and observability foundation lane started:
+  - deterministic eval suites (retrieval/qa/intent/catalog)
+  - source-tier precedence and retrieval traceability hooks
+  - telemetry-first tuning for clarification and fallback behavior
 
 Planned (not yet implemented in runtime):
 
 - Workspace index/status/search APIs and full filesystem retrieval workflows
-- Runtime connectors for MySQL, BigQuery, and Redshift
+- Runtime connectors for BigQuery and Redshift
 - Levels 3-5 as fully productized automation tiers
 
 Note:
@@ -48,6 +52,21 @@ Layer 2: Business Logic & Metrics (semantic meaning via DataPoints)
          ↓
 Layer 3: Filesystem (code, docs, configs via WorkspaceDataPoints)
 ```
+
+### MetadataOps Control Plane (Cross-Cutting)
+
+This control plane governs all levels, especially before deeper Level 3-5 automation:
+
+- Metadata contracts and linting
+- Evaluation gates in CI (retrieval, qa, intent, catalog)
+- Retrieval/answer provenance traces
+- Runtime behavior telemetry (clarification churn, fallback reasons, low-confidence hotspots)
+
+Design intent:
+
+- improve metadata authoring quality first
+- use observability loops to direct improvements
+- avoid compensating for poor metadata with prompt-only complexity
 
 ### High-Level Flow
 
@@ -1179,71 +1198,64 @@ datachat/
 
 ## Implementation Phases
 
-### Phase 1: Core Experience (v1.0 - 4 weeks)
+### Phase 1: Core Runtime (Current)
 
-**Goal:** Ship working product, establish foundation.
+**Goal:** Stable, deterministic querying with progressive enhancement.
 
-**Features:**
+**Delivered:**
 
-- ✅ Multi-agent NLQ → SQL pipeline
-- ✅ Level 1: Schema profiling → ManagedDataPoints
-- ✅ Level 2: User DataPoints (context only)
-- ✅ Basic WorkspaceDataPoint indexing (SQL/dbt files)
-- ✅ Read-only database tools
-- ✅ Security: SQL injection detection, query validation
-- ✅ Performance: Query caching, rate limiting
+- Multi-agent NLQ -> SQL pipeline
+- Level 1 credentials-only querying + deterministic catalog intents
+- Level 2 DataPoint ingestion/retrieval (partial semantic quality)
+- Multi-database routing + tooling reliability hardening
 
-**Success Criteria:**
+**Current gap:**
 
-- User can query any database without configuration
-- User can add context DataPoints to improve accuracy
-- Zero security vulnerabilities in penetration test
-- 95%+ query success rate (valid SQL generated)
-- <2s average query generation time
+- metadata quality and observability need to mature before scaling advanced automation.
 
 ---
 
-### Phase 2: Power Features (v1.1 - 2 months)
+### Phase 1.5: MetadataOps Foundation (Next Priority)
 
-**Goal:** Support sophisticated users, improve performance.
+**Goal:** Improve metadata authoring quality and observability loops before deeper agent complexity.
 
-**Features:**
+**Focus areas:**
 
-- ✅ Level 3: Executable DataPoints (SQL templates)
-- ✅ Level 4: Basic materialization (manual configuration)
-- ✅ Advanced workspace indexing (Python, Airflow)
-- ✅ Tool approval workflows
-- ✅ Custom tool plugins (Python + YAML)
-- ✅ Query optimization hints
+- metadata contracts + linting gates for DataPoints
+- metadata authoring lifecycle (ownership/review/versioning)
+- CI evaluation gates (retrieval, qa, intent, catalog)
+- retrieval/answer provenance and trace surfaces
+- runtime telemetry loops (clarification churn, fallback patterns, low-confidence hotspots)
 
-**Success Criteria:**
+**Exit criteria:**
 
-- 50% of queries use templates (faster, consistent)
-- 10+ materialized views improve performance 10x+
-- Users can install custom tools
-- DataChat reads and understands dbt/Airflow code
+- foundation KPI thresholds are stable across at least one release cycle
+- no critical deterministic-intent regressions in CI
+- retrieval/source provenance is inspectable for the vast majority of answers
 
 ---
 
-### Phase 3: Intelligence (v2.0 - Q2-Q3 2026)
+### Phase 2: Advanced Semantics and Performance (After Phase 1.5 gate)
 
-**Goal:** Category-defining capabilities, AI diagnostics.
+**Goal:** Expand Level 3-4 capabilities on top of reliable metadata foundations.
 
-**Features:**
+**Planned scope:**
 
-- ✅ Level 4: Adaptive materialization (learns patterns)
-- ✅ Level 5: Knowledge graph + Neo4j
-- ✅ Anomaly detection and alerting
-- ✅ Root cause analysis
-- ✅ Auto-remediation workflows
-- ✅ Predictive analytics
+- Level 3 executable metric templates
+- Level 4 materialization and optimization policies
+- deeper workspace/code-aware retrieval workflows
 
-**Success Criteria:**
+---
 
-- System automatically optimizes 80%+ of slow queries
-- Root cause analysis provides actionable insights 90%+ of time
-- Anomaly detection catches issues before users notice
-- Open source launch with 1000+ GitHub stars
+### Phase 3: Intelligence Automation (Later)
+
+**Goal:** Level 5 diagnostics and autonomous optimization workflows.
+
+**Planned scope:**
+
+- dependency-aware diagnosis
+- anomaly and root-cause automation
+- remediation recommendations/workflows
 
 ---
 
