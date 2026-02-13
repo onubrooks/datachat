@@ -186,6 +186,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
             conversation_history=history,
             database_type=database_type,
             database_url=database_url,
+            target_connection_id=target_database,
             synthesize_simple_sql=synthesize_simple_sql,
             event_callback=event_callback,
         )

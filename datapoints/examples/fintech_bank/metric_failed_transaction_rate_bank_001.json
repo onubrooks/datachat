@@ -3,9 +3,17 @@
   "type": "Business",
   "name": "Failed Transaction Rate",
   "owner": "payments-ops@example.com",
-  "tags": ["fintech", "payments", "reliability"],
+  "tags": [
+    "fintech",
+    "payments",
+    "reliability"
+  ],
   "metadata": {
-    "source": "fintech-seed"
+    "source": "fintech-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
   },
   "calculation": "COUNT(*) FILTER (WHERE bank_transactions.status IN ('declined', 'reversed')) / NULLIF(COUNT(*), 0)",
   "synonyms": [

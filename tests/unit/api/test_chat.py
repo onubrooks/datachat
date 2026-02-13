@@ -386,6 +386,7 @@ class TestChatEndpoint:
                 kwargs = mock_pipeline.run.call_args.kwargs
                 assert kwargs["database_type"] == "clickhouse"
                 assert kwargs["database_url"] == "clickhouse://u:p@host:8123/db"
+                assert kwargs["target_connection_id"] == "db-123"
 
     @pytest.mark.asyncio
     async def test_chat_forwards_synthesize_simple_sql_override(

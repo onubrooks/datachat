@@ -108,6 +108,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             conversation_history=conversation_history,
             database_type=database_type,
             database_url=database_url,
+            target_connection_id=chat_request.target_database,
             synthesize_simple_sql=chat_request.synthesize_simple_sql,
         )
 

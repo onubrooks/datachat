@@ -32,6 +32,7 @@ Planned (not yet implemented as full product features):
 - `OPERATIONS.md` - deployment and operational guidance.
 - `DEMO_PLAYBOOK.md` - demo setup and persona flows.
 - `DATAPOINT_SCHEMA.md` - DataPoint model and conventions.
+- `DATAPOINT_CONTRACTS.md` - lintable metadata contracts for DataPoint quality gates.
 - `PLAYBOOK.md` - development workflows.
 - `PROMPTS.md` - prompt architecture and guardrails.
 - `DATAPOINT_EXAMPLES_TESTING.md` - end-to-end DataPoint-driven manual test playbook for grocery + fintech examples.

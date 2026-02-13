@@ -3,9 +3,18 @@
   "type": "Business",
   "name": "Waste Cost",
   "owner": "inventory-control@example.com",
-  "tags": ["grocery", "waste", "shrink", "cost"],
+  "tags": [
+    "grocery",
+    "waste",
+    "shrink",
+    "cost"
+  ],
   "metadata": {
-    "source": "grocery-seed"
+    "source": "grocery-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
   },
   "calculation": "SUM(grocery_waste_events.estimated_cost)",
   "synonyms": [

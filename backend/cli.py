@@ -50,6 +50,7 @@ from backend.connectors.factory import create_connector, infer_database_type
 from backend.connectors.postgres import PostgresConnector
 from backend.database.manager import DatabaseConnectionManager
 from backend.initialization.initializer import SystemInitializer
+from backend.knowledge.contracts import DataPointContractReport, validate_contracts
 from backend.knowledge.datapoints import DataPointLoader
 from backend.knowledge.graph import KnowledgeGraph
 from backend.knowledge.retriever import Retriever
@@ -61,6 +62,7 @@ from backend.tools.base import ToolContext
 
 console = Console()
 API_BASE_URL = os.getenv("DATA_CHAT_API_URL", "http://localhost:8000")
+ENV_DATABASE_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada"
 
 
 def configure_cli_logging() -> None:
@@ -215,6 +217,29 @@ def _build_postgres_connector(connection_string: str) -> PostgresConnector:
     )
 
 
+def _apply_datapoint_scope(
+    datapoints: list[Any],
+    *,
+    connection_id: str | None = None,
+    global_scope: bool = False,
+) -> None:
+    """
+    Apply retrieval scope metadata to DataPoints in-place.
+
+    - connection_id -> metadata.connection_id=<id>, metadata.scope=database
+    - global_scope -> metadata.scope=global and remove metadata.connection_id
+    """
+    for datapoint in datapoints:
+        metadata = datapoint.metadata if isinstance(datapoint.metadata, dict) else {}
+        if global_scope:
+            metadata["scope"] = "global"
+            metadata.pop("connection_id", None)
+        elif connection_id:
+            metadata["scope"] = "database"
+            metadata["connection_id"] = str(connection_id)
+        datapoint.metadata = metadata
+
+
 def _default_connection_name(connection_string: str) -> str:
     """Build a stable default registry name from connection URL."""
     from urllib.parse import urlparse
@@ -253,7 +278,8 @@ async def _register_cli_connection(
 
     try:
         inferred_type = infer_database_type(connection_string)
-        target_name = name.strip() if name and name.strip() else _default_connection_name(connection_string)
+        explicit_name = name.strip() if name and name.strip() else None
+        target_name = explicit_name or _default_connection_name(connection_string)
         existing = None
         for connection in await manager.list_connections():
             if connection.database_url.get_secret_value() == connection_string:
@@ -262,8 +288,9 @@ async def _register_cli_connection(
 
         if existing is not None:
             updates: dict[str, str | None] = {}
-            if target_name and existing.name != target_name:
-                updates["name"] = target_name
+            # Preserve curated existing names unless user explicitly overrides with --name.
+            if explicit_name and existing.name != explicit_name:
+                updates["name"] = explicit_name
             if existing.database_type != inferred_type:
                 updates["database_type"] = inferred_type
             if updates:
@@ -1654,6 +1681,11 @@ def demo(dataset: str, persona: str, reset: bool, no_workspace: bool):
         datapoints = loader.load_directory(datapoints_dir)
         if not datapoints:
             raise click.ClickException("No demo DataPoints loaded.")
+        _apply_datapoint_scope(
+            datapoints,
+            connection_id=ENV_DATABASE_CONNECTION_ID,
+            global_scope=False,
+        )
 
         vector_store = VectorStore()
         await vector_store.initialize()
@@ -2102,7 +2134,23 @@ def generation_status(job_id: str):
 @datapoint.command(name="add")
 @click.argument("datapoint_type", type=click.Choice(["schema", "business", "process"]))
 @click.argument("file", type=click.Path(exists=True))
-def add_datapoint(datapoint_type: str, file: str):
+@click.option(
+    "--strict-contracts/--no-strict-contracts",
+    default=False,
+    help="Treat advisory contract gaps as errors.",
+)
+@click.option(
+    "--fail-on-contract-warnings",
+    is_flag=True,
+    default=False,
+    help="Fail when contract warnings are present.",
+)
+def add_datapoint(
+    datapoint_type: str,
+    file: str,
+    strict_contracts: bool,
+    fail_on_contract_warnings: bool,
+):
     """Add a DataPoint from a JSON file.
 
     DATAPOINT_TYPE: schema, business, or process
@@ -2122,6 +2170,13 @@ def add_datapoint(datapoint_type: str, file: str):
                     f"[red]Error: DataPoint type '{datapoint.type}' "
                     f"doesn't match specified type '{datapoint_type}'[/red]"
                 )
+                sys.exit(1)
+
+            reports = validate_contracts([datapoint], strict=strict_contracts)
+            if not _print_contract_reports(
+                reports,
+                fail_on_warnings=fail_on_contract_warnings,
+            ):
                 sys.exit(1)
 
             # Add to vector store
@@ -2152,7 +2207,38 @@ def add_datapoint(datapoint_type: str, file: str):
     default="datapoints",
     help="Directory containing DataPoint JSON files",
 )
-def sync_datapoints(datapoints_dir: str):
+@click.option(
+    "--connection-id",
+    default=None,
+    help=(
+        "Attach DataPoints to a specific database connection id "
+        "(for per-database retrieval scoping)."
+    ),
+)
+@click.option(
+    "--global-scope",
+    is_flag=True,
+    default=False,
+    help="Mark synced DataPoints as global/shared across all databases.",
+)
+@click.option(
+    "--strict-contracts/--no-strict-contracts",
+    default=False,
+    help="Treat advisory contract gaps as errors.",
+)
+@click.option(
+    "--fail-on-contract-warnings",
+    is_flag=True,
+    default=False,
+    help="Fail when contract warnings are present.",
+)
+def sync_datapoints(
+    datapoints_dir: str,
+    connection_id: str | None,
+    global_scope: bool,
+    strict_contracts: bool,
+    fail_on_contract_warnings: bool,
+):
     """Rebuild vector store and knowledge graph from DataPoints directory."""
 
     async def run_sync():
@@ -2181,7 +2267,30 @@ def sync_datapoints(datapoints_dir: str):
                 console.print("[yellow]No valid DataPoints found[/yellow]")
                 return
 
+            if connection_id and global_scope:
+                raise click.ClickException(
+                    "--connection-id and --global-scope are mutually exclusive."
+                )
+            if connection_id or global_scope:
+                _apply_datapoint_scope(
+                    datapoints,
+                    connection_id=connection_id,
+                    global_scope=global_scope,
+                )
+                if global_scope:
+                    console.print("[dim]Applied scope: global[/dim]")
+                else:
+                    console.print(
+                        f"[dim]Applied scope: database ({connection_id})[/dim]"
+                    )
+
             console.print(f"[green]✓ Loaded {len(datapoints)} DataPoints[/green]")
+            reports = validate_contracts(datapoints, strict=strict_contracts)
+            if not _print_contract_reports(
+                reports,
+                fail_on_warnings=fail_on_contract_warnings,
+            ):
+                sys.exit(1)
 
             # Rebuild vector store
             console.print("\n[cyan]Rebuilding vector store...[/cyan]")
@@ -2239,6 +2348,106 @@ def sync_datapoints(datapoints_dir: str):
             sys.exit(1)
 
     asyncio.run(run_sync())
+
+
+@datapoint.command(name="lint")
+@click.option(
+    "--datapoints-dir",
+    default="datapoints",
+    help="Directory containing DataPoint JSON files",
+)
+@click.option(
+    "--strict-contracts/--no-strict-contracts",
+    default=False,
+    help="Treat advisory contract gaps as errors.",
+)
+@click.option(
+    "--fail-on-contract-warnings",
+    is_flag=True,
+    default=False,
+    help="Fail when contract warnings are present.",
+)
+def lint_datapoints(
+    datapoints_dir: str,
+    strict_contracts: bool,
+    fail_on_contract_warnings: bool,
+):
+    """Lint DataPoint contract quality without mutating vector store/graph."""
+
+    async def run_lint():
+        try:
+            datapoints_path = Path(datapoints_dir)
+            if not datapoints_path.exists():
+                console.print(f"[red]Directory not found: {datapoints_dir}[/red]")
+                sys.exit(1)
+
+            loader = DataPointLoader()
+            datapoints = loader.load_directory(datapoints_path)
+            stats = loader.get_stats()
+
+            if stats["failed_count"] > 0:
+                console.print(
+                    f"[yellow]⚠ {stats['failed_count']} DataPoints failed to load[/yellow]"
+                )
+                for error in stats["failed_files"]:
+                    console.print(
+                        f"  [red]• {error['path']}: {error['error']}[/red]"
+                    )
+            if not datapoints:
+                console.print("[yellow]No valid DataPoints found[/yellow]")
+                sys.exit(1)
+
+            reports = validate_contracts(datapoints, strict=strict_contracts)
+            if not _print_contract_reports(
+                reports,
+                fail_on_warnings=fail_on_contract_warnings,
+            ):
+                sys.exit(1)
+        except Exception as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            sys.exit(1)
+
+    asyncio.run(run_lint())
+
+
+def _print_contract_reports(
+    reports: list[DataPointContractReport],
+    *,
+    fail_on_warnings: bool,
+) -> bool:
+    """Print contract validation output and return pass/fail."""
+    total_errors = 0
+    total_warnings = 0
+    for report in reports:
+        for issue in report.issues:
+            label = issue.severity.upper()
+            field_hint = f" ({issue.field})" if issue.field else ""
+            message = (
+                f"[{label}] {report.datapoint_id}: {issue.code}{field_hint} - {issue.message}"
+            )
+            if issue.severity == "error":
+                total_errors += 1
+                console.print(f"[red]{message}[/red]")
+            else:
+                total_warnings += 1
+                console.print(f"[yellow]{message}[/yellow]")
+
+    if total_errors == 0 and total_warnings == 0:
+        console.print("[green]✓ Contract lint passed with no issues[/green]")
+        return True
+
+    summary = (
+        "Contract lint summary: "
+        f"errors={total_errors}, warnings={total_warnings}, datapoints={len(reports)}"
+    )
+    if total_errors > 0:
+        console.print(f"[red]{summary}[/red]")
+        return False
+    if fail_on_warnings and total_warnings > 0:
+        console.print(f"[red]{summary} (failing on warnings)[/red]")
+        return False
+    console.print(f"[yellow]{summary}[/yellow]")
+    return True
 
 
 # ============================================================================

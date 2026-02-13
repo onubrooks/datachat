@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -37,6 +39,11 @@ class SyncStatusResponse(BaseModel):
 
 class SyncTriggerResponse(BaseModel):
     job_id: UUID
+
+
+class SyncTriggerRequest(BaseModel):
+    scope: Literal["auto", "global", "database"] = "auto"
+    connection_id: str | None = None
 
 
 class DataPointSummary(BaseModel):
@@ -77,6 +84,13 @@ def _get_orchestrator():
 
 def _file_path(datapoint_id: str) -> Path:
     return DATA_DIR / f"{datapoint_id}.json"
+
+
+async def _resolve_maybe_awaitable(value):
+    """Return awaited value when a callable returns a coroutine (tests/mocks)."""
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 @router.post("/datapoints", status_code=status.HTTP_201_CREATED)
@@ -133,9 +147,23 @@ async def delete_datapoint(datapoint_id: str) -> None:
 
 
 @router.post("/sync", response_model=SyncTriggerResponse)
-async def trigger_sync() -> SyncTriggerResponse:
+async def trigger_sync(payload: SyncTriggerRequest | None = None) -> SyncTriggerResponse:
     orchestrator = _get_orchestrator()
-    job_id = orchestrator.enqueue_sync_all()
+    scope = payload.scope if payload else "auto"
+    connection_id = payload.connection_id if payload else None
+    if scope == "database" and not connection_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="connection_id is required when scope=database",
+        )
+    if scope in {"auto", "global"} and connection_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="connection_id is only allowed when scope=database",
+        )
+    job_id = await _resolve_maybe_awaitable(
+        orchestrator.enqueue_sync_all(scope=scope, connection_id=connection_id)
+    )
     return SyncTriggerResponse(job_id=job_id)
 
 

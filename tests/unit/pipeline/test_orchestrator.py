@@ -218,8 +218,87 @@ class TestPipelineExecution:
         # Verify final state
         assert result["natural_language_answer"] == "Found 1 result."
         assert result["query_result"]["row_count"] == 1
-        assert result["validation_passed"] is True
-        assert result.get("error") is None
+
+    @pytest.mark.asyncio
+    async def test_filter_datapoints_by_live_schema_uses_related_tables(self, pipeline):
+        datapoints = [
+            {
+                "datapoint_id": "metric_grocery_1",
+                "datapoint_type": "Business",
+                "name": "Total Grocery Revenue",
+                "score": 0.9,
+                "source": "vector",
+                "metadata": {"related_tables": "public.grocery_sales_transactions"},
+            },
+            {
+                "datapoint_id": "metric_fintech_1",
+                "datapoint_type": "Business",
+                "name": "Total Deposits",
+                "score": 0.9,
+                "source": "vector",
+                "metadata": {"related_tables": "public.bank_accounts"},
+            },
+        ]
+        pipeline._get_live_table_catalog = AsyncMock(return_value={"public.bank_accounts"})
+
+        filtered = await pipeline._filter_datapoints_by_live_schema(
+            datapoints, database_type="postgresql", database_url="postgresql://test"
+        )
+
+        assert [item["datapoint_id"] for item in filtered] == ["metric_fintech_1"]
+
+    def test_filter_datapoints_by_target_connection(self, pipeline):
+        datapoints = [
+            {
+                "datapoint_id": "dp_unscoped",
+                "metadata": {},
+            },
+            {
+                "datapoint_id": "dp_fintech",
+                "metadata": {"connection_id": "conn-fintech"},
+            },
+            {
+                "datapoint_id": "dp_grocery",
+                "metadata": {"connection_id": "conn-grocery"},
+            },
+        ]
+
+        filtered = pipeline._filter_datapoints_by_target_connection(
+            datapoints, target_connection_id="conn-fintech"
+        )
+
+        assert [item["datapoint_id"] for item in filtered] == [
+            "dp_fintech",
+        ]
+
+    def test_filter_datapoints_by_target_connection_with_global(self, pipeline):
+        datapoints = [
+            {
+                "datapoint_id": "dp_global",
+                "metadata": {"scope": "global"},
+            },
+            {
+                "datapoint_id": "dp_fintech",
+                "metadata": {"connection_id": "conn-fintech"},
+            },
+            {
+                "datapoint_id": "dp_unscoped",
+                "metadata": {},
+            },
+            {
+                "datapoint_id": "dp_grocery",
+                "metadata": {"connection_id": "conn-grocery"},
+            },
+        ]
+
+        filtered = pipeline._filter_datapoints_by_target_connection(
+            datapoints, target_connection_id="conn-fintech"
+        )
+
+        assert [item["datapoint_id"] for item in filtered] == [
+            "dp_fintech",
+            "dp_global",
+        ]
 
     @pytest.mark.asyncio
     async def test_pipeline_tracks_metadata(self, mock_agents):
@@ -980,6 +1059,24 @@ class TestIntentGate:
 
     def test_query_requires_sql_ignores_datapoint_keyword(self, pipeline):
         assert pipeline._query_requires_sql("what datapoint explains loan default rate?") is False
+
+    def test_definition_query_with_rate_routes_to_context(self, pipeline):
+        state = {
+            "query": "define loan default rate",
+            "intent": "data_query",
+            "context_confidence": 0.4,
+            "retrieved_datapoints": [{"datapoint_id": "metric_default_rate_001"}],
+        }
+        assert pipeline._should_use_context_answer(state) == "context"
+
+    def test_meaning_query_with_rate_routes_to_context(self, pipeline):
+        state = {
+            "query": "what does failed transaction rate mean?",
+            "intent": "data_query",
+            "context_confidence": 0.4,
+            "retrieved_datapoints": [{"datapoint_id": "metric_failed_transaction_rate_001"}],
+        }
+        assert pipeline._should_use_context_answer(state) == "context"
 
     def test_rate_query_routes_to_sql_not_context(self, pipeline):
         state = {

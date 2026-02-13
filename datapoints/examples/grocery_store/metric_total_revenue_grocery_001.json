@@ -3,9 +3,17 @@
   "type": "Business",
   "name": "Total Grocery Revenue",
   "owner": "finance-analytics@example.com",
-  "tags": ["grocery", "revenue", "kpi"],
+  "tags": [
+    "grocery",
+    "revenue",
+    "kpi"
+  ],
   "metadata": {
-    "source": "grocery-seed"
+    "source": "grocery-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
   },
   "calculation": "SUM(grocery_sales_transactions.total_amount)",
   "synonyms": [

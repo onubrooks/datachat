@@ -3,9 +3,17 @@
   "type": "Business",
   "name": "Total Deposits",
   "owner": "finance-analytics@example.com",
-  "tags": ["fintech", "deposits", "balance"],
+  "tags": [
+    "fintech",
+    "deposits",
+    "balance"
+  ],
   "metadata": {
-    "source": "fintech-seed"
+    "source": "fintech-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
   },
   "calculation": "SUM(bank_accounts.current_balance) FILTER (WHERE bank_accounts.status = 'active')",
   "synonyms": [

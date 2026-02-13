@@ -3,9 +3,17 @@
   "type": "Business",
   "name": "Stockout Rate",
   "owner": "inventory-control@example.com",
-  "tags": ["grocery", "inventory", "stockout"],
+  "tags": [
+    "grocery",
+    "inventory",
+    "stockout"
+  ],
   "metadata": {
-    "source": "grocery-seed"
+    "source": "grocery-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
   },
   "calculation": "COUNT(*) FILTER (WHERE on_hand_qty - reserved_qty <= 0) / COUNT(*)",
   "synonyms": [

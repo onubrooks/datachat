@@ -82,6 +82,7 @@ async def test_generates_schema_datapoints_from_profile():
     datapoint = generated.schema_datapoints[0].datapoint
     assert datapoint["type"] == "Schema"
     assert "Track customer orders" in datapoint["business_purpose"]
+    assert datapoint["metadata"]["connection_id"] == str(profile.connection_id)
 
 
 @pytest.mark.asyncio
@@ -101,6 +102,7 @@ async def test_suggests_metrics_from_numeric_columns():
     metric = generated.business_datapoints[0].datapoint
     assert metric["type"] == "Business"
     assert metric["aggregation"] == "SUM"
+    assert metric["metadata"]["connection_id"] == str(profile.connection_id)
 
 
 @pytest.mark.asyncio

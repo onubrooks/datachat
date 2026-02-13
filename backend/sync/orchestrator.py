@@ -66,9 +66,20 @@ class SyncOrchestrator:
         payload["job_id"] = str(payload["job_id"])
         return payload
 
-    def enqueue_sync_all(self) -> UUID:
+    def enqueue_sync_all(
+        self,
+        *,
+        scope: str = "auto",
+        connection_id: str | None = None,
+    ) -> UUID:
         job_id = uuid4()
-        self._schedule_job(job_id, "full", None)
+        self._schedule_job(
+            job_id,
+            "full",
+            None,
+            scope=scope,
+            connection_id=connection_id,
+        )
         return job_id
 
     def enqueue_sync_incremental(self, datapoint_ids: Iterable[str]) -> UUID:
@@ -76,9 +87,14 @@ class SyncOrchestrator:
         self._schedule_job(job_id, "incremental", list(datapoint_ids))
         return job_id
 
-    async def sync_all(self) -> SyncJob:
+    async def sync_all(
+        self,
+        *,
+        scope: str = "auto",
+        connection_id: str | None = None,
+    ) -> SyncJob:
         job = self._start_job(uuid4(), "full")
-        await self._run_sync_all(job)
+        await self._run_sync_all(job, scope=scope, connection_id=connection_id)
         return job
 
     async def sync_incremental(self, datapoint_ids: Iterable[str]) -> SyncJob:
@@ -86,11 +102,23 @@ class SyncOrchestrator:
         await self._run_sync_incremental(job, list(datapoint_ids))
         return job
 
-    def _schedule_job(self, job_id: UUID, sync_type: str, datapoint_ids: list[str] | None) -> None:
+    def _schedule_job(
+        self,
+        job_id: UUID,
+        sync_type: str,
+        datapoint_ids: list[str] | None,
+        *,
+        scope: str = "auto",
+        connection_id: str | None = None,
+    ) -> None:
         if not self._loop:
             raise RuntimeError("Sync orchestrator requires an event loop")
         if sync_type == "full":
-            coro = self._run_sync_all(self._start_job(job_id, sync_type))
+            coro = self._run_sync_all(
+                self._start_job(job_id, sync_type),
+                scope=scope,
+                connection_id=connection_id,
+            )
         else:
             coro = self._run_sync_incremental(
                 self._start_job(job_id, sync_type), datapoint_ids or []
@@ -107,10 +135,19 @@ class SyncOrchestrator:
         self._current_job = job
         return job
 
-    async def _run_sync_all(self, job: SyncJob) -> None:
+    async def _run_sync_all(
+        self,
+        job: SyncJob,
+        *,
+        scope: str = "auto",
+        connection_id: str | None = None,
+    ) -> None:
         async with self._lock:
             try:
-                datapoints = self._load_all_datapoints()
+                datapoints = self._load_all_datapoints(
+                    scope=scope,
+                    connection_id=connection_id,
+                )
                 job.total_datapoints = len(datapoints)
 
                 await self._vector_store.clear()
@@ -154,12 +191,19 @@ class SyncOrchestrator:
             finally:
                 job.finished_at = datetime.now(UTC)
 
-    def _load_all_datapoints(self) -> list[DataPoint]:
+    def _load_all_datapoints(
+        self,
+        *,
+        scope: str = "auto",
+        connection_id: str | None = None,
+    ) -> list[DataPoint]:
         datapoint_files = self._collect_datapoint_files()
         datapoints: list[DataPoint] = []
         for file_path in datapoint_files:
             try:
-                datapoints.append(self._loader.load_file(file_path))
+                datapoint = self._loader.load_file(file_path)
+                self._apply_scope(datapoint, scope=scope, connection_id=connection_id)
+                datapoints.append(datapoint)
             except Exception:
                 continue
         return datapoints
@@ -188,6 +232,25 @@ class SyncOrchestrator:
                 continue
             files.append(path)
         return files
+
+    @staticmethod
+    def _apply_scope(
+        datapoint: DataPoint,
+        *,
+        scope: str = "auto",
+        connection_id: str | None = None,
+    ) -> None:
+        if scope not in {"auto", "global", "database"}:
+            return
+
+        metadata = datapoint.metadata if isinstance(datapoint.metadata, dict) else {}
+        if scope == "global":
+            metadata["scope"] = "global"
+            metadata.pop("connection_id", None)
+        elif scope == "database" and connection_id:
+            metadata["scope"] = "database"
+            metadata["connection_id"] = str(connection_id)
+        datapoint.metadata = metadata
 
 
 def save_datapoint_to_disk(datapoint: dict, filepath: Path) -> None:

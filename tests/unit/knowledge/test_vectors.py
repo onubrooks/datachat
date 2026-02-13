@@ -649,9 +649,11 @@ class TestMetadataCreation:
 
     def test_business_datapoint_metadata(self, test_vector_store, sample_business_datapoint):
         """Test metadata creation for Business DataPoint."""
+        sample_business_datapoint.metadata = {"connection_id": "conn-fintech"}
         metadata = test_vector_store._create_metadata(sample_business_datapoint)
 
         assert metadata["datapoint_id"] == "metric_test_revenue_001"
         assert metadata["type"] == "Business"
         assert metadata["related_tables"] == "test.sales"
+        assert metadata["connection_id"] == "conn-fintech"
         assert metadata["tags"] == "test,metric"

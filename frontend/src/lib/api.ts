@@ -135,6 +135,44 @@ export interface ToolExecuteResponse {
   error?: string | null;
 }
 
+function extractApiErrorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === "object") {
+    const payload = error as Record<string, unknown>;
+    const direct =
+      (typeof payload.detail === "string" && payload.detail) ||
+      (typeof payload.message === "string" && payload.message);
+    if (direct) return direct;
+
+    if (payload.detail && typeof payload.detail === "object") {
+      const detail = payload.detail as Record<string, unknown>;
+      const detailMessage =
+        (typeof detail.message === "string" && detail.message) ||
+        (typeof detail.detail === "string" && detail.detail);
+      const contractErrors = Array.isArray(detail.contract_errors)
+        ? detail.contract_errors
+            .map((item) => {
+              if (!item || typeof item !== "object") return null;
+              const issue = item as Record<string, unknown>;
+              const code = typeof issue.code === "string" ? issue.code : "contract_error";
+              const message =
+                typeof issue.message === "string"
+                  ? issue.message
+                  : "DataPoint contract validation failed.";
+              return `${code}: ${message}`;
+            })
+            .filter(Boolean)
+            .join("; ")
+        : "";
+      if (detailMessage && contractErrors) {
+        return `${detailMessage} ${contractErrors}`;
+      }
+      if (detailMessage) return detailMessage;
+      if (contractErrors) return contractErrors;
+    }
+  }
+  return fallback;
+}
+
 export interface StreamChatHandlers {
   onOpen?: () => void;
   onClose?: () => void;
@@ -529,8 +567,21 @@ export class DataChatAPI {
     return data.tables || [];
   }
 
-  async listPendingDatapoints(): Promise<PendingDataPoint[]> {
-    const response = await fetch(`${this.baseUrl}/api/v1/datapoints/pending`);
+  async listPendingDatapoints(options?: {
+    statusFilter?: "pending" | "approved" | "rejected" | "all";
+    connectionId?: string | null;
+  }): Promise<PendingDataPoint[]> {
+    const params = new URLSearchParams();
+    if (options?.statusFilter) {
+      params.set("status_filter", options.statusFilter);
+    }
+    if (options?.connectionId) {
+      params.set("connection_id", options.connectionId);
+    }
+    const query = params.toString();
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/datapoints/pending${query ? `?${query}` : ""}`
+    );
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: response.statusText }));
       throw new Error(error.message || `HTTP ${response.status}`);
@@ -563,7 +614,9 @@ export class DataChatAPI {
     );
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: response.statusText }));
-      throw new Error(error.message || `HTTP ${response.status}`);
+      throw new Error(
+        extractApiErrorMessage(error, response.statusText || `HTTP ${response.status}`)
+      );
     }
     return response.json();
   }
@@ -579,26 +632,48 @@ export class DataChatAPI {
     );
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: response.statusText }));
-      throw new Error(error.message || `HTTP ${response.status}`);
+      throw new Error(
+        extractApiErrorMessage(error, response.statusText || `HTTP ${response.status}`)
+      );
     }
     return response.json();
   }
 
-  async bulkApproveDatapoints(): Promise<PendingDataPoint[]> {
+  async bulkApproveDatapoints(connectionId?: string | null): Promise<PendingDataPoint[]> {
+    const params = new URLSearchParams();
+    if (connectionId) {
+      params.set("connection_id", connectionId);
+    }
+    const query = params.toString();
     const response = await fetch(
-      `${this.baseUrl}/api/v1/datapoints/pending/bulk-approve`,
+      `${this.baseUrl}/api/v1/datapoints/pending/bulk-approve${query ? `?${query}` : ""}`,
       { method: "POST" }
     );
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: response.statusText }));
-      throw new Error(error.message || `HTTP ${response.status}`);
+      throw new Error(
+        extractApiErrorMessage(error, response.statusText || `HTTP ${response.status}`)
+      );
     }
     const data = await response.json();
     return data.pending || [];
   }
 
-  async triggerSync(): Promise<{ job_id: string }> {
-    const response = await fetch(`${this.baseUrl}/api/v1/sync`, { method: "POST" });
+  async triggerSync(payload?: {
+    scope?: "auto" | "global" | "database";
+    connection_id?: string | null;
+  }): Promise<{ job_id: string }> {
+    const body = payload
+      ? {
+          ...(payload.scope ? { scope: payload.scope } : {}),
+          ...(payload.connection_id ? { connection_id: payload.connection_id } : {}),
+        }
+      : undefined;
+    const response = await fetch(`${this.baseUrl}/api/v1/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: response.statusText }));
       throw new Error(error.message || `HTTP ${response.status}`);

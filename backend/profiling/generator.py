@@ -56,13 +56,15 @@ class DataPointGenerator:
 
         business_points: list[GeneratedDataPoint] = []
         if depth == "schema_only":
-            return self._dedupe_generated(
+            result = self._dedupe_generated(
                 GeneratedDataPoints(
-                profile_id=profile.profile_id,
-                schema_datapoints=schema_points,
-                business_datapoints=business_points,
+                    profile_id=profile.profile_id,
+                    schema_datapoints=schema_points,
+                    business_datapoints=business_points,
                 )
             )
+            self._attach_connection_metadata(result, str(profile.connection_id))
+            return result
 
         if depth == "metrics_basic":
             for idx, table in enumerate(selected_tables, start=1):
@@ -79,13 +81,29 @@ class DataPointGenerator:
                 progress_callback=progress_callback,
             )
 
-        return self._dedupe_generated(
+        result = self._dedupe_generated(
             GeneratedDataPoints(
-            profile_id=profile.profile_id,
-            schema_datapoints=schema_points,
-            business_datapoints=business_points,
+                profile_id=profile.profile_id,
+                schema_datapoints=schema_points,
+                business_datapoints=business_points,
             )
         )
+        self._attach_connection_metadata(result, str(profile.connection_id))
+        return result
+
+    @staticmethod
+    def _attach_connection_metadata(
+        generated: GeneratedDataPoints, connection_id: str
+    ) -> None:
+        for item in [*generated.schema_datapoints, *generated.business_datapoints]:
+            payload = item.datapoint
+            if not isinstance(payload, dict):
+                continue
+            metadata = payload.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+                payload["metadata"] = metadata
+            metadata["connection_id"] = connection_id
 
     async def _generate_schema_datapoint(
         self, table: TableProfile, index: int

@@ -3,9 +3,17 @@
   "type": "Business",
   "name": "Loan Default Rate",
   "owner": "credit-risk@example.com",
-  "tags": ["fintech", "credit", "default"],
+  "tags": [
+    "fintech",
+    "credit",
+    "default"
+  ],
   "metadata": {
-    "source": "fintech-seed"
+    "source": "fintech-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
   },
   "calculation": "COUNT(*) FILTER (WHERE bank_loans.days_past_due >= 90) / NULLIF(COUNT(*), 0)",
   "synonyms": [

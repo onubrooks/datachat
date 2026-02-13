@@ -3,6 +3,7 @@
 This folder contains a realistic sample DataPoint bundle for banking/fintech analytics.
 
 Includes:
+
 - Schema DataPoints for customers, accounts, transactions, cards, loans, and FX rates
 - Business metric DataPoints for deposits, interest income, default rate, and failed transactions
 - Process DataPoints for daily transaction rollups and nightly risk snapshots

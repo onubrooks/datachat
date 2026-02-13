@@ -72,6 +72,7 @@ class PipelineState(TypedDict, total=False):
     conversation_history: list[Message]
     database_type: str
     database_url: str | None
+    target_connection_id: str | None
     user_id: str | None
     correlation_id: str | None
     tool_approved: bool
@@ -623,7 +624,7 @@ class DataChatPipeline:
             output = await self.context.execute(input_data)
 
             # Update state
-            filtered_datapoints = await self._filter_datapoints_by_live_schema(
+            connection_scoped_datapoints = self._filter_datapoints_by_target_connection(
                 [
                     {
                         "datapoint_id": dp.datapoint_id,
@@ -636,6 +637,10 @@ class DataChatPipeline:
                     }
                     for dp in output.investigation_memory.datapoints
                 ],
+                target_connection_id=state.get("target_connection_id"),
+            )
+            filtered_datapoints = await self._filter_datapoints_by_live_schema(
+                connection_scoped_datapoints,
                 database_type=state.get("database_type"),
                 database_url=state.get("database_url"),
             )
@@ -665,6 +670,70 @@ class DataChatPipeline:
             state["error"] = f"Context retrieval failed: {e}"
 
         return state
+
+    def _filter_datapoints_by_target_connection(
+        self,
+        datapoints: list[dict[str, Any]],
+        target_connection_id: str | None,
+    ) -> list[dict[str, Any]]:
+        """
+        Scope retrieved DataPoints to the selected connection.
+
+        Rules:
+        - Keep datapoints with matching metadata.connection_id
+        - Keep explicitly global datapoints (metadata.scope in {global, shared}
+          or metadata.shared=True)
+        - If no scoped/global datapoints were retrieved at all, fallback to
+          legacy unscoped datapoints for backwards compatibility.
+        """
+        if not target_connection_id:
+            return datapoints
+
+        scoped: list[dict[str, Any]] = []
+        global_items: list[dict[str, Any]] = []
+        unscoped: list[dict[str, Any]] = []
+        removed_foreign = 0
+        for dp in datapoints:
+            metadata = dp.get("metadata") or {}
+            scope = str(metadata.get("scope", "")).strip().lower()
+            shared_raw = metadata.get("shared")
+            shared_flag = (
+                shared_raw is True
+                or str(shared_raw).strip().lower() in {"1", "true", "yes", "y"}
+            )
+            if scope in {"global", "shared"} or shared_flag:
+                global_items.append(dp)
+                continue
+
+            connection_id = metadata.get("connection_id")
+            if connection_id is None:
+                unscoped.append(dp)
+                continue
+
+            if str(connection_id) != str(target_connection_id):
+                removed_foreign += 1
+                continue
+            scoped.append(dp)
+
+        if removed_foreign:
+            logger.info(
+                "Filtered %s datapoints scoped to a different connection",
+                removed_foreign,
+            )
+
+        # Preferred mode: only scoped + global datapoints.
+        if scoped or global_items:
+            return [*scoped, *global_items]
+
+        # Backwards compatibility: old datasets may be unscoped.
+        if unscoped:
+            logger.info(
+                "No scoped datapoints matched target connection; using %s unscoped datapoints",
+                len(unscoped),
+            )
+            return unscoped
+
+        return []
 
     async def _run_context_answer(self, state: PipelineState) -> PipelineState:
         """Run ContextAnswerAgent."""
@@ -773,8 +842,8 @@ class DataChatPipeline:
 
         filtered: list[dict[str, Any]] = []
         for dp in datapoints:
-            table_key = self._extract_datapoint_table_key(dp)
-            if table_key and table_key not in live_tables:
+            table_keys = self._extract_datapoint_table_keys(dp)
+            if table_keys and table_keys.isdisjoint(live_tables):
                 continue
             filtered.append(dp)
 
@@ -832,21 +901,52 @@ class DataChatPipeline:
         except Exception:
             return None
 
-    def _extract_datapoint_table_key(self, datapoint: dict[str, Any]) -> str | None:
+    def _extract_datapoint_table_keys(self, datapoint: dict[str, Any]) -> set[str]:
         metadata = datapoint.get("metadata") or {}
-        table_name = (
-            metadata.get("table_name")
-            or metadata.get("table")
-            or metadata.get("table_key")
-            or datapoint.get("table_name")
-        )
-        if not table_name:
-            return None
-        schema = metadata.get("schema")
-        table_key = str(table_name)
-        if "." not in table_key and schema:
-            table_key = f"{schema}.{table_key}"
-        return table_key.lower()
+        schema = metadata.get("schema") or datapoint.get("schema")
+
+        def _normalize_table(value: Any) -> str | None:
+            if value is None:
+                return None
+            table_key = str(value).strip()
+            if not table_key:
+                return None
+            if "." not in table_key and schema:
+                table_key = f"{schema}.{table_key}"
+            return table_key.lower()
+
+        keys: set[str] = set()
+
+        for value in (
+            metadata.get("table_name"),
+            metadata.get("table"),
+            metadata.get("table_key"),
+            datapoint.get("table_name"),
+        ):
+            normalized = _normalize_table(value)
+            if normalized:
+                keys.add(normalized)
+
+        related_tables = datapoint.get("related_tables")
+        if isinstance(related_tables, list):
+            for value in related_tables:
+                normalized = _normalize_table(value)
+                if normalized:
+                    keys.add(normalized)
+
+        metadata_related = metadata.get("related_tables")
+        if isinstance(metadata_related, str):
+            for value in metadata_related.split(","):
+                normalized = _normalize_table(value)
+                if normalized:
+                    keys.add(normalized)
+        elif isinstance(metadata_related, list):
+            for value in metadata_related:
+                normalized = _normalize_table(value)
+                if normalized:
+                    keys.add(normalized)
+
+        return keys
 
     def _maybe_set_schema_preface(self, state: PipelineState) -> None:
         if state.get("context_preface"):
@@ -1377,6 +1477,9 @@ class DataChatPipeline:
         if "datapoint" in query or "data point" in query:
             return "context"
 
+        if self._query_is_definition_intent(query):
+            return "context"
+
         if self._query_requires_sql(query):
             return "sql"
 
@@ -1387,6 +1490,18 @@ class DataChatPipeline:
             return "context"
 
         return "sql"
+
+    def _query_is_definition_intent(self, query: str) -> bool:
+        patterns = [
+            r"^\s*define\b",
+            r"\bdefinition of\b",
+            r"\bwhat does\b.*\b(mean|stand for)\b",
+            r"\bmeaning of\b",
+            r"\bhow is\b.*\b(calculated|computed|defined)\b",
+            r"\bhow do (?:i|we|you)\b.*\bcalculate\b",
+            r"\bbusiness rules?\b",
+        ]
+        return any(re.search(pattern, query) for pattern in patterns)
 
     def _query_is_table_list(self, query: str) -> bool:
         patterns = [
@@ -2377,6 +2492,7 @@ class DataChatPipeline:
         conversation_history: list[Message] | None = None,
         database_type: str = "postgresql",
         database_url: str | None = None,
+        target_connection_id: str | None = None,
         synthesize_simple_sql: bool | None = None,
     ) -> PipelineState:
         """
@@ -2397,6 +2513,7 @@ class DataChatPipeline:
             "conversation_history": conversation_history or [],
             "database_type": database_type,
             "database_url": database_url,
+            "target_connection_id": target_connection_id,
             "user_id": "anonymous",
             "correlation_id": f"local-{int(time.time() * 1000)}",
             "tool_approved": False,
@@ -2465,6 +2582,7 @@ class DataChatPipeline:
         conversation_history: list[Message] | None = None,
         database_type: str = "postgresql",
         database_url: str | None = None,
+        target_connection_id: str | None = None,
         synthesize_simple_sql: bool | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """
@@ -2487,6 +2605,7 @@ class DataChatPipeline:
             "conversation_history": conversation_history or [],
             "database_type": database_type,
             "database_url": database_url,
+            "target_connection_id": target_connection_id,
             "user_id": "anonymous",
             "correlation_id": f"stream-{int(time.time() * 1000)}",
             "tool_approved": False,
@@ -2556,6 +2675,7 @@ class DataChatPipeline:
         conversation_history: list[Message] | None = None,
         database_type: str = "postgresql",
         database_url: str | None = None,
+        target_connection_id: str | None = None,
         synthesize_simple_sql: bool | None = None,
         event_callback: Any = None,
     ) -> PipelineState:
@@ -2586,6 +2706,7 @@ class DataChatPipeline:
             "conversation_history": conversation_history or [],
             "database_type": database_type,
             "database_url": database_url,
+            "target_connection_id": target_connection_id,
             "user_id": "anonymous",
             "correlation_id": f"stream-{int(time.time() * 1000)}",
             "tool_approved": False,
