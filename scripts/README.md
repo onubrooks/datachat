@@ -234,6 +234,7 @@ python scripts/benchmark_latency_progressive.py --iterations 2 --mode isolated -
 ```bash
 python scripts/phase1_kpi_gate.py --mode ci
 python scripts/phase1_kpi_gate.py --mode release --api-base http://localhost:8000
+python scripts/phase1_kpi_gate.py --mode ci --report-json reports/phase1_ci_gate.json --report-md reports/phase1_ci_gate.md
 ```
 
 **Config**: `config/phase1_kpi.json`
@@ -242,7 +243,10 @@ python scripts/phase1_kpi_gate.py --mode release --api-base http://localhost:800
 - core API parity test suite
 - deterministic MySQL summary regressions
 - connection type/url mismatch validation
+- release smoke checks (health/ready/system status)
 - release eval thresholds (intent + catalog)
+- release SLO/quality thresholds (intent latency, LLM-call budget, source accuracy, clarification match)
+- connector-aware release eval preconditions (`required_database_type` + `on_missing`)
 
 **Notes**:
 

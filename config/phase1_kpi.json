@@ -17,6 +17,28 @@
   "release_checks": {
     "intent_avg_latency_ms_max": 12000.0,
     "intent_avg_llm_calls_max": 4.0,
+    "intent_source_accuracy_min": 0.8,
+    "intent_clarification_match_min": 0.75,
+    "smoke_checks": [
+      {
+        "name": "health",
+        "path": "/api/v1/health",
+        "expect_status": 200,
+        "require_json_keys": ["status", "version"]
+      },
+      {
+        "name": "ready",
+        "path": "/api/v1/ready",
+        "expect_status": 200,
+        "require_json_keys": ["status", "checks"]
+      },
+      {
+        "name": "system-status",
+        "path": "/api/v1/system/status",
+        "expect_status": 200,
+        "require_json_keys": ["has_databases", "has_datapoints", "setup_required"]
+      }
+    ],
     "eval_runs": [
       {
         "name": "intent-credentials",
@@ -27,6 +49,8 @@
         "name": "catalog-mysql",
         "mode": "catalog",
         "dataset": "eval/catalog/mysql_credentials.json",
+        "required_database_type": "mysql",
+        "on_missing": "skip",
         "thresholds": {
           "min_sql_match_rate": 0.7,
           "min_source_match_rate": 0.8,
