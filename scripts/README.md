@@ -21,6 +21,7 @@ psql "$SYSTEM_DATABASE_URL" -f scripts/demo_seed.sql
 **Purpose**: Create grocery operations tables with realistic sample data for DataPoint-driven evaluation.
 
 Tables created:
+
 - `grocery_stores`
 - `grocery_suppliers`
 - `grocery_products`
@@ -44,6 +45,7 @@ psql "postgresql://postgres:@localhost:5432/datachat_grocery" -f scripts/grocery
 **Purpose**: Create banking/fintech operational tables with realistic sample data for DataPoint-driven testing.
 
 Tables created:
+
 - `bank_customers`
 - `bank_accounts`
 - `bank_transactions`
@@ -231,6 +233,7 @@ python scripts/benchmark_latency_progressive.py --iterations 2 --mode isolated -
 **Purpose**: Enforce Phase 1 (core runtime) KPI checks in CI and release verification.
 
 **Commands**:
+
 ```bash
 python scripts/phase1_kpi_gate.py --mode ci
 python scripts/phase1_kpi_gate.py --mode release --api-base http://localhost:8000
@@ -240,6 +243,7 @@ python scripts/phase1_kpi_gate.py --mode ci --report-json reports/phase1_ci_gate
 **Config**: `config/phase1_kpi.json`
 
 **Checks include**:
+
 - core API parity test suite
 - deterministic MySQL summary regressions
 - connection type/url mismatch validation
@@ -254,7 +258,29 @@ python scripts/phase1_kpi_gate.py --mode ci --report-json reports/phase1_ci_gate
 - Applies stage flags via `PIPELINE_*` env vars in-process and rebuilds settings per stage.
 - See `docs/LATENCY_TUNING.md` for env var guidance and rollout recommendations.
 
-### 5. `lint_datapoints.py` - DataPoint Contract Lint
+### 6. `manual_eval_runner.py` - Interactive Manual Scoring Runner
+
+**Purpose**: Send domain question-bank prompts to `/api/v1/chat`, capture answers, and record manual rubric scores.
+
+**Commands**:
+
+```bash
+python scripts/manual_eval_runner.py --domain grocery --mode-label without_dp_grocery --target-database <connection_id>
+python scripts/manual_eval_runner.py --domain fintech --mode-label with_dp_fintech --target-database <connection_id>
+python scripts/manual_eval_runner.py --domain all --no-score-prompt
+```
+
+**Inputs**:
+
+- Question source: `docs/DOMAIN_QUESTION_BANK.md`
+- Rubric guide: `docs/MANUAL_EVAL_SCORECARD.md`
+
+**Outputs**:
+
+- `reports/manual_eval/manual_eval_<run_id>.json`
+- `reports/manual_eval/manual_eval_<run_id>.csv`
+
+### 7. `lint_datapoints.py` - DataPoint Contract Lint
 
 **Purpose**: Validate DataPoint metadata contracts (quality + governance fields) before sync/runtime usage.
 
