@@ -29,6 +29,7 @@ Planned (not yet implemented as full product features):
 - `PRD.md` - delivery-tracking PRD (shipped vs planned).
 - `CAPABILITY_CONTRACT.md` - shipped runtime capability matrix (supported/partial/planned).
 - `METADATAOPS_FOUNDATION.md` - philosophy, priorities, and contributor alignment for metadata quality + observability.
+- `SESSION_MEMORY.md` - chat history + memory strategy for follow-ups across UI/CLI/API.
 - `PHASE1_KPI_GATES.md` - CI and release KPI gates for Phase 1 operational hardening.
 - `MANUAL_EVAL_SCORECARD.md` - manual scoring rubric + runner commands for UI/CLI comparison.
 - `OPERATIONS.md` - deployment and operational guidance.

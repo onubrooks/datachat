@@ -1076,6 +1076,24 @@ class TestIntentGate:
     def test_short_command_like_message_not_treated_as_followup_hint(self, pipeline):
         assert pipeline._is_short_followup("show columns") is False
 
+    def test_contextual_followup_rewrites_count_question(self, pipeline):
+        summary = pipeline._merge_session_state_into_summary(
+            pipeline._build_intent_summary("what about stores", []),
+            {"last_goal": "how many products do we have?"},
+        )
+        rewritten = pipeline._rewrite_contextual_followup("what about stores", summary)
+        assert rewritten == "How many stores do we have?"
+
+    def test_augment_history_includes_session_summary(self, pipeline):
+        state = {
+            "conversation_history": [{"role": "user", "content": "How many products do we have?"}],
+            "session_summary": "Intent summary: last_goal=How many products do we have?",
+            "intent_summary": {"last_goal": "How many products do we have?"},
+        }
+        augmented = pipeline._augment_history_with_summary(state)
+        assert augmented[0]["role"] == "system"
+        assert "Session memory:" in augmented[0]["content"]
+
     def test_clean_hint_handles_regarding_prefix(self, pipeline):
         hint = pipeline._clean_hint(
             'Regarding "Which table should I list columns for?": vbs_registrations'

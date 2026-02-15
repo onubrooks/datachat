@@ -4,6 +4,8 @@ API Request/Response Models
 Pydantic models for FastAPI endpoints.
 """
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from backend.models.agent import EvidenceItem, SQLValidationError, ValidationWarning
@@ -28,6 +30,14 @@ class ChatRequest(BaseModel):
         default_factory=list,
         description="Previous messages in the conversation",
     )
+    session_summary: str | None = Field(
+        default=None,
+        description="Optional compact memory summary from prior turns.",
+    )
+    session_state: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional structured memory state from prior turns.",
+    )
     synthesize_simple_sql: bool | None = Field(
         default=None,
         description=(
@@ -43,6 +53,8 @@ class ChatRequest(BaseModel):
                 "conversation_id": "conv_123",
                 "target_database": "3a1f2d3e-4b5c-6d7e-8f90-1234567890ab",
                 "conversation_history": [],
+                "session_summary": "Intent summary: last_goal=How many products do we have?",
+                "session_state": {"last_goal": "How many products do we have?"},
                 "synthesize_simple_sql": None,
             }
         }
@@ -133,6 +145,14 @@ class ChatResponse(BaseModel):
     )
     metrics: ChatMetrics | None = Field(None, description="Performance metrics")
     conversation_id: str | None = Field(None, description="Conversation ID for follow-up")
+    session_summary: str | None = Field(
+        default=None,
+        description="Compact memory summary to send on the next turn.",
+    )
+    session_state: dict[str, Any] | None = Field(
+        default=None,
+        description="Structured memory state to send on the next turn.",
+    )
     sub_answers: list[SubAnswer] = Field(
         default_factory=list,
         description="Per-question answers when a prompt is decomposed into multiple questions.",
@@ -176,6 +196,8 @@ class ChatResponse(BaseModel):
                     "retry_count": 0,
                 },
                 "conversation_id": "conv_123",
+                "session_summary": "Intent summary: last_goal=What's the total revenue?",
+                "session_state": {"last_goal": "What's the total revenue?"},
             }
         }
     }

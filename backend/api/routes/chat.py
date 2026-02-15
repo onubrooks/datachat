@@ -106,6 +106,8 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
         result = await pipeline.run(
             query=chat_request.message,
             conversation_history=conversation_history,
+            session_summary=chat_request.session_summary,
+            session_state=chat_request.session_state,
             database_type=database_type,
             database_url=database_url,
             target_connection_id=chat_request.target_database,
@@ -167,6 +169,8 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             tool_approval_calls=result.get("tool_approval_calls", []),
             metrics=metrics,
             conversation_id=conversation_id,
+            session_summary=result.get("session_summary"),
+            session_state=result.get("session_state"),
             sub_answers=result.get("sub_answers", []),
         )
 

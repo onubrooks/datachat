@@ -158,6 +158,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
         message = data["message"]
         conversation_id = data.get("conversation_id") or f"conv_{uuid.uuid4().hex[:12]}"
         conversation_history = data.get("conversation_history", [])
+        session_summary = data.get("session_summary")
+        session_state = data.get("session_state")
         synthesize_simple_sql = data.get("synthesize_simple_sql")
 
         # Convert conversation history to pipeline format
@@ -184,6 +186,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
         result = await pipeline.run_with_streaming(
             query=message,
             conversation_history=history,
+            session_summary=session_summary,
+            session_state=session_state,
             database_type=database_type,
             database_url=database_url,
             target_connection_id=target_database,
@@ -265,6 +269,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
             "tool_approval_calls": result.get("tool_approval_calls", []),
             "metrics": metrics,
             "conversation_id": conversation_id,
+            "session_summary": result.get("session_summary"),
+            "session_state": result.get("session_state"),
         }
         await websocket.send_json(jsonable_encoder(payload))
 

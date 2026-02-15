@@ -70,6 +70,8 @@ class PipelineState(TypedDict, total=False):
     query: str
     original_query: str | None
     conversation_history: list[Message]
+    session_summary: str | None
+    session_state: dict[str, Any] | None
     database_type: str
     database_url: str | None
     target_connection_id: str | None
@@ -348,9 +350,15 @@ class DataChatPipeline:
         state.setdefault("skip_response_synthesis", False)
 
         query = state.get("query") or ""
-        summary = self._build_intent_summary(
-            query, state.get("conversation_history", [])
+        summary = self._build_intent_summary(query, state.get("conversation_history", []))
+        summary = self._merge_session_state_into_summary(
+            summary,
+            state.get("session_state"),
         )
+
+        contextual_rewrite = self._rewrite_contextual_followup(query, summary)
+        if contextual_rewrite and contextual_rewrite != query:
+            summary["resolved_query"] = contextual_rewrite
         state["intent_summary"] = summary
 
         resolved_query = summary.get("resolved_query")
@@ -1767,7 +1775,7 @@ class DataChatPipeline:
         self, query: str, history: list[Message]
     ) -> dict[str, Any]:
         summary: dict[str, Any] = {
-            "last_goal": query.strip() if query else None,
+            "last_goal": None,
             "last_clarifying_question": None,
             "last_clarifying_questions": [],
             "table_hints": [],
@@ -1862,12 +1870,19 @@ class DataChatPipeline:
         return summary
 
     def _augment_history_with_summary(self, state: PipelineState) -> list[Message]:
-        history = state.get("conversation_history") or []
+        history = (state.get("conversation_history") or [])[-12:]
         summary = state.get("intent_summary") or {}
         summary_text = self._format_intent_summary(summary)
-        if not summary_text:
+        session_summary = (state.get("session_summary") or "").strip()
+
+        system_messages: list[Message] = []
+        if session_summary:
+            system_messages.append({"role": "system", "content": f"Session memory: {session_summary}"})
+        if summary_text:
+            system_messages.append({"role": "system", "content": summary_text})
+        if not system_messages:
             return history
-        return [*history, {"role": "system", "content": summary_text}]
+        return [*system_messages, *history]
 
     def _format_intent_summary(self, summary: dict[str, Any]) -> str | None:
         if not summary:
@@ -1893,6 +1908,98 @@ class DataChatPipeline:
         if not parts:
             return None
         return "Intent summary: " + " | ".join(parts)
+
+    def _merge_session_state_into_summary(
+        self,
+        summary: dict[str, Any],
+        session_state: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not session_state:
+            return summary
+
+        merged = dict(summary)
+        slots = dict(merged.get("slots") or {})
+        prior_slots = session_state.get("slots") if isinstance(session_state, dict) else {}
+        if isinstance(prior_slots, dict):
+            for key, value in prior_slots.items():
+                if value and not slots.get(key):
+                    slots[key] = value
+        merged["slots"] = slots
+
+        for key in ("table_hints", "column_hints", "last_clarifying_questions"):
+            current = list(merged.get(key) or [])
+            prior = list(session_state.get(key) or [])
+            combined: list[str] = []
+            for value in [*prior, *current]:
+                if value and value not in combined:
+                    combined.append(value)
+            merged[key] = combined
+
+        merged["clarification_count"] = max(
+            int(merged.get("clarification_count", 0) or 0),
+            int(session_state.get("clarification_count", 0) or 0),
+        )
+
+        if not merged.get("last_goal") and session_state.get("last_goal"):
+            merged["last_goal"] = str(session_state.get("last_goal"))
+        if not merged.get("target_subquery_index") and session_state.get("target_subquery_index"):
+            merged["target_subquery_index"] = session_state.get("target_subquery_index")
+        if session_state.get("any_table"):
+            merged["any_table"] = True
+        if not merged.get("resolved_query") and session_state.get("resolved_query"):
+            merged["resolved_query"] = str(session_state.get("resolved_query"))
+        if not merged.get("last_clarifying_question"):
+            prior_questions = merged.get("last_clarifying_questions") or []
+            if prior_questions:
+                merged["last_clarifying_question"] = prior_questions[0]
+        return merged
+
+    def _rewrite_contextual_followup(self, query: str, summary: dict[str, Any]) -> str | None:
+        text = (query or "").strip()
+        if not text:
+            return None
+        if not self._is_contextual_followup_query(text):
+            return None
+        if self._contains_data_keywords(text):
+            return None
+
+        last_goal = str(summary.get("last_goal") or "").strip()
+        if not last_goal:
+            return None
+        focus = self._extract_followup_focus(text)
+        if not focus:
+            return None
+
+        last_goal_lower = last_goal.lower()
+        if "how many " in last_goal_lower:
+            return f"How many {focus} do we have?"
+        if last_goal_lower.startswith("list "):
+            return f"List {focus}"
+        if last_goal_lower.startswith("show "):
+            return f"Show {focus}"
+        if "total " in last_goal_lower:
+            return f"What is total {focus}?"
+        return None
+
+    def _is_contextual_followup_query(self, text: str) -> bool:
+        lowered = text.strip().lower()
+        patterns = [
+            r"^what\s+about\b",
+            r"^how\s+about\b",
+            r"^what\s+of\b",
+            r"^and\b",
+            r"^about\b",
+        ]
+        return any(re.search(pattern, lowered) for pattern in patterns)
+
+    def _extract_followup_focus(self, text: str) -> str | None:
+        cleaned = text.strip().strip("\"'").strip()
+        cleaned = re.sub(r"^(what\s+about|how\s+about|what\s+of|and|about)\s+", "", cleaned, flags=re.I)
+        cleaned = cleaned.strip(" .,!?:;\"'")
+        cleaned = re.sub(r"^(the|our|their)\s+", "", cleaned, flags=re.I)
+        if not cleaned:
+            return None
+        return cleaned.lower()
 
     async def _maybe_apply_any_table_hint(self, state: PipelineState) -> str:
         query = state.get("query") or ""
@@ -2407,9 +2514,6 @@ class DataChatPipeline:
             "count",
             "select",
             "describe",
-            "what",
-            "which",
-            "how",
             "rows",
             "columns",
             "help",
@@ -2504,6 +2608,8 @@ class DataChatPipeline:
         *,
         query: str,
         conversation_history: list[Message] | None,
+        session_summary: str | None,
+        session_state: dict[str, Any] | None,
         database_type: str,
         database_url: str | None,
         target_connection_id: str | None,
@@ -2514,6 +2620,8 @@ class DataChatPipeline:
             "query": query,
             "original_query": None,
             "conversation_history": conversation_history or [],
+            "session_summary": session_summary,
+            "session_state": session_state or {},
             "database_type": database_type,
             "database_url": database_url,
             "target_connection_id": target_connection_id,
@@ -2616,6 +2724,8 @@ class DataChatPipeline:
         *,
         query: str,
         conversation_history: list[Message] | None = None,
+        session_summary: str | None = None,
+        session_state: dict[str, Any] | None = None,
         database_type: str = "postgresql",
         database_url: str | None = None,
         target_connection_id: str | None = None,
@@ -2624,6 +2734,8 @@ class DataChatPipeline:
         initial_state = self._build_initial_state(
             query=query,
             conversation_history=conversation_history,
+            session_summary=session_summary,
+            session_state=session_state,
             database_type=database_type,
             database_url=database_url,
             target_connection_id=target_connection_id,
@@ -2635,6 +2747,7 @@ class DataChatPipeline:
         start_time = time.time()
         result = await self.graph.ainvoke(initial_state)
         self._normalize_answer_metadata(result)
+        self._finalize_session_memory(result)
         total_time = (time.time() - start_time) * 1000
         logger.info(
             f"Pipeline complete in {total_time:.1f}ms ({result.get('llm_calls', 0)} LLM calls)"
@@ -2666,6 +2779,8 @@ class DataChatPipeline:
         sub_results: list[PipelineState],
         sub_answers: list[dict[str, Any]],
         conversation_history: list[Message] | None,
+        session_summary: str | None,
+        session_state: dict[str, Any] | None,
         database_type: str,
         database_url: str | None,
         target_connection_id: str | None,
@@ -2674,6 +2789,8 @@ class DataChatPipeline:
         merged = self._build_initial_state(
             query=original_query,
             conversation_history=conversation_history,
+            session_summary=session_summary,
+            session_state=session_state,
             database_type=database_type,
             database_url=database_url,
             target_connection_id=target_connection_id,
@@ -2754,6 +2871,10 @@ class DataChatPipeline:
             merged["error"] = errors[0]
 
         self._normalize_answer_metadata(merged)
+        if sub_results:
+            merged["session_summary"] = sub_results[-1].get("session_summary")
+            merged["session_state"] = sub_results[-1].get("session_state")
+        self._finalize_session_memory(merged)
         return merged
 
     # ========================================================================
@@ -2764,6 +2885,8 @@ class DataChatPipeline:
         self,
         query: str,
         conversation_history: list[Message] | None = None,
+        session_summary: str | None = None,
+        session_state: dict[str, Any] | None = None,
         database_type: str = "postgresql",
         database_url: str | None = None,
         target_connection_id: str | None = None,
@@ -2775,6 +2898,8 @@ class DataChatPipeline:
         Args:
             query: User's natural language query
             conversation_history: Previous conversation messages
+            session_summary: Compact summary carried across turns
+            session_state: Structured session memory carried across turns
             database_type: Database type (postgresql, clickhouse, mysql)
             database_url: Database URL override for execution
 
@@ -2786,6 +2911,8 @@ class DataChatPipeline:
             return await self._run_single_query(
                 query=query,
                 conversation_history=conversation_history,
+                session_summary=session_summary,
+                session_state=session_state,
                 database_type=database_type,
                 database_url=database_url,
                 target_connection_id=target_connection_id,
@@ -2798,6 +2925,8 @@ class DataChatPipeline:
             result = await self._run_single_query(
                 query=part,
                 conversation_history=conversation_history,
+                session_summary=session_summary,
+                session_state=session_state,
                 database_type=database_type,
                 database_url=database_url,
                 target_connection_id=target_connection_id,
@@ -2811,6 +2940,8 @@ class DataChatPipeline:
             sub_results=sub_results,
             sub_answers=sub_answers,
             conversation_history=conversation_history,
+            session_summary=session_summary,
+            session_state=session_state,
             database_type=database_type,
             database_url=database_url,
             target_connection_id=target_connection_id,
@@ -2821,6 +2952,8 @@ class DataChatPipeline:
         self,
         query: str,
         conversation_history: list[Message] | None = None,
+        session_summary: str | None = None,
+        session_state: dict[str, Any] | None = None,
         database_type: str = "postgresql",
         database_url: str | None = None,
         target_connection_id: str | None = None,
@@ -2834,6 +2967,8 @@ class DataChatPipeline:
         Args:
             query: User's natural language query
             conversation_history: Previous conversation messages
+            session_summary: Compact summary carried across turns
+            session_state: Structured session memory carried across turns
             database_type: Database type
             database_url: Database URL override for execution
 
@@ -2845,6 +2980,8 @@ class DataChatPipeline:
             result = await self.run(
                 query=query,
                 conversation_history=conversation_history,
+                session_summary=session_summary,
+                session_state=session_state,
                 database_type=database_type,
                 database_url=database_url,
                 target_connection_id=target_connection_id,
@@ -2861,6 +2998,8 @@ class DataChatPipeline:
         initial_state = self._build_initial_state(
             query=query,
             conversation_history=conversation_history,
+            session_summary=session_summary,
+            session_state=session_state,
             database_type=database_type,
             database_url=database_url,
             target_connection_id=target_connection_id,
@@ -2887,6 +3026,8 @@ class DataChatPipeline:
         self,
         query: str,
         conversation_history: list[Message] | None = None,
+        session_summary: str | None = None,
+        session_state: dict[str, Any] | None = None,
         database_type: str = "postgresql",
         database_url: str | None = None,
         target_connection_id: str | None = None,
@@ -2899,6 +3040,8 @@ class DataChatPipeline:
         Args:
             query: User's natural language query
             conversation_history: Previous conversation messages
+            session_summary: Compact summary carried across turns
+            session_state: Structured session memory carried across turns
             database_type: Database type
             database_url: Database URL override for execution
             event_callback: Async callback function for streaming events
@@ -2927,6 +3070,8 @@ class DataChatPipeline:
             return await self.run(
                 query=query,
                 conversation_history=conversation_history,
+                session_summary=session_summary,
+                session_state=session_state,
                 database_type=database_type,
                 database_url=database_url,
                 target_connection_id=target_connection_id,
@@ -2936,6 +3081,8 @@ class DataChatPipeline:
         initial_state = self._build_initial_state(
             query=query,
             conversation_history=conversation_history,
+            session_summary=session_summary,
+            session_state=session_state,
             database_type=database_type,
             database_url=database_url,
             target_connection_id=target_connection_id,
@@ -3035,6 +3182,7 @@ class DataChatPipeline:
         if final_state:
             final_state["total_latency_ms"] = total_latency_ms
             self._normalize_answer_metadata(final_state)
+            self._finalize_session_memory(final_state)
 
         logger.info(
             f"Pipeline streaming complete in {total_latency_ms:.1f}ms "
@@ -3042,6 +3190,39 @@ class DataChatPipeline:
         )
 
         return final_state or initial_state
+
+    def _finalize_session_memory(self, state: PipelineState) -> None:
+        """Persist compact memory fields for the next turn."""
+        intent_summary = dict(state.get("intent_summary") or {})
+        session_state = dict(state.get("session_state") or {})
+
+        merged = self._merge_session_state_into_summary(intent_summary, session_state)
+        merged["clarification_count"] = self._current_clarification_count(state)
+
+        latest_goal = (state.get("original_query") or state.get("query") or "").strip()
+        if latest_goal:
+            merged["last_goal"] = latest_goal
+
+        questions = state.get("clarifying_questions") or []
+        if questions:
+            merged["last_clarifying_questions"] = questions[:3]
+            merged["last_clarifying_question"] = questions[0]
+
+        sql_text = (state.get("validated_sql") or state.get("generated_sql") or "").strip()
+        if sql_text:
+            table_hint = self._extract_table_reference(sql_text)
+            if table_hint:
+                table_hints = list(merged.get("table_hints") or [])
+                if table_hint not in table_hints:
+                    table_hints.append(table_hint)
+                merged["table_hints"] = table_hints
+                slots = dict(merged.get("slots") or {})
+                slots["table"] = slots.get("table") or table_hint
+                merged["slots"] = slots
+
+        merged["updated_at"] = int(time.time())
+        state["session_state"] = merged
+        state["session_summary"] = self._format_intent_summary(merged)
 
     def _normalize_answer_metadata(self, state: PipelineState) -> None:
         """Ensure answer source/confidence are consistently populated."""

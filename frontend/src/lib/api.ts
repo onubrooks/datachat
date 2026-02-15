@@ -15,6 +15,8 @@ export interface ChatRequest {
   conversation_id?: string;
   target_database?: string;
   conversation_history?: ChatMessage[];
+  session_summary?: string | null;
+  session_state?: Record<string, unknown> | null;
   synthesize_simple_sql?: boolean;
 }
 
@@ -82,6 +84,8 @@ export interface ChatResponse {
   }[];
   metrics: ChatMetrics;
   conversation_id: string;
+  session_summary?: string | null;
+  session_state?: Record<string, unknown> | null;
 }
 
 export interface AgentUpdate {

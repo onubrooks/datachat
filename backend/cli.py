@@ -773,9 +773,11 @@ def chat(
 
     conversation_history = []
     conversation_id = None
+    session_summary: str | None = None
+    session_state: dict[str, Any] | None = None
 
     async def run_chat():
-        nonlocal conversation_id
+        nonlocal conversation_id, session_summary, session_state
         clarification_attempts = 0
         max_clarifications_limit = max(0, max_clarifications)
         settings = get_settings()
@@ -805,6 +807,8 @@ def chat(
                         result = await pipeline.run(
                             query=query,
                             conversation_history=conversation_history,
+                            session_summary=session_summary,
+                            session_state=session_state,
                             database_type=database_type,
                             database_url=database_url,
                             synthesize_simple_sql=synthesize_simple_sql,
@@ -851,6 +855,8 @@ def chat(
                     # Update conversation history
                     conversation_history.append({"role": "user", "content": query})
                     conversation_history.append({"role": "assistant", "content": answer})
+                    session_summary = result.get("session_summary")
+                    session_state = result.get("session_state")
 
                 except KeyboardInterrupt:
                     console.print("\n[yellow]Interrupted. Type 'exit' to quit.[/yellow]")
@@ -927,6 +933,8 @@ def ask(
             pipeline = await create_pipeline_from_config()
             pipeline.max_clarifications = max(0, max_clarifications)
             conversation_history = []
+            session_summary: str | None = None
+            session_state: dict[str, Any] | None = None
             current_query = query
             clarification_attempts = 0
             max_clarifications_limit = max(0, max_clarifications)
@@ -937,6 +945,8 @@ def ask(
                     result = await pipeline.run(
                         query=current_query,
                         conversation_history=conversation_history,
+                        session_summary=session_summary,
+                        session_state=session_state,
                         database_type=database_type,
                         database_url=database_url,
                         synthesize_simple_sql=synthesize_simple_sql,
@@ -992,6 +1002,8 @@ def ask(
                         {"role": "assistant", "content": answer},
                     ]
                 )
+                session_summary = result.get("session_summary")
+                session_state = result.get("session_state")
                 current_query = followup
                 clarification_attempts += 1
 

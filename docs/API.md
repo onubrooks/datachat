@@ -35,6 +35,10 @@ Request body:
   "message": "What was revenue last quarter?",
   "conversation_id": "conv_123",
   "target_database": "optional-connection-id",
+  "session_summary": "Intent summary: last_goal=What was revenue last quarter?",
+  "session_state": {
+    "last_goal": "What was revenue last quarter?"
+  },
   "synthesize_simple_sql": true
 }
 ```
@@ -46,6 +50,9 @@ Notes:
 - If `target_database` is omitted, the default registry connection is used when set.
 - `synthesize_simple_sql` is optional. When `false`, simple SQL answers skip
   response synthesis for lower latency.
+- `session_summary` and `session_state` are optional turn-to-turn memory fields.
+  Clients should echo these from one response into the next request to improve
+  follow-up continuity with bounded token usage.
 - When no DataPoints are loaded, responses include a live schema mode notice.
 - Single prompts with multiple questions may be decomposed (up to 3 sub-questions).
   In that case, response includes `sub_answers` and an aggregated `answer`.
@@ -63,6 +70,8 @@ Response fields (selected):
   - `sql`
   - `clarifying_questions`
   - `error`
+- `session_summary`: compact summary to pass into the next turn.
+- `session_state`: structured memory object to pass into the next turn.
 
 ## Database Connections
 

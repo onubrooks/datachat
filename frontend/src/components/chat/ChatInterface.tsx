@@ -44,6 +44,8 @@ export function ChatInterface() {
   const {
     messages,
     conversationId,
+    sessionSummary,
+    sessionState,
     isLoading,
     isConnected,
     agentHistory,
@@ -56,6 +58,7 @@ export function ChatInterface() {
     addMessage,
     updateLastMessage,
     setConversationId,
+    setSessionMemory,
     appendToLastMessage,
   } = useChatStore();
 
@@ -191,6 +194,7 @@ export function ChatInterface() {
     resetAgentStatus();
     if (!canReuseConversation) {
       setConversationId(null);
+      setSessionMemory(null, null);
     }
 
     addMessage({
@@ -210,6 +214,8 @@ export function ChatInterface() {
           conversation_id: canReuseConversation ? conversationId || undefined : undefined,
           target_database: requestDatabaseId || undefined,
           conversation_history: conversationHistory,
+          session_summary: canReuseConversation ? sessionSummary : undefined,
+          session_state: canReuseConversation ? sessionState : undefined,
           synthesize_simple_sql: synthesizeSimpleSql,
         },
         {
@@ -245,6 +251,7 @@ export function ChatInterface() {
             if (response.conversation_id) {
               setConversationId(response.conversation_id);
             }
+            setSessionMemory(response.session_summary || null, response.session_state || null);
             setConversationDatabaseId(requestDatabaseId);
             if (response.tool_approval_required && response.tool_approval_calls?.length) {
               setToolApprovalCalls(response.tool_approval_calls);
