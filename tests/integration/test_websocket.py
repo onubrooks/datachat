@@ -122,6 +122,7 @@ class TestWebSocketStreaming:
             session_state=None,
             database_type=None,
             database_url=None,
+            target_connection_id=None,
             synthesize_simple_sql=None,
             event_callback=None,
         ):
@@ -177,6 +178,7 @@ class TestWebSocketStreaming:
                     msg.get("event") == "agent_complete" and msg.get("agent") == "ClassifierAgent"
                     for msg in messages
                 )
+                assert any(msg.get("event") == "thinking" for msg in messages)
 
     def test_websocket_final_message_contains_complete_response(self, client, mock_pipeline_result):
         """Test that final WebSocket message contains complete response."""

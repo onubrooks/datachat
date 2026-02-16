@@ -197,6 +197,7 @@ export interface StreamChatHandlers {
   onOpen?: () => void;
   onClose?: () => void;
   onAgentUpdate?: (update: AgentUpdate) => void;
+  onThinking?: (note: string) => void;
   onAnswerChunk?: (chunk: string) => void;
   onComplete?: (response: ChatResponse) => void;
   onError?: (message: string) => void;
@@ -764,6 +765,7 @@ export class DataChatWebSocket {
             message?: string;
             error?: string;
             chunk?: string;
+            note?: string;
           };
 
           if (payload.event === "agent_start" && payload.agent) {
@@ -786,6 +788,11 @@ export class DataChatWebSocket {
 
           if (payload.event === "answer_chunk" && payload.chunk) {
             handlers.onAnswerChunk?.(payload.chunk);
+            return;
+          }
+
+          if (payload.event === "thinking" && payload.note) {
+            handlers.onThinking?.(payload.note);
             return;
           }
 
