@@ -412,34 +412,6 @@ class SQLAgent(BaseAgent):
             )
             return self._apply_row_limit_policy(generated, input.query)
 
-        metric_bundle_fallback = await self._build_store_metric_bundle_fallback(
-            input,
-            table_resolution=None,
-        )
-        if metric_bundle_fallback is not None:
-            return self._apply_row_limit_policy(metric_bundle_fallback, input.query)
-
-        weekday_weekend_lift_fallback = await self._build_weekday_weekend_sales_lift_fallback(
-            input,
-            table_resolution=None,
-        )
-        if weekday_weekend_lift_fallback is not None:
-            return self._apply_row_limit_policy(weekday_weekend_lift_fallback, input.query)
-
-        movement_sales_gap_fallback = await self._build_inventory_movement_sales_gap_fallback(
-            input,
-            table_resolution=None,
-        )
-        if movement_sales_gap_fallback is not None:
-            return self._apply_row_limit_policy(movement_sales_gap_fallback, input.query)
-
-        stockout_risk_fallback = await self._build_stockout_risk_ranking_fallback(
-            input,
-            table_resolution=None,
-        )
-        if stockout_risk_fallback is not None:
-            return self._apply_row_limit_policy(stockout_risk_fallback, input.query)
-
         table_resolution = await self._resolve_tables_with_llm(input)
         resolver_threshold = self._pipeline_float("sql_table_resolver_confidence_threshold", 0.55)
         if (
@@ -452,35 +424,6 @@ class SQLAgent(BaseAgent):
         ):
             question = table_resolution.clarifying_question or "Which table should I use to answer this?"
             raise SQLClarificationNeeded([question])
-
-        if table_resolution and table_resolution.candidate_tables:
-            metric_bundle_fallback = await self._build_store_metric_bundle_fallback(
-                input,
-                table_resolution=table_resolution,
-            )
-            if metric_bundle_fallback is not None:
-                return self._apply_row_limit_policy(metric_bundle_fallback, input.query)
-
-            weekday_weekend_lift_fallback = await self._build_weekday_weekend_sales_lift_fallback(
-                input,
-                table_resolution=table_resolution,
-            )
-            if weekday_weekend_lift_fallback is not None:
-                return self._apply_row_limit_policy(weekday_weekend_lift_fallback, input.query)
-
-            movement_sales_gap_fallback = await self._build_inventory_movement_sales_gap_fallback(
-                input,
-                table_resolution=table_resolution,
-            )
-            if movement_sales_gap_fallback is not None:
-                return self._apply_row_limit_policy(movement_sales_gap_fallback, input.query)
-
-            stockout_risk_fallback = await self._build_stockout_risk_ranking_fallback(
-                input,
-                table_resolution=table_resolution,
-            )
-            if stockout_risk_fallback is not None:
-                return self._apply_row_limit_policy(stockout_risk_fallback, input.query)
 
         # Build prompt with context
         prompt = await self._build_generation_prompt(input, table_resolution=table_resolution)

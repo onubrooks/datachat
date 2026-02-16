@@ -176,8 +176,8 @@ class TestExecution:
         assert output.metadata.tokens_used == 650
 
     @pytest.mark.asyncio
-    async def test_deterministic_store_metric_bundle_fallback_skips_llm(self, sql_agent):
-        """Store-level revenue+margin+waste bundle should use deterministic SQL fallback."""
+    async def test_metric_bundle_query_uses_llm_generation(self, sql_agent):
+        """Store-level revenue+margin+waste bundle should go through LLM SQL generation."""
         input_data = SQLAgentInput(
             query="What is total revenue, gross margin, and waste cost by store for the last 30 days?",
             investigation_memory=InvestigationMemory(
@@ -222,17 +222,43 @@ class TestExecution:
             ),
         )
 
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT s.store_name, SUM(t.total_amount) AS revenue, "
+                        "SUM(t.total_amount) - SUM(t.quantity * COALESCE(p.unit_cost, 0)) AS gross_margin, "
+                        "SUM(w.waste_cost) AS waste_cost "
+                        "FROM public.grocery_sales_transactions t "
+                        "JOIN public.grocery_products p ON p.product_id = t.product_id "
+                        "JOIN public.grocery_stores s ON s.store_id = t.store_id "
+                        "LEFT JOIN public.grocery_waste_events w ON w.store_id = t.store_id "
+                        "GROUP BY s.store_name"
+                    ),
+                    "explanation": "Revenue, margin, and waste by store.",
+                    "used_datapoints": [],
+                    "confidence": 0.92,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=320, completion_tokens=160, total_tokens=480),
+            finish_reason="stop",
+            provider="openai",
+        )
+
         output = await sql_agent(input_data)
         assert output.success is True
         assert output.needs_clarification is False
-        assert "WITH sales_window AS" in output.generated_sql.sql
+        assert "SELECT s.store_name" in output.generated_sql.sql
         assert "grocery_sales_transactions" in output.generated_sql.sql
         assert "grocery_waste_events" in output.generated_sql.sql
-        assert sql_agent.llm.generate.await_count == 0
+        assert sql_agent.llm.generate.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_store_metric_bundle_fallback_uses_business_related_tables(self, sql_agent):
-        """Fallback should still work when some tables are only present via related_tables."""
+    async def test_store_metric_bundle_query_uses_related_tables_context(self, sql_agent):
+        """LLM output can use tables surfaced via related_tables context."""
         input_data = SQLAgentInput(
             query="What is total revenue, gross margin, and waste cost by store for the last 30 days?",
             investigation_memory=InvestigationMemory(
@@ -282,13 +308,36 @@ class TestExecution:
             ),
         )
 
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT SUM(t.total_amount) AS revenue, "
+                        "SUM(t.total_amount) - SUM(t.quantity * p.unit_cost) AS gross_margin "
+                        "FROM public.grocery_sales_transactions t "
+                        "JOIN public.grocery_products p ON p.product_id = t.product_id"
+                    ),
+                    "explanation": "Uses product costs for margin.",
+                    "used_datapoints": [],
+                    "confidence": 0.9,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=300, completion_tokens=110, total_tokens=410),
+            finish_reason="stop",
+            provider="openai",
+        )
+
         output = await sql_agent(input_data)
         assert output.success is True
         assert "grocery_products" in output.generated_sql.sql
+        assert sql_agent.llm.generate.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_stockout_risk_fallback_skips_llm_for_sku_ranking(self, sql_agent):
-        """SKU stockout risk ranking should use deterministic SQL fallback."""
+    async def test_stockout_risk_query_uses_llm_generation(self, sql_agent):
+        """SKU stockout risk ranking should use the LLM SQL generation path."""
         input_data = SQLAgentInput(
             query=(
                 "Which 5 SKUs have the highest stockout risk this week based on on-hand, "
@@ -321,20 +370,41 @@ class TestExecution:
             database_type="postgresql",
         )
 
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT p.sku, p.product_name, i.on_hand_qty, i.reserved_qty, p.reorder_level "
+                        "FROM public.grocery_inventory_snapshots i "
+                        "JOIN public.grocery_products p ON p.product_id = i.product_id "
+                        "ORDER BY (p.reorder_level + i.reserved_qty - i.on_hand_qty) DESC LIMIT 5"
+                    ),
+                    "explanation": "Top stockout risk SKUs.",
+                    "used_datapoints": [],
+                    "confidence": 0.9,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=280, completion_tokens=120, total_tokens=400),
+            finish_reason="stop",
+            provider="openai",
+        )
+
         output = await sql_agent(input_data)
 
         assert output.success is True
         assert output.needs_clarification is False
-        assert "WITH latest_snapshot AS" in output.generated_sql.sql
+        assert "ORDER BY (p.reorder_level + i.reserved_qty - i.on_hand_qty) DESC" in output.generated_sql.sql
         assert "grocery_inventory_snapshots" in output.generated_sql.sql
         assert "grocery_products" in output.generated_sql.sql
         assert "LIMIT 5" in output.generated_sql.sql
-        assert "stockout_risk_score" in output.generated_sql.sql
-        assert sql_agent.llm.generate.await_count == 0
+        assert sql_agent.llm.generate.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_weekend_weekday_sales_lift_fallback_skips_llm(self, sql_agent):
-        """Weekend vs weekday sales-lift query should use deterministic SQL fallback."""
+    async def test_weekend_weekday_sales_lift_query_uses_llm_generation(self, sql_agent):
+        """Weekend vs weekday sales-lift query should use LLM SQL generation."""
         input_data = SQLAgentInput(
             query="Compare weekend vs weekday sales lift by category and store.",
             investigation_memory=InvestigationMemory(
@@ -372,19 +442,44 @@ class TestExecution:
             database_type="postgresql",
         )
 
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT s.store_name, p.category, "
+                        "AVG(CASE WHEN t.is_weekend = TRUE THEN t.total_amount END) AS weekend_avg, "
+                        "AVG(CASE WHEN t.is_weekend = FALSE THEN t.total_amount END) AS weekday_avg "
+                        "FROM public.grocery_sales_transactions t "
+                        "JOIN public.grocery_products p ON p.product_id = t.product_id "
+                        "JOIN public.grocery_stores s ON s.store_id = t.store_id "
+                        "GROUP BY s.store_name, p.category"
+                    ),
+                    "explanation": "Weekend vs weekday comparison.",
+                    "used_datapoints": [],
+                    "confidence": 0.9,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=320, completion_tokens=150, total_tokens=470),
+            finish_reason="stop",
+            provider="openai",
+        )
+
         output = await sql_agent(input_data)
 
         assert output.success is True
         assert output.needs_clarification is False
-        assert "weekend_sales_lift_pct" in output.generated_sql.sql
+        assert "weekend_avg" in output.generated_sql.sql
         assert "grocery_sales_transactions" in output.generated_sql.sql
         assert "grocery_products" in output.generated_sql.sql
         assert "grocery_stores" in output.generated_sql.sql
-        assert sql_agent.llm.generate.await_count == 0
+        assert sql_agent.llm.generate.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_inventory_movement_vs_sales_gap_fallback_skips_llm(self, sql_agent):
-        """Inventory movement vs recorded sales gap query should use deterministic fallback."""
+    async def test_inventory_movement_vs_sales_gap_query_uses_llm_generation(self, sql_agent):
+        """Inventory movement vs recorded sales gap should use LLM SQL generation."""
         input_data = SQLAgentInput(
             query="Which stores have the largest gap between inventory movement and recorded sales?",
             investigation_memory=InvestigationMemory(
@@ -422,21 +517,49 @@ class TestExecution:
             database_type="postgresql",
         )
 
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "WITH movement AS ("
+                        "SELECT store_id, product_id, snapshot_date, "
+                        "GREATEST(on_hand_qty - LEAD(on_hand_qty) OVER (PARTITION BY store_id, product_id ORDER BY snapshot_date), 0) AS movement_qty "
+                        "FROM public.grocery_inventory_snapshots) "
+                        "SELECT s.store_name, SUM(m.movement_qty) AS inventory_movement, "
+                        "SUM(t.quantity) AS recorded_sales, "
+                        "SUM(m.movement_qty) - SUM(t.quantity) AS movement_sales_gap "
+                        "FROM movement m "
+                        "JOIN public.grocery_sales_transactions t ON t.store_id = m.store_id AND t.product_id = m.product_id "
+                        "JOIN public.grocery_stores s ON s.store_id = m.store_id "
+                        "GROUP BY s.store_name"
+                    ),
+                    "explanation": "Gap between inventory movement and sales by store.",
+                    "used_datapoints": [],
+                    "confidence": 0.89,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=360, completion_tokens=180, total_tokens=540),
+            finish_reason="stop",
+            provider="openai",
+        )
+
         output = await sql_agent(input_data)
 
         assert output.success is True
         assert output.needs_clarification is False
-        assert "inventory_daily" in output.generated_sql.sql
-        assert "inventory_movement" in output.generated_sql.sql
+        assert "movement AS (" in output.generated_sql.sql
         assert "movement_sales_gap" in output.generated_sql.sql
         assert "grocery_inventory_snapshots" in output.generated_sql.sql
         assert "grocery_sales_transactions" in output.generated_sql.sql
         assert "grocery_stores" in output.generated_sql.sql
-        assert sql_agent.llm.generate.await_count == 0
+        assert sql_agent.llm.generate.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_stockout_risk_fallback_supports_mysql_window_syntax(self, sql_agent):
-        """Stockout risk fallback should emit MySQL-safe week filtering."""
+    async def test_stockout_risk_query_supports_mysql_sql_generation(self, sql_agent):
+        """Stockout risk query should accept MySQL-safe SQL from the LLM path."""
         input_data = SQLAgentInput(
             query="Top 3 products by stockout risk this week using on hand reserved reorder level",
             investigation_memory=InvestigationMemory(
@@ -466,24 +589,39 @@ class TestExecution:
             database_type="mysql",
         )
 
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT p.sku, p.product_name, i.on_hand_qty, i.reserved_qty, p.reorder_level "
+                        "FROM grocery_inventory_snapshots i "
+                        "JOIN grocery_products p ON p.product_id = i.product_id "
+                        "WHERE i.snapshot_date >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY) "
+                        "ORDER BY (p.reorder_level + i.reserved_qty - i.on_hand_qty) DESC LIMIT 3"
+                    ),
+                    "explanation": "MySQL stockout ranking.",
+                    "used_datapoints": [],
+                    "confidence": 0.88,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=260, completion_tokens=110, total_tokens=370),
+            finish_reason="stop",
+            provider="openai",
+        )
+
         output = await sql_agent(input_data)
 
         assert output.success is True
-        assert "COALESCE(MAX(snapshot_date), CURDATE())" in output.generated_sql.sql
-        assert "INTERVAL WEEKDAY(DATE(" in output.generated_sql.sql
-        assert "DECIMAL(12,4)" in output.generated_sql.sql
+        assert "DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)" in output.generated_sql.sql
         assert "LIMIT 3" in output.generated_sql.sql
-        assert sql_agent.llm.generate.await_count == 0
+        assert sql_agent.llm.generate.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_stockout_risk_fallback_uses_live_schema_when_datapoints_missing(self, sql_agent):
-        """Fallback should still work from live schema names when no DataPoints are loaded."""
-        sql_agent._load_live_tables_for_fallback = AsyncMock(
-            return_value=[
-                "public.grocery_inventory_snapshots",
-                "public.grocery_products",
-            ]
-        )
+    async def test_stockout_risk_query_uses_llm_when_datapoints_missing(self, sql_agent):
+        """LLM SQL generation should still work with live schema mode and zero DataPoints."""
         input_data = SQLAgentInput(
             query=(
                 "Which 5 SKUs have the highest stockout risk this week based on on-hand, "
@@ -500,17 +638,39 @@ class TestExecution:
             database_url="postgresql://postgres:@localhost:5432/datachat_grocery",
         )
 
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT p.sku, p.product_name "
+                        "FROM public.grocery_inventory_snapshots i "
+                        "JOIN public.grocery_products p ON p.product_id = i.product_id "
+                        "ORDER BY (p.reorder_level + i.reserved_qty - i.on_hand_qty) DESC LIMIT 5"
+                    ),
+                    "explanation": "Stockout ranking.",
+                    "used_datapoints": [],
+                    "confidence": 0.86,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=250, completion_tokens=90, total_tokens=340),
+            finish_reason="stop",
+            provider="openai",
+        )
+
         output = await sql_agent(input_data)
 
         assert output.success is True
         assert "grocery_inventory_snapshots" in output.generated_sql.sql
         assert "grocery_products" in output.generated_sql.sql
         assert "LIMIT 5" in output.generated_sql.sql
-        assert sql_agent.llm.generate.await_count == 0
+        assert sql_agent.llm.generate.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_stockout_risk_fallback_infers_tables_by_columns_not_names(self, sql_agent):
-        """Fallback should infer candidate tables from columns when names are domain-agnostic."""
+    async def test_stockout_risk_query_uses_llm_with_domain_agnostic_table_names(self, sql_agent):
+        """LLM SQL generation should work with domain-agnostic table names."""
         input_data = SQLAgentInput(
             query=(
                 "Which 5 SKUs have the highest stockout risk this week based on on-hand, "
@@ -560,13 +720,35 @@ class TestExecution:
             database_type="postgresql",
         )
 
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT p.sku, p.product_name, i.on_hand_qty "
+                        "FROM public.inventory_daily i "
+                        "JOIN public.product_catalog p ON p.product_id = i.product_id "
+                        "ORDER BY (p.reorder_level + i.reserved_qty - i.on_hand_qty) DESC LIMIT 5"
+                    ),
+                    "explanation": "Stockout ranking from generic tables.",
+                    "used_datapoints": [],
+                    "confidence": 0.9,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=240, completion_tokens=90, total_tokens=330),
+            finish_reason="stop",
+            provider="openai",
+        )
+
         output = await sql_agent(input_data)
 
         assert output.success is True
         assert "FROM public.inventory_daily" in output.generated_sql.sql
         assert "JOIN public.product_catalog" in output.generated_sql.sql
         assert output.needs_clarification is False
-        assert sql_agent.llm.generate.await_count == 0
+        assert sql_agent.llm.generate.await_count == 1
 
     @pytest.mark.asyncio
     async def test_table_resolver_low_confidence_triggers_clarification(self):
