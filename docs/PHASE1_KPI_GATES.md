@@ -46,6 +46,7 @@ Release mode runs configured eval suites and enforces:
 
 - smoke checks against health/readiness/system status endpoints
 - catalog thresholds (`sql/source/clarification` match rates)
+- routing thresholds (`decision_trace` route/source match rates)
 - intent average latency ceiling
 - intent average LLM-call ceiling
 - intent source-accuracy minimum

@@ -55,6 +55,15 @@ class TestChatEndpoint:
             "llm_calls": 3,
             "retry_count": 0,
             "error": None,
+            "session_summary": "Intent summary: last_goal=What's the total revenue?",
+            "session_state": {"last_goal": "What's the total revenue?"},
+            "decision_trace": [
+                {
+                    "stage": "intent_gate",
+                    "decision": "data_query_fast_path",
+                    "reason": "deterministic_sql_query",
+                }
+            ],
         }
 
     @pytest.fixture
@@ -136,6 +145,9 @@ class TestChatEndpoint:
                 assert "sources" in data
                 assert "metrics" in data
                 assert "conversation_id" in data
+                assert "session_summary" in data
+                assert "session_state" in data
+                assert "decision_trace" in data
 
                 # Assert content
                 assert data["answer"] == "The total revenue is $1,234,567.89"
@@ -145,6 +157,8 @@ class TestChatEndpoint:
                 assert data["sources"][0]["datapoint_id"] == "table_fact_sales_001"
                 assert data["metrics"]["llm_calls"] == 3
                 assert "sub_answers" in data
+                assert data["session_state"]["last_goal"] == "What's the total revenue?"
+                assert data["decision_trace"][0]["stage"] == "intent_gate"
 
     @pytest.mark.asyncio
     async def test_chat_returns_sub_answers_when_pipeline_decomposes_query(
@@ -229,6 +243,8 @@ class TestChatEndpoint:
                             {"role": "user", "content": "What's the revenue?"},
                             {"role": "assistant", "content": "The revenue is $1M"},
                         ],
+                        "session_summary": "Intent summary: last_goal=What's the revenue?",
+                        "session_state": {"last_goal": "What's the revenue?"},
                     },
                 )
 
@@ -241,6 +257,8 @@ class TestChatEndpoint:
                 assert call_args.kwargs["query"] == "What about last month?"
                 assert len(call_args.kwargs["conversation_history"]) == 2
                 assert call_args.kwargs["conversation_history"][0]["role"] == "user"
+                assert call_args.kwargs["session_summary"] == "Intent summary: last_goal=What's the revenue?"
+                assert call_args.kwargs["session_state"]["last_goal"] == "What's the revenue?"
 
     @pytest.mark.asyncio
     async def test_chat_handles_errors_gracefully(self, client, initialized_status):

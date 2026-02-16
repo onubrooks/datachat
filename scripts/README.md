@@ -21,6 +21,7 @@ psql "$SYSTEM_DATABASE_URL" -f scripts/demo_seed.sql
 **Purpose**: Create grocery operations tables with realistic sample data for DataPoint-driven evaluation.
 
 Tables created:
+
 - `grocery_stores`
 - `grocery_suppliers`
 - `grocery_products`
@@ -44,6 +45,7 @@ psql "postgresql://postgres:@localhost:5432/datachat_grocery" -f scripts/grocery
 **Purpose**: Create banking/fintech operational tables with realistic sample data for DataPoint-driven testing.
 
 Tables created:
+
 - `bank_customers`
 - `bank_accounts`
 - `bank_transactions`
@@ -191,6 +193,7 @@ python scripts/eval_runner.py --mode retrieval --dataset eval/retrieval.json
 python scripts/eval_runner.py --mode qa --dataset eval/qa.json
 python scripts/eval_runner.py --mode intent --dataset eval/intent_credentials.json
 python scripts/eval_runner.py --mode catalog --dataset eval/catalog/mysql_credentials.json
+python scripts/eval_runner.py --mode route --dataset eval/routes_credentials.json
 python scripts/eval_runner.py --mode retrieval --dataset eval/grocery/retrieval.json --min-hit-rate 0.6 --min-recall 0.5 --min-mrr 0.4
 python scripts/eval_runner.py --mode qa --dataset eval/grocery/qa.json --min-sql-match-rate 0.6 --min-answer-type-rate 0.6
 ```
@@ -199,6 +202,7 @@ python scripts/eval_runner.py --mode qa --dataset eval/grocery/qa.json --min-sql
 
 - Retrieval mode uses `sources` from `/api/v1/chat` as proxies for retrieved DataPoints.
 - Answer types support both API columnar payloads and row-oriented payloads.
+- Route mode validates deterministic orchestration path decisions from `decision_trace`.
 - Optional thresholds return non-zero exit codes to support CI gating.
 
 ### 4. `benchmark_latency_progressive.py` - Progressive Latency Benchmark
@@ -231,6 +235,7 @@ python scripts/benchmark_latency_progressive.py --iterations 2 --mode isolated -
 **Purpose**: Enforce Phase 1 (core runtime) KPI checks in CI and release verification.
 
 **Commands**:
+
 ```bash
 python scripts/phase1_kpi_gate.py --mode ci
 python scripts/phase1_kpi_gate.py --mode release --api-base http://localhost:8000
@@ -240,11 +245,13 @@ python scripts/phase1_kpi_gate.py --mode ci --report-json reports/phase1_ci_gate
 **Config**: `config/phase1_kpi.json`
 
 **Checks include**:
+
 - core API parity test suite
 - deterministic MySQL summary regressions
 - connection type/url mismatch validation
 - release smoke checks (health/ready/system status)
 - release eval thresholds (intent + catalog)
+- release eval thresholds (intent + catalog + route)
 - release SLO/quality thresholds (intent latency, LLM-call budget, source accuracy, clarification match)
 - connector-aware release eval preconditions (`required_database_type` + `on_missing`)
 
@@ -254,7 +261,29 @@ python scripts/phase1_kpi_gate.py --mode ci --report-json reports/phase1_ci_gate
 - Applies stage flags via `PIPELINE_*` env vars in-process and rebuilds settings per stage.
 - See `docs/LATENCY_TUNING.md` for env var guidance and rollout recommendations.
 
-### 5. `lint_datapoints.py` - DataPoint Contract Lint
+### 6. `manual_eval_runner.py` - Interactive Manual Scoring Runner
+
+**Purpose**: Send domain question-bank prompts to `/api/v1/chat`, capture answers, and record manual rubric scores.
+
+**Commands**:
+
+```bash
+python scripts/manual_eval_runner.py --domain grocery --mode-label without_dp_grocery --target-database <connection_id>
+python scripts/manual_eval_runner.py --domain fintech --mode-label with_dp_fintech --target-database <connection_id>
+python scripts/manual_eval_runner.py --domain all --no-score-prompt
+```
+
+**Inputs**:
+
+- Question source: `docs/DOMAIN_QUESTION_BANK.md`
+- Rubric guide: `docs/MANUAL_EVAL_SCORECARD.md`
+
+**Outputs**:
+
+- `reports/manual_eval/manual_eval_<run_id>.json`
+- `reports/manual_eval/manual_eval_<run_id>.csv`
+
+### 7. `lint_datapoints.py` - DataPoint Contract Lint
 
 **Purpose**: Validate DataPoint metadata contracts (quality + governance fields) before sync/runtime usage.
 

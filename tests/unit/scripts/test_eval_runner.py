@@ -114,3 +114,36 @@ def test_run_catalog_thresholds(monkeypatch):
     )
 
     assert rc == 0
+
+
+def test_run_route_thresholds(monkeypatch):
+    dataset = [
+        {
+            "query": "list tables",
+            "expected_answer_source": "sql",
+            "expected_decisions": [
+                {"stage": "intent_gate", "decision": "data_query_fast_path"},
+                {"stage": "continue_after_intent_gate", "decision": "sql"},
+            ],
+        }
+    ]
+
+    def _mock_post_chat(api_base: str, message: str, **kwargs):
+        return {
+            "answer_source": "sql",
+            "decision_trace": [
+                {"stage": "intent_gate", "decision": "data_query_fast_path"},
+                {"stage": "continue_after_intent_gate", "decision": "sql"},
+            ],
+        }
+
+    monkeypatch.setattr(EVAL_RUNNER, "_post_chat", _mock_post_chat)
+
+    rc = EVAL_RUNNER.run_route(
+        "http://localhost:8000",
+        dataset,
+        min_route_match_rate=1.0,
+        min_source_match_rate=1.0,
+    )
+
+    assert rc == 0

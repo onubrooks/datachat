@@ -13,10 +13,12 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   getSynthesizeSimpleSql,
+  getShowLiveReasoning,
   getWaitingUxMode,
   getResultLayoutMode,
   getShowAgentTimingBreakdown,
   setResultLayoutMode,
+  setShowLiveReasoning,
   setShowAgentTimingBreakdown,
   setSynthesizeSimpleSql,
   setWaitingUxMode,
@@ -30,11 +32,6 @@ const OPTIONS: Array<{
   title: string;
   description: string;
 }> = [
-  {
-    value: "basic",
-    title: "Basic",
-    description: "Show only the current agent.",
-  },
   {
     value: "animated",
     title: "Animated",
@@ -52,6 +49,7 @@ export default function SettingsPage() {
   const [resultLayout, setResultLayout] = useState<ResultLayoutMode>("stacked");
   const [showAgentTimings, setShowAgentTimings] = useState(true);
   const [synthesizeSimpleSql, setSynthesizeSimpleSqlState] = useState(true);
+  const [showLiveReasoning, setShowLiveReasoningState] = useState(true);
   const [clearedAt, setClearedAt] = useState<Date | null>(null);
   const clearMessages = useChatStore((state) => state.clearMessages);
 
@@ -60,6 +58,7 @@ export default function SettingsPage() {
     setResultLayout(getResultLayoutMode());
     setShowAgentTimings(getShowAgentTimingBreakdown());
     setSynthesizeSimpleSqlState(getSynthesizeSimpleSql());
+    setShowLiveReasoningState(getShowLiveReasoning());
   }, []);
 
   const handleChange = (value: WaitingUxMode) => {
@@ -80,6 +79,11 @@ export default function SettingsPage() {
   const handleSynthesizeSimpleSqlChange = (value: boolean) => {
     setSynthesizeSimpleSqlState(value);
     setSynthesizeSimpleSql(value);
+  };
+
+  const handleShowLiveReasoningChange = (value: boolean) => {
+    setShowLiveReasoningState(value);
+    setShowLiveReasoning(value);
   };
 
   const handleClearChatHistory = () => {
@@ -103,7 +107,7 @@ export default function SettingsPage() {
 
       <Card className="p-4 space-y-4">
         <div className="text-sm font-medium">Waiting UX Mode</div>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           {OPTIONS.map((option) => (
             <button
               key={option.value}
@@ -187,6 +191,40 @@ export default function SettingsPage() {
             <div className="font-medium">Hide</div>
             <div className="text-xs text-muted-foreground mt-1">
               Keep only summary metrics (latency, LLM calls, retries).
+            </div>
+          </button>
+        </div>
+      </Card>
+
+      <Card className="p-4 space-y-4">
+        <div className="text-sm font-medium">Live Reasoning Stream</div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => handleShowLiveReasoningChange(true)}
+            className={`rounded-md border px-4 py-3 text-left text-sm transition ${
+              showLiveReasoning
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/40"
+            }`}
+          >
+            <div className="font-medium">Show</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Show live, temporary step-by-step thinking notes while a response is running.
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleShowLiveReasoningChange(false)}
+            className={`rounded-md border px-4 py-3 text-left text-sm transition ${
+              !showLiveReasoning
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/40"
+            }`}
+          >
+            <div className="font-medium">Hide</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Keep only final output and agent timeline.
             </div>
           </button>
         </div>

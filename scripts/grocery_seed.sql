@@ -1,4 +1,4 @@
--- Grocery store sample schema + seed data for DataPoint-driven testing.
+-- Grocery store sample schema + expanded seed data for DataPoint-driven testing.
 
 DROP TABLE IF EXISTS public.grocery_waste_events CASCADE;
 DROP TABLE IF EXISTS public.grocery_purchase_orders CASCADE;
@@ -85,91 +85,235 @@ CREATE TABLE public.grocery_waste_events (
 INSERT INTO public.grocery_stores (store_code, store_name, city, region, opened_at) VALUES
 ('ST001', 'Downtown Fresh', 'Austin', 'South', '2020-03-01'),
 ('ST002', 'Midtown Market', 'Austin', 'South', '2021-07-15'),
-('ST003', 'Lakeside Grocers', 'Dallas', 'North', '2019-11-20');
+('ST003', 'Lakeside Grocers', 'Dallas', 'North', '2019-11-20'),
+('ST004', 'Riverside Basket', 'Houston', 'South', '2022-04-10'),
+('ST005', 'Uptown Foods', 'Plano', 'North', '2023-09-18');
 
 INSERT INTO public.grocery_suppliers (supplier_name, lead_time_days, contact_email) VALUES
 ('FarmLine Produce', 2, 'ops@farmline.example.com'),
 ('Texas Dairy Co', 1, 'supply@texasdairy.example.com'),
-('Pantry Wholesale', 4, 'logistics@pantrywholesale.example.com');
+('Pantry Wholesale', 4, 'logistics@pantrywholesale.example.com'),
+('FreshCatch Seafood', 2, 'support@freshcatch.example.com'),
+('Baker''s Field', 1, 'dispatch@bakersfield.example.com'),
+('Spark Beverages', 3, 'fulfillment@sparkbev.example.com');
 
 INSERT INTO public.grocery_products (
     sku, product_name, category, unit_cost, unit_price, is_perishable, reorder_level, supplier_id
 ) VALUES
 ('APL-01', 'Apple Gala 1lb', 'produce', 1.20, 2.49, true, 40, 1),
 ('BAN-01', 'Banana Bunch', 'produce', 0.90, 1.99, true, 50, 1),
+('ORG-01', 'Orange Bag 2lb', 'produce', 1.65, 3.49, true, 35, 1),
+('TMT-01', 'Tomato 1lb', 'produce', 1.05, 2.29, true, 45, 1),
+('POT-01', 'Potato 5lb', 'produce', 2.10, 4.99, false, 30, 1),
 ('MLK-01', 'Whole Milk 1L', 'dairy', 1.05, 2.39, true, 60, 2),
+('MLK-02', 'Skim Milk 1L', 'dairy', 1.00, 2.29, true, 55, 2),
 ('EGG-12', 'Eggs 12ct', 'dairy', 1.80, 3.79, true, 45, 2),
-('BRD-01', 'Wheat Bread', 'bakery', 1.10, 2.99, true, 35, 3),
+('YGT-01', 'Greek Yogurt Cup', 'dairy', 0.75, 1.89, true, 65, 2),
+('CHS-01', 'Cheddar Cheese 200g', 'dairy', 2.20, 4.69, true, 25, 2),
+('BRD-01', 'Wheat Bread', 'bakery', 1.10, 2.99, true, 35, 5),
+('BRD-02', 'Sourdough Loaf', 'bakery', 1.45, 3.49, true, 30, 5),
+('MUF-06', 'Blueberry Muffin 6ct', 'bakery', 1.90, 4.29, true, 28, 5),
 ('PST-01', 'Pasta 500g', 'pantry', 0.70, 1.89, false, 80, 3),
 ('RCE-01', 'Rice 1kg', 'pantry', 1.40, 3.49, false, 70, 3),
-('OIL-01', 'Olive Oil 500ml', 'pantry', 3.20, 6.99, false, 25, 3);
+('OIL-01', 'Olive Oil 500ml', 'pantry', 3.20, 6.99, false, 25, 3),
+('CNL-01', 'Canned Beans 400g', 'pantry', 0.60, 1.49, false, 90, 3),
+('SUG-01', 'Brown Sugar 1kg', 'pantry', 1.10, 2.79, false, 75, 3),
+('SDA-01', 'Spark Soda 330ml', 'beverage', 0.35, 0.99, false, 120, 6),
+('JCE-01', 'Orange Juice 1L', 'beverage', 1.25, 2.99, true, 50, 6),
+('WTR-12', 'Mineral Water 12pk', 'beverage', 2.40, 5.99, false, 60, 6),
+('ICE-01', 'Vanilla Ice Cream 500ml', 'frozen', 1.80, 4.49, true, 40, 3),
+('PZA-01', 'Frozen Pizza', 'frozen', 2.70, 6.49, true, 38, 3),
+('FSH-01', 'Salmon Fillet 300g', 'seafood', 4.80, 9.99, true, 20, 4);
 
+-- 62-day inventory spine with deterministic variation.
+WITH days AS (
+    SELECT gs::date AS snapshot_date
+    FROM generate_series('2025-12-15'::date, '2026-02-14'::date, interval '1 day') gs
+),
+base AS (
+    SELECT
+        d.snapshot_date,
+        s.store_id,
+        p.product_id,
+        p.reorder_level,
+        p.is_perishable,
+        EXTRACT(DOY FROM d.snapshot_date)::int AS doy
+    FROM days d
+    CROSS JOIN public.grocery_stores s
+    CROSS JOIN public.grocery_products p
+)
 INSERT INTO public.grocery_inventory_snapshots
 (snapshot_date, store_id, product_id, on_hand_qty, reserved_qty)
-VALUES
-('2026-02-01', 1, 1, 120, 4),
-('2026-02-01', 1, 2, 98, 2),
-('2026-02-01', 1, 3, 140, 3),
-('2026-02-01', 1, 4, 72, 1),
-('2026-02-01', 1, 5, 54, 0),
-('2026-02-01', 2, 1, 88, 2),
-('2026-02-01', 2, 3, 118, 2),
-('2026-02-01', 2, 6, 165, 5),
-('2026-02-01', 2, 7, 130, 4),
-('2026-02-01', 3, 2, 110, 1),
-('2026-02-01', 3, 4, 84, 2),
-('2026-02-01', 3, 8, 46, 1),
-('2026-02-02', 1, 1, 102, 3),
-('2026-02-02', 1, 3, 126, 2),
-('2026-02-02', 2, 6, 149, 3),
-('2026-02-02', 3, 8, 41, 1);
+SELECT
+    snapshot_date,
+    store_id,
+    product_id,
+    GREATEST(
+        0,
+        reorder_level + 30 + ((store_id * 17 + product_id * 9 + doy) % 95)
+        - CASE WHEN is_perishable AND (doy % 11 = 0) THEN 20 ELSE 0 END
+    ) AS on_hand_qty,
+    ((store_id + product_id + doy) % 9) AS reserved_qty
+FROM base;
 
+-- Baseline sales: one transaction per store/product/day.
+WITH days AS (
+    SELECT gs::date AS business_date
+    FROM generate_series('2025-12-15'::date, '2026-02-14'::date, interval '1 day') gs
+),
+base AS (
+    SELECT
+        d.business_date,
+        s.store_id,
+        p.product_id,
+        p.unit_price,
+        p.is_perishable,
+        EXTRACT(DOY FROM d.business_date)::int AS doy,
+        1 + ((s.store_id * 5 + p.product_id * 3 + EXTRACT(DOY FROM d.business_date)::int) % 6) AS quantity,
+        CASE
+            WHEN (s.store_id + p.product_id + EXTRACT(DOY FROM d.business_date)::int) % 5 = 0
+                THEN ROUND((p.unit_price * 0.12)::numeric, 2)
+            ELSE 0::numeric
+        END AS discount_amount
+    FROM days d
+    CROSS JOIN public.grocery_stores s
+    CROSS JOIN public.grocery_products p
+)
 INSERT INTO public.grocery_sales_transactions
 (sold_at, business_date, store_id, product_id, quantity, unit_price, discount_amount, total_amount)
-VALUES
-('2026-02-01 08:12:00', '2026-02-01', 1, 1, 4, 2.49, 0.50, 9.46),
-('2026-02-01 09:43:00', '2026-02-01', 1, 3, 3, 2.39, 0.00, 7.17),
-('2026-02-01 10:08:00', '2026-02-01', 1, 5, 2, 2.99, 0.00, 5.98),
-('2026-02-01 11:21:00', '2026-02-01', 2, 6, 6, 1.89, 1.00, 10.34),
-('2026-02-01 12:04:00', '2026-02-01', 2, 7, 5, 3.49, 0.00, 17.45),
-('2026-02-01 13:47:00', '2026-02-01', 3, 2, 7, 1.99, 0.80, 13.13),
-('2026-02-01 15:15:00', '2026-02-01', 3, 8, 2, 6.99, 0.00, 13.98),
-('2026-02-01 17:32:00', '2026-02-01', 3, 4, 3, 3.79, 0.00, 11.37),
-('2026-02-02 08:05:00', '2026-02-02', 1, 1, 5, 2.49, 0.00, 12.45),
-('2026-02-02 09:16:00', '2026-02-02', 1, 3, 4, 2.39, 0.00, 9.56),
-('2026-02-02 11:03:00', '2026-02-02', 1, 4, 3, 3.79, 0.40, 10.97),
-('2026-02-02 12:42:00', '2026-02-02', 2, 6, 8, 1.89, 1.20, 13.92),
-('2026-02-02 14:20:00', '2026-02-02', 2, 7, 4, 3.49, 0.00, 13.96),
-('2026-02-02 16:55:00', '2026-02-02', 3, 2, 6, 1.99, 0.50, 11.44),
-('2026-02-02 18:17:00', '2026-02-02', 3, 8, 1, 6.99, 0.00, 6.99),
-('2026-02-03 08:34:00', '2026-02-03', 1, 5, 4, 2.99, 0.00, 11.96),
-('2026-02-03 10:01:00', '2026-02-03', 1, 3, 5, 2.39, 0.60, 11.35),
-('2026-02-03 12:18:00', '2026-02-03', 2, 1, 3, 2.49, 0.00, 7.47),
-('2026-02-03 13:44:00', '2026-02-03', 2, 6, 7, 1.89, 0.70, 12.53),
-('2026-02-03 15:26:00', '2026-02-03', 3, 4, 4, 3.79, 0.50, 14.66),
-('2026-02-03 17:09:00', '2026-02-03', 3, 2, 5, 1.99, 0.30, 9.65),
-('2026-02-04 09:05:00', '2026-02-04', 1, 7, 4, 3.49, 0.00, 13.96),
-('2026-02-04 11:11:00', '2026-02-04', 2, 3, 6, 2.39, 0.90, 13.44),
-('2026-02-04 16:30:00', '2026-02-04', 3, 8, 2, 6.99, 0.00, 13.98);
+SELECT
+    (
+        business_date::timestamp
+        + (((store_id * 37 + product_id * 11 + doy) % 12) + 8) * interval '1 hour'
+        + (((store_id * 19 + product_id * 7 + doy) % 60)) * interval '1 minute'
+    ) AS sold_at,
+    business_date,
+    store_id,
+    product_id,
+    quantity,
+    unit_price,
+    discount_amount,
+    ROUND((quantity * unit_price - discount_amount)::numeric, 2) AS total_amount
+FROM base;
 
+-- Promotional weekend uplift for selected products/stores.
+WITH promo_days AS (
+    SELECT gs::date AS business_date
+    FROM generate_series('2025-12-15'::date, '2026-02-14'::date, interval '1 day') gs
+    WHERE EXTRACT(DOW FROM gs) IN (5, 6)
+),
+promo_base AS (
+    SELECT
+        d.business_date,
+        s.store_id,
+        p.product_id,
+        p.unit_price,
+        EXTRACT(DOY FROM d.business_date)::int AS doy,
+        3 + ((s.store_id + p.product_id + EXTRACT(DOY FROM d.business_date)::int) % 5) AS quantity,
+        ROUND((p.unit_price * 0.20)::numeric, 2) AS discount_amount
+    FROM promo_days d
+    JOIN public.grocery_stores s
+      ON (s.store_id + EXTRACT(DOY FROM d.business_date)::int) % 2 = 0
+    JOIN public.grocery_products p
+      ON p.is_perishable = true
+     AND (p.product_id + s.store_id) % 4 = 0
+)
+INSERT INTO public.grocery_sales_transactions
+(sold_at, business_date, store_id, product_id, quantity, unit_price, discount_amount, total_amount)
+SELECT
+    business_date::timestamp + interval '18 hours' + ((store_id + product_id) % 45) * interval '1 minute',
+    business_date,
+    store_id,
+    product_id,
+    quantity,
+    unit_price,
+    discount_amount,
+    ROUND((quantity * unit_price - discount_amount)::numeric, 2)
+FROM promo_base;
+
+-- Purchase order history with received/partial/in_transit states.
+WITH cycle_days AS (
+    SELECT gs::date AS ordered_day
+    FROM generate_series('2025-12-10'::date, '2026-02-14'::date, interval '7 day') gs
+),
+po_base AS (
+    SELECT
+        c.ordered_day,
+        s.store_id,
+        p.product_id,
+        p.supplier_id,
+        sup.lead_time_days,
+        p.unit_cost,
+        p.reorder_level,
+        EXTRACT(DOY FROM c.ordered_day)::int AS doy,
+        ROW_NUMBER() OVER (ORDER BY c.ordered_day, s.store_id, p.product_id) AS seq
+    FROM cycle_days c
+    CROSS JOIN public.grocery_stores s
+    JOIN public.grocery_products p
+      ON (p.product_id + s.store_id + EXTRACT(DOY FROM c.ordered_day)::int) % 3 = 0
+    JOIN public.grocery_suppliers sup
+      ON sup.supplier_id = p.supplier_id
+)
 INSERT INTO public.grocery_purchase_orders
 (ordered_at, expected_at, received_at, supplier_id, store_id, product_id, ordered_qty, received_qty, unit_cost, status)
-VALUES
-('2026-01-29 06:00:00', '2026-01-31 10:00:00', '2026-01-31 09:20:00', 1, 1, 1, 80, 80, 1.20, 'received'),
-('2026-01-30 06:15:00', '2026-01-31 09:00:00', '2026-01-31 08:45:00', 2, 1, 3, 90, 90, 1.05, 'received'),
-('2026-01-31 07:00:00', '2026-02-04 11:00:00', NULL, 3, 2, 6, 140, NULL, 0.70, 'in_transit'),
-('2026-02-01 07:30:00', '2026-02-03 10:00:00', '2026-02-03 10:40:00', 1, 3, 2, 120, 116, 0.90, 'partial'),
-('2026-02-01 08:10:00', '2026-02-02 10:00:00', '2026-02-02 09:55:00', 2, 3, 4, 60, 60, 1.80, 'received'),
-('2026-02-02 06:55:00', '2026-02-06 14:00:00', NULL, 3, 1, 8, 40, NULL, 3.20, 'in_transit'),
-('2026-02-02 07:20:00', '2026-02-03 08:00:00', '2026-02-03 08:12:00', 2, 2, 3, 75, 75, 1.05, 'received'),
-('2026-02-03 06:40:00', '2026-02-07 12:00:00', NULL, 3, 3, 7, 110, NULL, 1.40, 'submitted');
+SELECT
+    ordered_day::timestamp + interval '6 hours' + (store_id % 3) * interval '30 minutes' AS ordered_at,
+    ordered_day::timestamp + lead_time_days * interval '1 day' + interval '10 hours' AS expected_at,
+    CASE
+        WHEN ordered_day + lead_time_days <= '2026-02-10'::date
+            THEN ordered_day::timestamp + lead_time_days * interval '1 day' + interval '11 hours'
+                 + (seq % 25) * interval '1 minute'
+        ELSE NULL
+    END AS received_at,
+    supplier_id,
+    store_id,
+    product_id,
+    reorder_level + 25 + (doy % 40) AS ordered_qty,
+    CASE
+        WHEN ordered_day + lead_time_days > '2026-02-10'::date THEN NULL
+        WHEN seq % 5 = 0 THEN (reorder_level + 25 + (doy % 40)) - (3 + (seq % 7))
+        ELSE reorder_level + 25 + (doy % 40)
+    END AS received_qty,
+    unit_cost,
+    CASE
+        WHEN ordered_day + lead_time_days > '2026-02-10'::date THEN 'in_transit'
+        WHEN seq % 5 = 0 THEN 'partial'
+        ELSE 'received'
+    END AS status
+FROM po_base;
 
+-- Waste events concentrated on perishables with reason distribution.
+WITH waste_days AS (
+    SELECT gs::date AS event_date
+    FROM generate_series('2025-12-15'::date, '2026-02-14'::date, interval '3 day') gs
+),
+waste_base AS (
+    SELECT
+        d.event_date,
+        s.store_id,
+        p.product_id,
+        p.unit_cost,
+        EXTRACT(DOY FROM d.event_date)::int AS doy,
+        1 + ((s.store_id + p.product_id + EXTRACT(DOY FROM d.event_date)::int) % 6) AS quantity,
+        CASE
+            WHEN (s.store_id + p.product_id + EXTRACT(DOY FROM d.event_date)::int) % 4 = 0 THEN 'expired'
+            WHEN (s.store_id + p.product_id + EXTRACT(DOY FROM d.event_date)::int) % 4 = 1 THEN 'damaged shipment'
+            WHEN (s.store_id + p.product_id + EXTRACT(DOY FROM d.event_date)::int) % 4 = 2 THEN 'temperature excursion'
+            ELSE 'quality reject'
+        END AS reason
+    FROM waste_days d
+    CROSS JOIN public.grocery_stores s
+    JOIN public.grocery_products p
+      ON p.is_perishable = true
+     AND (s.store_id + p.product_id + EXTRACT(DOY FROM d.event_date)::int) % 5 = 0
+)
 INSERT INTO public.grocery_waste_events
 (event_date, store_id, product_id, quantity, reason, estimated_cost)
-VALUES
-('2026-02-01', 1, 1, 3, 'damaged shipment', 3.60),
-('2026-02-01', 2, 3, 4, 'expired', 4.20),
-('2026-02-02', 3, 2, 5, 'overripe', 4.50),
-('2026-02-03', 1, 5, 2, 'stale', 2.20),
-('2026-02-03', 3, 4, 3, 'broken pack', 5.40),
-('2026-02-04', 2, 1, 2, 'quality reject', 2.40);
+SELECT
+    event_date,
+    store_id,
+    product_id,
+    quantity,
+    reason,
+    ROUND((quantity * unit_cost * 1.08)::numeric, 2) AS estimated_cost
+FROM waste_base;

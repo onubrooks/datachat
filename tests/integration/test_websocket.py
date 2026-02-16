@@ -67,6 +67,15 @@ class TestWebSocketStreaming:
             "llm_calls": 3,
             "retry_count": 0,
             "error": None,
+            "session_summary": "Intent summary: last_goal=What's the total revenue?",
+            "session_state": {"last_goal": "What's the total revenue?"},
+            "decision_trace": [
+                {
+                    "stage": "intent_gate",
+                    "decision": "data_query_fast_path",
+                    "reason": "deterministic_sql_query",
+                }
+            ],
         }
 
     def test_websocket_connects_successfully(self, client):
@@ -109,8 +118,11 @@ class TestWebSocketStreaming:
         async def mock_run_with_streaming(
             query,
             conversation_history,
+            session_summary=None,
+            session_state=None,
             database_type=None,
             database_url=None,
+            target_connection_id=None,
             synthesize_simple_sql=None,
             event_callback=None,
         ):
@@ -166,6 +178,7 @@ class TestWebSocketStreaming:
                     msg.get("event") == "agent_complete" and msg.get("agent") == "ClassifierAgent"
                     for msg in messages
                 )
+                assert any(msg.get("event") == "thinking" for msg in messages)
 
     def test_websocket_final_message_contains_complete_response(self, client, mock_pipeline_result):
         """Test that final WebSocket message contains complete response."""
@@ -197,6 +210,9 @@ class TestWebSocketStreaming:
                 assert "sources" in final_message
                 assert "metrics" in final_message
                 assert "conversation_id" in final_message
+                assert "session_summary" in final_message
+                assert "session_state" in final_message
+                assert "decision_trace" in final_message
 
                 # Verify content
                 assert final_message["answer"] == "The total revenue is $1,234,567.89"
@@ -204,6 +220,8 @@ class TestWebSocketStreaming:
                 assert final_message["data"]["total_revenue"] == [1234567.89]
                 assert len(final_message["sources"]) == 1
                 assert final_message["metrics"]["llm_calls"] == 3
+                assert final_message["session_state"]["last_goal"] == "What's the total revenue?"
+                assert final_message["decision_trace"][0]["stage"] == "intent_gate"
 
     def test_websocket_uses_target_database_for_streaming_call(self, client):
         manager = AsyncMock()
@@ -267,6 +285,35 @@ class TestWebSocketStreaming:
                         break
         kwargs = mock_pipeline.run_with_streaming.call_args.kwargs
         assert kwargs["synthesize_simple_sql"] is False
+
+    def test_websocket_forwards_session_memory(self, client):
+        mock_pipeline = AsyncMock()
+        mock_pipeline.run_with_streaming = AsyncMock(
+            return_value={
+                "natural_language_answer": "Test answer",
+                "total_latency_ms": 1000.0,
+                "agent_timings": {},
+                "llm_calls": 1,
+                "retry_count": 0,
+                "retrieved_datapoints": [],
+            }
+        )
+        with patch("backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)):
+            with client.websocket_connect("/ws/chat") as websocket:
+                websocket.send_json(
+                    {
+                        "message": "what about stores",
+                        "session_summary": "Intent summary: last_goal=How many products do we have?",
+                        "session_state": {"last_goal": "How many products do we have?"},
+                    }
+                )
+                while True:
+                    event = websocket.receive_json()
+                    if event.get("event") == "complete":
+                        break
+        kwargs = mock_pipeline.run_with_streaming.call_args.kwargs
+        assert kwargs["session_summary"] == "Intent summary: last_goal=How many products do we have?"
+        assert kwargs["session_state"]["last_goal"] == "How many products do we have?"
 
     def test_websocket_handles_client_disconnect(self, client):
         """Test that WebSocket handles client disconnect gracefully."""

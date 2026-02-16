@@ -116,6 +116,8 @@ interface ChatState {
   // Messages
   messages: Message[];
   conversationId: string | null;
+  sessionSummary: string | null;
+  sessionState: Record<string, unknown> | null;
   frontendSessionId: string;
 
   // Agent status
@@ -137,6 +139,10 @@ interface ChatState {
     updates: Partial<Omit<Message, "id" | "timestamp">>
   ) => void;
   setConversationId: (id: string) => void;
+  setSessionMemory: (
+    summary: string | null,
+    state: Record<string, unknown> | null
+  ) => void;
   setAgentUpdate: (update: AgentUpdate) => void;
   resetAgentStatus: () => void;
   setLoading: (loading: boolean) => void;
@@ -152,6 +158,8 @@ export const useChatStore = create<ChatState>()(
   // Initial state
   messages: [],
   conversationId: null,
+  sessionSummary: null,
+  sessionState: null,
   frontendSessionId: createSessionId(),
   currentAgent: null,
   agentStatus: "idle",
@@ -188,6 +196,11 @@ export const useChatStore = create<ChatState>()(
     }),
 
   setConversationId: (id) => set({ conversationId: id }),
+  setSessionMemory: (summary, state) =>
+    set({
+      sessionSummary: summary,
+      sessionState: state,
+    }),
 
   setAgentUpdate: (update) =>
     set((state) => ({
@@ -213,9 +226,11 @@ export const useChatStore = create<ChatState>()(
 
   clearMessages: () =>
     set({
-      messages: [],
-      conversationId: null,
-      frontendSessionId: createSessionId(),
+        messages: [],
+        conversationId: null,
+        sessionSummary: null,
+        sessionState: null,
+        frontendSessionId: createSessionId(),
       currentAgent: null,
       agentStatus: "idle",
       agentMessage: null,
@@ -255,6 +270,8 @@ export const useChatStore = create<ChatState>()(
       return {
         messages: [...state.messages, userMessage, assistantMessage],
         conversationId: response.conversation_id,
+        sessionSummary: response.session_summary || null,
+        sessionState: response.session_state || null,
       };
     }),
 
@@ -288,6 +305,8 @@ export const useChatStore = create<ChatState>()(
           .slice(-MAX_PERSISTED_MESSAGES)
           .map((message) => compactMessageForPersistence(message)),
         conversationId: state.conversationId,
+        sessionSummary: state.sessionSummary,
+        sessionState: state.sessionState,
         frontendSessionId: state.frontendSessionId,
       }),
       onRehydrateStorage: () => (state) => {
@@ -296,6 +315,8 @@ export const useChatStore = create<ChatState>()(
         if (!state.frontendSessionId) {
           state.frontendSessionId = createSessionId();
         }
+        state.sessionSummary = state.sessionSummary || null;
+        state.sessionState = state.sessionState || null;
       },
     }
   )

@@ -428,6 +428,39 @@ class PipelineSettings(BaseSettings):
         le=500,
         description="Minimum query length to allow deep-classification fallback.",
     )
+    intent_llm_confidence_threshold: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "When intent LLM returns data_query below this confidence for ambiguous input, "
+            "route to clarification."
+        ),
+    )
+    context_answer_confidence_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum context confidence for routing ambiguous semantic questions "
+            "to ContextAnswer instead of SQL."
+        ),
+    )
+    semantic_sql_clarification_confidence_threshold: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum SQL generation confidence for accepting semantic SQL without "
+            "a clarification round."
+        ),
+    )
+    ambiguous_query_max_tokens: int = Field(
+        default=3,
+        ge=1,
+        le=12,
+        description="Maximum tokens treated as ambiguous when no data keywords are present.",
+    )
     selective_tool_planner_enabled: bool = Field(
         default=False,
         description="Run tool planner only for likely tool/action requests.",

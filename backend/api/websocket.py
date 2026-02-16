@@ -26,6 +26,69 @@ LIVE_SCHEMA_MODE_NOTICE = (
 )
 
 
+def _thinking_note_for_event(event_type: str, event_data: dict[str, Any]) -> str | None:
+    """Return safe, user-facing progress notes for live reasoning UI."""
+    agent = str(event_data.get("agent") or "").strip()
+
+    if event_type == "decompose_complete":
+        part_count = event_data.get("part_count")
+        if isinstance(part_count, int) and part_count > 1:
+            return f"Breaking this into {part_count} focused sub-questions."
+        return None
+
+    if event_type == "agent_start":
+        start_notes = {
+            "ToolPlannerAgent": "Planning the safest tool path.",
+            "ToolExecutor": "Running approved tools.",
+            "ClassifierAgent": "Classifying your request intent.",
+            "ContextAgent": "Gathering relevant metadata and DataPoints.",
+            "ContextAnswerAgent": "Checking if context can answer directly.",
+            "SQLAgent": "Translating your request into SQL.",
+            "ValidatorAgent": "Validating SQL for safety and correctness.",
+            "ExecutorAgent": "Executing SQL on the selected database.",
+            "ResponseSynthesisAgent": "Synthesizing the final response.",
+        }
+        return start_notes.get(agent)
+
+    if event_type == "agent_complete":
+        data = event_data.get("data")
+        payload = data if isinstance(data, dict) else {}
+        complete_notes = {
+            "ToolPlannerAgent": "Tool planning complete.",
+            "ToolExecutor": (
+                f"Tools complete ({payload.get('tool_results', 0)} result(s))."
+                if payload
+                else "Tool execution complete."
+            ),
+            "ClassifierAgent": "Intent classified.",
+            "ContextAgent": (
+                f"Context retrieved ({payload.get('datapoints_found', 0)} source(s))."
+                if payload
+                else "Context retrieval complete."
+            ),
+            "ContextAnswerAgent": "Context answer pass complete.",
+            "SQLAgent": (
+                "SQL candidate generated."
+                if payload.get("sql_generated")
+                else "SQL generation needs clarification."
+            ),
+            "ValidatorAgent": (
+                "SQL validation passed."
+                if payload.get("validation_passed")
+                else "SQL validation flagged issues."
+            ),
+            "ExecutorAgent": (
+                f"Execution complete ({payload.get('rows_returned', 0)} row(s))."
+                if payload
+                else "Execution complete."
+            ),
+            "ResponseSynthesisAgent": "Final response generated.",
+        }
+        return complete_notes.get(agent)
+
+    return None
+
+
 @router.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket) -> None:
     """
@@ -158,6 +221,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
         message = data["message"]
         conversation_id = data.get("conversation_id") or f"conv_{uuid.uuid4().hex[:12]}"
         conversation_history = data.get("conversation_history", [])
+        session_summary = data.get("session_summary")
+        session_state = data.get("session_state")
         synthesize_simple_sql = data.get("synthesize_simple_sql")
 
         # Convert conversation history to pipeline format
@@ -176,6 +241,9 @@ async def websocket_chat(websocket: WebSocket) -> None:
                         **event_data,
                     }
                 )
+                note = _thinking_note_for_event(event_type, event_data)
+                if note:
+                    await websocket.send_json({"event": "thinking", "note": note})
             except Exception as e:
                 logger.warning(f"Failed to send event {event_type}: {e}")
 
@@ -184,6 +252,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
         result = await pipeline.run_with_streaming(
             query=message,
             conversation_history=history,
+            session_summary=session_summary,
+            session_state=session_state,
             database_type=database_type,
             database_url=database_url,
             target_connection_id=target_database,
@@ -265,6 +335,9 @@ async def websocket_chat(websocket: WebSocket) -> None:
             "tool_approval_calls": result.get("tool_approval_calls", []),
             "metrics": metrics,
             "conversation_id": conversation_id,
+            "session_summary": result.get("session_summary"),
+            "session_state": result.get("session_state"),
+            "decision_trace": result.get("decision_trace", []),
         }
         await websocket.send_json(jsonable_encoder(payload))
 

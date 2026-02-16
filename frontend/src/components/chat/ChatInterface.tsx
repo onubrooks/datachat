@@ -30,6 +30,7 @@ import {
 import { SystemSetup } from "../system/SystemSetup";
 import {
   getResultLayoutMode,
+  getShowLiveReasoning,
   getShowAgentTimingBreakdown,
   getSynthesizeSimpleSql,
   getWaitingUxMode,
@@ -44,6 +45,8 @@ export function ChatInterface() {
   const {
     messages,
     conversationId,
+    sessionSummary,
+    sessionState,
     isLoading,
     isConnected,
     agentHistory,
@@ -56,6 +59,7 @@ export function ChatInterface() {
     addMessage,
     updateLastMessage,
     setConversationId,
+    setSessionMemory,
     appendToLastMessage,
   } = useChatStore();
 
@@ -76,6 +80,8 @@ export function ChatInterface() {
     useState<ResultLayoutMode>("stacked");
   const [showAgentTimingBreakdown, setShowAgentTimingBreakdown] = useState(true);
   const [synthesizeSimpleSql, setSynthesizeSimpleSql] = useState(true);
+  const [showLiveReasoning, setShowLiveReasoning] = useState(true);
+  const [thinkingNotes, setThinkingNotes] = useState<string[]>([]);
   const [loadingElapsedSeconds, setLoadingElapsedSeconds] = useState(0);
   const [toolApprovalOpen, setToolApprovalOpen] = useState(false);
   const [toolApprovalCalls, setToolApprovalCalls] = useState<
@@ -133,11 +139,13 @@ export function ChatInterface() {
     setResultLayoutMode(getResultLayoutMode());
     setShowAgentTimingBreakdown(getShowAgentTimingBreakdown());
     setSynthesizeSimpleSql(getSynthesizeSimpleSql());
+    setShowLiveReasoning(getShowLiveReasoning());
     const handleStorage = () => {
       setWaitingMode(getWaitingUxMode());
       setResultLayoutMode(getResultLayoutMode());
       setShowAgentTimingBreakdown(getShowAgentTimingBreakdown());
       setSynthesizeSimpleSql(getSynthesizeSimpleSql());
+      setShowLiveReasoning(getShowLiveReasoning());
     };
     window.addEventListener("storage", handleStorage);
     return () => {
@@ -188,9 +196,11 @@ export function ChatInterface() {
     setInput("");
     setError(null);
     setLoading(true);
+    setThinkingNotes([]);
     resetAgentStatus();
     if (!canReuseConversation) {
       setConversationId(null);
+      setSessionMemory(null, null);
     }
 
     addMessage({
@@ -210,6 +220,8 @@ export function ChatInterface() {
           conversation_id: canReuseConversation ? conversationId || undefined : undefined,
           target_database: requestDatabaseId || undefined,
           conversation_history: conversationHistory,
+          session_summary: canReuseConversation ? sessionSummary : undefined,
+          session_state: canReuseConversation ? sessionState : undefined,
           synthesize_simple_sql: synthesizeSimpleSql,
         },
         {
@@ -219,9 +231,18 @@ export function ChatInterface() {
           onClose: () => {
             setConnected(false);
             setLoading(false);
+            setThinkingNotes([]);
           },
           onAgentUpdate: (update) => {
             setAgentUpdate(update);
+          },
+          onThinking: (note) => {
+            if (!showLiveReasoning) return;
+            setThinkingNotes((prev) => {
+              if (!note.trim()) return prev;
+              if (prev[prev.length - 1] === note) return prev;
+              return [...prev.slice(-7), note];
+            });
           },
           onAnswerChunk: (chunk) => {
             appendToLastMessage(chunk);
@@ -245,6 +266,7 @@ export function ChatInterface() {
             if (response.conversation_id) {
               setConversationId(response.conversation_id);
             }
+            setSessionMemory(response.session_summary || null, response.session_state || null);
             setConversationDatabaseId(requestDatabaseId);
             if (response.tool_approval_required && response.tool_approval_calls?.length) {
               setToolApprovalCalls(response.tool_approval_calls);
@@ -255,11 +277,13 @@ export function ChatInterface() {
               setToolApprovalOpen(true);
             }
             setLoading(false);
+            setThinkingNotes([]);
             resetAgentStatus();
           },
           onError: (message) => {
             setError(message);
             setLoading(false);
+            setThinkingNotes([]);
             resetAgentStatus();
           },
           onSystemNotInitialized: (steps, message) => {
@@ -267,6 +291,7 @@ export function ChatInterface() {
             setSetupSteps(steps);
             setSetupError(message);
             setLoading(false);
+            setThinkingNotes([]);
             resetAgentStatus();
           },
         }
@@ -512,6 +537,23 @@ export function ChatInterface() {
         ))}
 
         {/* Agent Status */}
+        {isLoading && showLiveReasoning && (
+          <Card className="mb-4 border-primary/20 bg-primary/5">
+            <div className="p-3">
+              <div className="mb-2 text-xs font-medium text-primary">Working...</div>
+              <ul className="space-y-1 text-xs text-muted-foreground">
+                {(thinkingNotes.length ? thinkingNotes : ["Understanding your request..."]).map(
+                  (note, idx) => (
+                    <li key={`${idx}-${note}`} className="flex items-start gap-2">
+                      <span className="mt-1 inline-block h-1.5 w-1.5 rounded-full bg-primary/70" />
+                      <span>{note}</span>
+                    </li>
+                  )
+                )}
+              </ul>
+            </div>
+          </Card>
+        )}
         <AgentStatus mode={waitingMode} />
         {isLoading && (
           <div className="mb-4 flex items-center justify-center">

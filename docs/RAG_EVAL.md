@@ -83,6 +83,9 @@ python scripts/eval_runner.py --mode intent --dataset eval/intent_credentials.js
 
 # Deterministic catalog checks (credentials-only metadata intents)
 python scripts/eval_runner.py --mode catalog --dataset eval/catalog/mysql_credentials.json
+
+# Deterministic routing checks (intent gate + path selection)
+python scripts/eval_runner.py --mode route --dataset eval/routes_credentials.json
 ```
 
 Notes:
@@ -93,6 +96,7 @@ Notes:
   and latency/LLM-call averages for credentials-only flows.
 - Catalog mode focuses on deterministic metadata intents
   (`list tables`, `show columns`, `sample rows`, `row count`) and validates SQL/source/clarification behavior.
+- Route mode validates orchestration path choices via response `decision_trace`.
 
 Optional thresholds (non-zero exit on failure):
 
@@ -105,6 +109,9 @@ python scripts/eval_runner.py --mode qa --dataset eval/qa.json \
 
 python scripts/eval_runner.py --mode catalog --dataset eval/catalog/mysql_credentials.json \
   --min-sql-match-rate 0.7 --min-source-match-rate 0.8 --min-clarification-match-rate 0.8
+
+python scripts/eval_runner.py --mode route --dataset eval/routes_credentials.json \
+  --min-route-match-rate 0.8 --min-source-match-rate 0.8
 ```
 
 ---
@@ -137,3 +144,4 @@ Keep a tiny set (5-10 queries) for quick regression checks before demos.
 - `eval/grocery/retrieval.json` - grocery DataPoint retrieval checks.
 - `eval/grocery/qa.json` - grocery end-to-end SQL/answer checks.
 - `eval/catalog/mysql_credentials.json` - deterministic catalog intent checks for MySQL credentials-only mode.
+- `eval/routes_credentials.json` - deterministic routing-path checks using `decision_trace`.

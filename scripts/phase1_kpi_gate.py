@@ -315,6 +315,7 @@ def _build_eval_command(
         "min_sql_match_rate": "--min-sql-match-rate",
         "min_source_match_rate": "--min-source-match-rate",
         "min_clarification_match_rate": "--min-clarification-match-rate",
+        "min_route_match_rate": "--min-route-match-rate",
         "min_hit_rate": "--min-hit-rate",
         "min_recall": "--min-recall",
         "min_mrr": "--min-mrr",
