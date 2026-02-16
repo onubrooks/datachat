@@ -68,6 +68,12 @@ Design intent:
 - use observability loops to direct improvements
 - avoid compensating for poor metadata with prompt-only complexity
 
+Sequencing policy:
+
+- MetadataOps foundation (Level 1.5) is the release gate for deeper runtime expansions.
+- A thin onboarding wrapper layer (Level 1.4) may ship earlier if it does not alter retrieval/routing truth paths.
+- The full deterministic simplicity package (Level 1.6) lands only after foundation KPIs are stable.
+
 ### High-Level Flow
 
 ```txt

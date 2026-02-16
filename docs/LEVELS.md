@@ -54,6 +54,45 @@ Delivery rule:
 
 - major Level 3-5 expansion should follow this foundation lane, not bypass it
 
+## Level 1.4: Simple Entry Layer (Thin Wrapper)
+
+Status: `Planned`
+
+Purpose:
+
+- improve onboarding and first-query success with lower cognitive load
+- provide convenience wrappers without changing core retrieval/routing behavior
+
+Guardrails:
+
+- must not introduce new answer semantics
+- must not bypass metadata contracts, eval gates, or provenance traces
+- should be reversible/configurable without changing runtime truth paths
+
+Examples:
+
+- quickstart/train-style helper commands over existing DataPoint sync flows
+- guided setup wrappers for demo/bootstrap
+
+## Level 1.6: Deterministic Simplicity Package
+
+Status: `Planned`
+
+Purpose:
+
+- deliver a production-grade deterministic lane for repeated KPI/metric questions
+- provide embed-ready integration while preserving governance guarantees
+
+Scope:
+
+- deterministic template/function execution path (before freeform SQL when applicable)
+- integration-oriented SDK/embeddable surface
+- operational checks for deterministic route safety, correctness, and regression gating
+
+Sequencing rule:
+
+- Level 1.6 should follow Level 1.5 KPI stability, except for thin Level 1.4 wrappers.
+
 ## Level 2: Context Enhancement (DataPoints)
 
 Status: `Partial`
