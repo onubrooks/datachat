@@ -232,7 +232,7 @@ class TestPipelineExecution:
         assert mock_agents.sql.execute.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_run_with_streaming_multi_emits_primary_agent_flow(self, mock_agents):
+    async def test_run_with_streaming_multi_emits_agent_flow_for_each_question(self, mock_agents):
         events: list[tuple[str, dict]] = []
 
         async def _callback(event_type: str, event_data: dict):
@@ -251,8 +251,14 @@ class TestPipelineExecution:
         assert len(result.get("sub_answers", [])) == 2
 
         decompose = next(data for event_type, data in events if event_type == "decompose_complete")
-        assert decompose.get("primary_part_index") in {1, 2}
-        assert isinstance(decompose.get("primary_part_query"), str)
+        assert decompose.get("part_count") == 2
+        thinking_notes = [
+            data.get("note", "")
+            for event_type, data in events
+            if event_type == "thinking"
+        ]
+        question_notes = [note for note in thinking_notes if "live agent flow for question:" in note]
+        assert len(question_notes) == 2
 
     def test_select_primary_sub_result_prefers_query_result_with_rows(self, pipeline):
         sub_results = [

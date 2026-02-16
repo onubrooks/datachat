@@ -3281,60 +3281,6 @@ class DataChatPipeline:
 
         return best_index, sub_results[best_index]
 
-    def _select_primary_multi_part_index(self, parts: list[str]) -> int:
-        """
-        Pick the sub-question that should receive live agent-flow streaming.
-
-        We bias toward the most analytical/SQL-like clause so the UI flow aligns
-        with the most informative table/viz artifacts.
-        """
-        if not parts:
-            return 0
-
-        analytic_keywords = (
-            "compare",
-            "trend",
-            "lift",
-            "rate",
-            "average",
-            "avg",
-            "sum",
-            "count",
-            "total",
-            "top",
-            "group by",
-            "by ",
-            "per ",
-            "join",
-            "where",
-            "last ",
-            "week",
-            "month",
-            "year",
-            "revenue",
-            "sales",
-            "margin",
-            "cost",
-            "risk",
-        )
-
-        best_index = 0
-        best_score = float("-inf")
-        for index, part in enumerate(parts):
-            lowered = part.strip().lower()
-            if not lowered:
-                continue
-            score = float(len(lowered.split()))
-            for keyword in analytic_keywords:
-                if keyword in lowered:
-                    score += 3.0
-            if "?" in lowered:
-                score += 0.5
-            if score > best_score:
-                best_score = score
-                best_index = index
-        return best_index
-
     async def _run_single_query_with_streaming_callback(
         self,
         *,
@@ -3641,55 +3587,37 @@ class DataChatPipeline:
         """
         parts = self._split_multi_query(query)
         if len(parts) > 1:
-            primary_index = self._select_primary_multi_part_index(parts)
             if event_callback:
                 await event_callback(
                     "decompose_complete",
                     {
                         "parts": parts,
                         "part_count": len(parts),
-                        "primary_part_index": primary_index + 1,
-                        "primary_part_query": parts[primary_index],
                     },
                 )
-                if event_callback:
-                    await event_callback(
-                        "thinking",
-                        {
-                            "note": (
-                                "Showing live agent flow for the primary sub-question: "
-                                f"{parts[primary_index]}"
-                            ),
-                        },
-                    )
 
             sub_results: list[PipelineState] = []
             sub_answers: list[dict[str, Any]] = []
             for index, part in enumerate(parts, start=1):
-                if (index - 1) == primary_index:
-                    result = await self._run_single_query_with_streaming_callback(
-                        query=part,
-                        conversation_history=conversation_history,
-                        session_summary=session_summary,
-                        session_state=session_state,
-                        database_type=database_type,
-                        database_url=database_url,
-                        target_connection_id=target_connection_id,
-                        synthesize_simple_sql=synthesize_simple_sql,
-                        event_callback=event_callback,
-                        correlation_prefix=f"stream-q{index}",
+                if event_callback:
+                    await event_callback(
+                        "thinking",
+                        {
+                            "note": f"Showing live agent flow for question: {part}",
+                        },
                     )
-                else:
-                    result = await self._run_single_query(
-                        query=part,
-                        conversation_history=conversation_history,
-                        session_summary=session_summary,
-                        session_state=session_state,
-                        database_type=database_type,
-                        database_url=database_url,
-                        target_connection_id=target_connection_id,
-                        synthesize_simple_sql=synthesize_simple_sql,
-                    )
+                result = await self._run_single_query_with_streaming_callback(
+                    query=part,
+                    conversation_history=conversation_history,
+                    session_summary=session_summary,
+                    session_state=session_state,
+                    database_type=database_type,
+                    database_url=database_url,
+                    target_connection_id=target_connection_id,
+                    synthesize_simple_sql=synthesize_simple_sql,
+                    event_callback=event_callback,
+                    correlation_prefix=f"stream-q{index}",
+                )
                 sub_results.append(result)
                 sub_answers.append(self._build_sub_answer(index, part, result))
 
