@@ -231,6 +231,29 @@ class TestPipelineExecution:
         assert mock_agents.classifier.execute.await_count == 2
         assert mock_agents.sql.execute.await_count == 2
 
+    @pytest.mark.asyncio
+    async def test_run_with_streaming_multi_emits_primary_agent_flow(self, mock_agents):
+        events: list[tuple[str, dict]] = []
+
+        async def _callback(event_type: str, event_data: dict):
+            events.append((event_type, event_data))
+
+        result = await mock_agents.run_with_streaming(
+            query="How many stores are there? What is total revenue by store?",
+            event_callback=_callback,
+        )
+
+        event_types = [event_type for event_type, _ in events]
+        assert "decompose_complete" in event_types
+        assert "agent_start" in event_types
+        assert "agent_complete" in event_types
+        assert result.get("answer_source") == "multi"
+        assert len(result.get("sub_answers", [])) == 2
+
+        decompose = next(data for event_type, data in events if event_type == "decompose_complete")
+        assert decompose.get("primary_part_index") in {1, 2}
+        assert isinstance(decompose.get("primary_part_query"), str)
+
     def test_select_primary_sub_result_prefers_query_result_with_rows(self, pipeline):
         sub_results = [
             {"answer_source": "sql", "generated_sql": "SELECT * FROM a", "query_result": {"row_count": 1}},

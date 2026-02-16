@@ -3281,6 +3281,186 @@ class DataChatPipeline:
 
         return best_index, sub_results[best_index]
 
+    def _select_primary_multi_part_index(self, parts: list[str]) -> int:
+        """
+        Pick the sub-question that should receive live agent-flow streaming.
+
+        We bias toward the most analytical/SQL-like clause so the UI flow aligns
+        with the most informative table/viz artifacts.
+        """
+        if not parts:
+            return 0
+
+        analytic_keywords = (
+            "compare",
+            "trend",
+            "lift",
+            "rate",
+            "average",
+            "avg",
+            "sum",
+            "count",
+            "total",
+            "top",
+            "group by",
+            "by ",
+            "per ",
+            "join",
+            "where",
+            "last ",
+            "week",
+            "month",
+            "year",
+            "revenue",
+            "sales",
+            "margin",
+            "cost",
+            "risk",
+        )
+
+        best_index = 0
+        best_score = float("-inf")
+        for index, part in enumerate(parts):
+            lowered = part.strip().lower()
+            if not lowered:
+                continue
+            score = float(len(lowered.split()))
+            for keyword in analytic_keywords:
+                if keyword in lowered:
+                    score += 3.0
+            if "?" in lowered:
+                score += 0.5
+            if score > best_score:
+                best_score = score
+                best_index = index
+        return best_index
+
+    async def _run_single_query_with_streaming_callback(
+        self,
+        *,
+        query: str,
+        conversation_history: list[Message] | None,
+        session_summary: str | None,
+        session_state: dict[str, Any] | None,
+        database_type: str,
+        database_url: str | None,
+        target_connection_id: str | None,
+        synthesize_simple_sql: bool | None,
+        event_callback: Any = None,
+        correlation_prefix: str = "stream",
+    ) -> PipelineState:
+        """Execute one query while emitting per-agent callback events."""
+        from datetime import datetime
+
+        initial_state = self._build_initial_state(
+            query=query,
+            conversation_history=conversation_history,
+            session_summary=session_summary,
+            session_state=session_state,
+            database_type=database_type,
+            database_url=database_url,
+            target_connection_id=target_connection_id,
+            synthesize_simple_sql=synthesize_simple_sql,
+            correlation_prefix=correlation_prefix,
+        )
+
+        logger.info(f"Starting streaming pipeline for query: {query[:100]}...")
+        pipeline_start = time.time()
+
+        agent_start_times: dict[str, float] = {}
+        final_state: PipelineState | None = None
+
+        async for update in self.graph.astream(initial_state):
+            for _node_name, state_update in update.items():
+                current_agent = state_update.get("current_agent")
+
+                if current_agent and current_agent not in agent_start_times:
+                    agent_start_times[current_agent] = time.time()
+                    if event_callback:
+                        await event_callback(
+                            "agent_start",
+                            {
+                                "agent": current_agent,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            },
+                        )
+
+                if current_agent and current_agent in agent_start_times:
+                    duration_ms = (time.time() - agent_start_times[current_agent]) * 1000
+                    if event_callback:
+                        agent_data: dict[str, Any] = {}
+                        if current_agent == "ClassifierAgent":
+                            agent_data = {
+                                "intent": state_update.get("intent"),
+                                "entities": state_update.get("entities", []),
+                                "complexity": state_update.get("complexity"),
+                            }
+                        elif current_agent == "ContextAgent":
+                            agent_data = {
+                                "datapoints_found": len(
+                                    state_update.get("retrieved_datapoints", [])
+                                ),
+                            }
+                        elif current_agent == "SQLAgent":
+                            agent_data = {
+                                "sql_generated": bool(state_update.get("generated_sql")),
+                                "confidence": state_update.get("sql_confidence"),
+                            }
+                        elif current_agent == "ValidatorAgent":
+                            agent_data = {
+                                "validation_passed": state_update.get("validation_passed", False),
+                                "issues_found": len(state_update.get("validation_errors", [])),
+                            }
+                        elif current_agent == "ExecutorAgent":
+                            query_result = state_update.get("query_result")
+                            agent_data = {
+                                "rows_returned": (
+                                    query_result.get("row_count", 0) if query_result else 0
+                                ),
+                                "visualization_hint": state_update.get("visualization_hint"),
+                                "visualization_note": state_update.get("visualization_note"),
+                            }
+                        elif current_agent == "ContextAnswerAgent":
+                            agent_data = {
+                                "answer_source": state_update.get("answer_source"),
+                                "confidence": state_update.get("answer_confidence"),
+                                "evidence_count": len(state_update.get("evidence", [])),
+                            }
+                        elif current_agent == "ToolPlannerAgent":
+                            agent_data = {
+                                "tool_calls": len(state_update.get("tool_calls", [])),
+                            }
+                        elif current_agent == "ToolExecutor":
+                            agent_data = {
+                                "tool_results": len(state_update.get("tool_results", [])),
+                                "tool_error": state_update.get("tool_error"),
+                            }
+
+                        await event_callback(
+                            "agent_complete",
+                            {
+                                "agent": current_agent,
+                                "data": agent_data,
+                                "duration_ms": duration_ms,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            },
+                        )
+
+                final_state = state_update
+
+        total_latency_ms = (time.time() - pipeline_start) * 1000
+        if final_state:
+            final_state["total_latency_ms"] = total_latency_ms
+            self._normalize_answer_metadata(final_state)
+            self._finalize_session_memory(final_state)
+
+        logger.info(
+            f"Pipeline streaming complete in {total_latency_ms:.1f}ms "
+            f"({final_state.get('llm_calls', 0) if final_state else 0} LLM calls)"
+        )
+
+        return final_state or initial_state
+
     # ========================================================================
     # Public API
     # ========================================================================
@@ -3459,20 +3639,64 @@ class DataChatPipeline:
             - agent_complete: Agent finishes execution
             - data_chunk: Intermediate data from agent (optional)
         """
-        from datetime import datetime
-
         parts = self._split_multi_query(query)
         if len(parts) > 1:
+            primary_index = self._select_primary_multi_part_index(parts)
             if event_callback:
                 await event_callback(
                     "decompose_complete",
                     {
                         "parts": parts,
                         "part_count": len(parts),
+                        "primary_part_index": primary_index + 1,
+                        "primary_part_query": parts[primary_index],
                     },
                 )
-            return await self.run(
-                query=query,
+                if event_callback:
+                    await event_callback(
+                        "thinking",
+                        {
+                            "note": (
+                                "Showing live agent flow for the primary sub-question: "
+                                f"{parts[primary_index]}"
+                            ),
+                        },
+                    )
+
+            sub_results: list[PipelineState] = []
+            sub_answers: list[dict[str, Any]] = []
+            for index, part in enumerate(parts, start=1):
+                if (index - 1) == primary_index:
+                    result = await self._run_single_query_with_streaming_callback(
+                        query=part,
+                        conversation_history=conversation_history,
+                        session_summary=session_summary,
+                        session_state=session_state,
+                        database_type=database_type,
+                        database_url=database_url,
+                        target_connection_id=target_connection_id,
+                        synthesize_simple_sql=synthesize_simple_sql,
+                        event_callback=event_callback,
+                        correlation_prefix=f"stream-q{index}",
+                    )
+                else:
+                    result = await self._run_single_query(
+                        query=part,
+                        conversation_history=conversation_history,
+                        session_summary=session_summary,
+                        session_state=session_state,
+                        database_type=database_type,
+                        database_url=database_url,
+                        target_connection_id=target_connection_id,
+                        synthesize_simple_sql=synthesize_simple_sql,
+                    )
+                sub_results.append(result)
+                sub_answers.append(self._build_sub_answer(index, part, result))
+
+            return self._aggregate_multi_results(
+                original_query=query,
+                sub_results=sub_results,
+                sub_answers=sub_answers,
                 conversation_history=conversation_history,
                 session_summary=session_summary,
                 session_state=session_state,
@@ -3482,7 +3706,7 @@ class DataChatPipeline:
                 synthesize_simple_sql=synthesize_simple_sql,
             )
 
-        initial_state = self._build_initial_state(
+        return await self._run_single_query_with_streaming_callback(
             query=query,
             conversation_history=conversation_history,
             session_summary=session_summary,
@@ -3491,110 +3715,9 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            event_callback=event_callback,
             correlation_prefix="stream",
         )
-
-        logger.info(f"Starting streaming pipeline for query: {query[:100]}...")
-        pipeline_start = time.time()
-
-        # Stream graph execution and emit events
-        agent_start_times: dict[str, float] = {}
-        final_state: PipelineState | None = None
-
-        async for update in self.graph.astream(initial_state):
-            for _node_name, state_update in update.items():
-                current_agent = state_update.get("current_agent")
-
-                # Agent start event
-                if current_agent and current_agent not in agent_start_times:
-                    agent_start_times[current_agent] = time.time()
-                    if event_callback:
-                        await event_callback(
-                            "agent_start",
-                            {
-                                "agent": current_agent,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            },
-                        )
-
-                # Agent complete event
-                if current_agent and current_agent in agent_start_times:
-                    duration_ms = (time.time() - agent_start_times[current_agent]) * 1000
-                    if event_callback:
-                        # Extract relevant data for this agent
-                        agent_data = {}
-                        if current_agent == "ClassifierAgent":
-                            agent_data = {
-                                "intent": state_update.get("intent"),
-                                "entities": state_update.get("entities", []),
-                                "complexity": state_update.get("complexity"),
-                            }
-                        elif current_agent == "ContextAgent":
-                            agent_data = {
-                                "datapoints_found": len(
-                                    state_update.get("retrieved_datapoints", [])
-                                ),
-                            }
-                        elif current_agent == "SQLAgent":
-                            agent_data = {
-                                "sql_generated": bool(state_update.get("generated_sql")),
-                                "confidence": state_update.get("sql_confidence"),
-                            }
-                        elif current_agent == "ValidatorAgent":
-                            agent_data = {
-                                "validation_passed": state_update.get("validation_passed", False),
-                                "issues_found": len(state_update.get("validation_errors", [])),
-                            }
-                        elif current_agent == "ExecutorAgent":
-                            query_result = state_update.get("query_result")
-                            agent_data = {
-                                "rows_returned": (
-                                    query_result.get("row_count", 0) if query_result else 0
-                                ),
-                                "visualization_hint": state_update.get("visualization_hint"),
-                                "visualization_note": state_update.get("visualization_note"),
-                            }
-                        elif current_agent == "ContextAnswerAgent":
-                            agent_data = {
-                                "answer_source": state_update.get("answer_source"),
-                                "confidence": state_update.get("answer_confidence"),
-                                "evidence_count": len(state_update.get("evidence", [])),
-                            }
-                        elif current_agent == "ToolPlannerAgent":
-                            agent_data = {
-                                "tool_calls": len(state_update.get("tool_calls", [])),
-                            }
-                        elif current_agent == "ToolExecutor":
-                            agent_data = {
-                                "tool_results": len(state_update.get("tool_results", [])),
-                                "tool_error": state_update.get("tool_error"),
-                            }
-
-                        await event_callback(
-                            "agent_complete",
-                            {
-                                "agent": current_agent,
-                                "data": agent_data,
-                                "duration_ms": duration_ms,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            },
-                        )
-
-                final_state = state_update
-
-        # Calculate total latency
-        total_latency_ms = (time.time() - pipeline_start) * 1000
-        if final_state:
-            final_state["total_latency_ms"] = total_latency_ms
-            self._normalize_answer_metadata(final_state)
-            self._finalize_session_memory(final_state)
-
-        logger.info(
-            f"Pipeline streaming complete in {total_latency_ms:.1f}ms "
-            f"({final_state.get('llm_calls', 0) if final_state else 0} LLM calls)"
-        )
-
-        return final_state or initial_state
 
     def _finalize_session_memory(self, state: PipelineState) -> None:
         """Persist compact memory fields for the next turn."""
