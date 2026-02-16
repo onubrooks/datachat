@@ -973,6 +973,7 @@ export function Message({
       executor: "Executor",
       context_answer: "Context Answer",
       response_synthesis: "Response Synthesis",
+      multi_sql_planner: "Multi SQL Planner",
     };
     if (labels[agent]) {
       return labels[agent];

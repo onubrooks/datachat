@@ -154,6 +154,7 @@ class PipelineState(TypedDict, total=False):
     schema_refresh_attempted: bool
     sub_answers: list[dict[str, Any]]
     decision_trace: list[dict[str, Any]]
+    preplanned_sql: dict[str, Any] | None
 
 
 # ============================================================================
@@ -1194,6 +1195,65 @@ class DataChatPipeline:
             return state
 
         try:
+            preplanned_sql = state.get("preplanned_sql")
+            if isinstance(preplanned_sql, dict):
+                preplanned_text = str(preplanned_sql.get("sql", "") or "").strip()
+                preplanned_questions = preplanned_sql.get("clarifying_questions", [])
+                if isinstance(preplanned_questions, str):
+                    preplanned_questions = [preplanned_questions]
+                if (
+                    isinstance(preplanned_questions, list)
+                    and preplanned_questions
+                    and not preplanned_text
+                ):
+                    questions = [
+                        str(question).strip()
+                        for question in preplanned_questions
+                        if str(question).strip()
+                    ]
+                    self._apply_clarification_response(state, questions)
+                    elapsed = (time.time() - start_time) * 1000
+                    state["agent_timings"]["sql"] = elapsed
+                    state["total_latency_ms"] += elapsed
+                    return state
+
+                if preplanned_text:
+                    planned_confidence = preplanned_sql.get("confidence", 0.78)
+                    try:
+                        confidence = float(planned_confidence)
+                    except (TypeError, ValueError):
+                        confidence = 0.78
+                    confidence = max(0.0, min(1.0, confidence))
+                    planned_sql = GeneratedSQL(
+                        sql=preplanned_text,
+                        explanation=str(
+                            preplanned_sql.get("explanation")
+                            or "Multi-question SQL planner output."
+                        ),
+                        used_datapoints=[],
+                        confidence=confidence,
+                        assumptions=[],
+                        clarifying_questions=[],
+                    )
+                    planned_sql = self.sql._apply_row_limit_policy(planned_sql, state["query"])
+
+                    state["clarification_needed"] = False
+                    state["clarifying_questions"] = []
+                    state["generated_sql"] = planned_sql.sql
+                    state["sql_explanation"] = planned_sql.explanation
+                    state["sql_confidence"] = planned_sql.confidence
+                    state["used_datapoints"] = planned_sql.used_datapoints
+                    state["assumptions"] = planned_sql.assumptions
+
+                    elapsed = (time.time() - start_time) * 1000
+                    state["agent_timings"]["sql"] = elapsed
+                    state["total_latency_ms"] += elapsed
+                    logger.info(
+                        "SQLAgent complete from multi planner: "
+                        f"confidence={state['sql_confidence']:.2f}"
+                    )
+                    return state
+
             # Reconstruct InvestigationMemory from state
             from backend.models import InvestigationMemory, RetrievedDataPoint
 
@@ -2939,6 +2999,7 @@ class DataChatPipeline:
         target_connection_id: str | None,
         synthesize_simple_sql: bool | None,
         correlation_prefix: str,
+        preplanned_sql: dict[str, Any] | None = None,
     ) -> PipelineState:
         return {
             "query": query,
@@ -2998,6 +3059,7 @@ class DataChatPipeline:
             "tool_approval_message": None,
             "tool_approval_calls": [],
             "sub_answers": [],
+            "preplanned_sql": preplanned_sql,
         }
 
     def _split_multi_query(self, query: str) -> list[str]:
@@ -3056,6 +3118,7 @@ class DataChatPipeline:
         database_url: str | None = None,
         target_connection_id: str | None = None,
         synthesize_simple_sql: bool | None = None,
+        preplanned_sql: dict[str, Any] | None = None,
     ) -> PipelineState:
         initial_state = self._build_initial_state(
             query=query,
@@ -3067,6 +3130,7 @@ class DataChatPipeline:
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
             correlation_prefix="local",
+            preplanned_sql=preplanned_sql,
         )
 
         logger.info(f"Starting pipeline for query: {query[:100]}...")
@@ -3098,6 +3162,145 @@ class DataChatPipeline:
             "error": result.get("error"),
         }
 
+    def _build_multi_sql_planner_prompt(self, parts: list[str], schema_context: str) -> str:
+        questions = "\n".join(f"{idx}. {part}" for idx, part in enumerate(parts, start=1))
+        return (
+            "Generate SQL plans for each question.\n"
+            "Return STRICT JSON (no markdown) with shape:\n"
+            "{\n"
+            '  "plans": [\n'
+            "    {\n"
+            '      "index": 1,\n'
+            '      "sql": "SELECT ...",\n'
+            '      "explanation": "short reason",\n'
+            '      "confidence": 0.0,\n'
+            '      "clarifying_questions": []\n'
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            "Rules:\n"
+            "- One plan per question index.\n"
+            "- Use only tables/columns from SCHEMA_CONTEXT.\n"
+            "- Use a single SELECT query per question (no DDL/DML).\n"
+            "- If answer is unclear, set sql to empty string and add clarifying_questions.\n"
+            "- Add LIMIT for detail/list queries unless aggregation already bounds output.\n\n"
+            f"QUESTIONS:\n{questions}\n\n"
+            f"SCHEMA_CONTEXT:\n{schema_context}"
+        )
+
+    def _parse_multi_sql_planner_response(
+        self, content: str, part_count: int
+    ) -> dict[int, dict[str, Any]]:
+        json_text: str | None = None
+        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+        if fenced:
+            json_text = fenced.group(1)
+        else:
+            candidate = re.search(r"\{.*\}", content, re.DOTALL)
+            if candidate:
+                json_text = candidate.group(0)
+        if not json_text:
+            return {}
+
+        try:
+            payload = json.loads(json_text)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+
+        plans = payload.get("plans")
+        if not isinstance(plans, list):
+            return {}
+
+        parsed: dict[int, dict[str, Any]] = {}
+        for item in plans:
+            if not isinstance(item, dict):
+                continue
+            raw_index = item.get("index")
+            try:
+                index = int(raw_index)
+            except (TypeError, ValueError):
+                continue
+            if index < 1 or index > part_count:
+                continue
+
+            sql_text = item.get("sql")
+            sql_value = sql_text.strip() if isinstance(sql_text, str) else ""
+            explanation = item.get("explanation")
+            explanation_value = explanation.strip() if isinstance(explanation, str) else ""
+            raw_confidence = item.get("confidence", 0.6)
+            try:
+                confidence_value = float(raw_confidence)
+            except (TypeError, ValueError):
+                confidence_value = 0.6
+            confidence_value = max(0.0, min(1.0, confidence_value))
+
+            questions = item.get("clarifying_questions", [])
+            clarifying_questions: list[str] = []
+            if isinstance(questions, str):
+                questions = [questions]
+            if isinstance(questions, list):
+                for question in questions:
+                    if isinstance(question, str) and question.strip():
+                        clarifying_questions.append(question.strip())
+
+            parsed[index] = {
+                "sql": sql_value,
+                "explanation": explanation_value,
+                "confidence": confidence_value,
+                "clarifying_questions": clarifying_questions,
+            }
+        return parsed
+
+    async def _plan_multi_sql_for_parts(
+        self,
+        *,
+        parts: list[str],
+        database_type: str,
+        database_url: str | None,
+    ) -> tuple[dict[int, dict[str, Any]], int, float]:
+        if not parts:
+            return {}, 0, 0.0
+
+        start = time.time()
+        try:
+            schema_context = await self.sql._get_live_schema_context(
+                query=" ; ".join(parts),
+                database_type=database_type,
+                database_url=database_url,
+                include_profile=False,
+            )
+            schema_context = schema_context or "No schema context available."
+            request = LLMRequest(
+                messages=[
+                    LLMMessage(
+                        role="system",
+                        content=(
+                            "You are a SQL planner for multiple analytics questions. "
+                            "Return strict JSON only."
+                        ),
+                    ),
+                    LLMMessage(
+                        role="user",
+                        content=self._build_multi_sql_planner_prompt(parts, schema_context),
+                    ),
+                ],
+                temperature=0.0,
+                max_tokens=2200,
+            )
+            provider = getattr(self.sql, "fast_llm", None) or getattr(self.sql, "llm", None)
+            if provider is None:
+                return {}, 0, (time.time() - start) * 1000
+            response = await provider.generate(request)
+            plans = self._parse_multi_sql_planner_response(response.content or "", len(parts))
+            if not plans:
+                return {}, 1, (time.time() - start) * 1000
+            return plans, 1, (time.time() - start) * 1000
+        except Exception as exc:
+            logger.debug(f"Multi SQL planner fallback skipped due to error: {exc}")
+            return {}, 0, (time.time() - start) * 1000
+
     def _aggregate_multi_results(
         self,
         *,
@@ -3111,6 +3314,8 @@ class DataChatPipeline:
         database_url: str | None,
         target_connection_id: str | None,
         synthesize_simple_sql: bool | None,
+        extra_llm_calls: int = 0,
+        extra_agent_timings: dict[str, float] | None = None,
     ) -> PipelineState:
         merged = self._build_initial_state(
             query=original_query,
@@ -3163,7 +3368,9 @@ class DataChatPipeline:
         if confidence_values:
             merged["answer_confidence"] = max(0.0, min(1.0, sum(confidence_values) / len(confidence_values)))
 
-        merged["llm_calls"] = sum(int(result.get("llm_calls", 0) or 0) for result in sub_results)
+        merged["llm_calls"] = (
+            sum(int(result.get("llm_calls", 0) or 0) for result in sub_results) + extra_llm_calls
+        )
         merged["retry_count"] = sum(int(result.get("retry_count", 0) or 0) for result in sub_results)
         merged["total_latency_ms"] = sum(
             float(result.get("total_latency_ms", 0.0) or 0.0) for result in sub_results
@@ -3191,6 +3398,8 @@ class DataChatPipeline:
         for result in sub_results:
             for agent, duration in (result.get("agent_timings") or {}).items():
                 merged_agent_timings[agent] = merged_agent_timings.get(agent, 0.0) + float(duration or 0.0)
+        for agent, duration in (extra_agent_timings or {}).items():
+            merged_agent_timings[agent] = merged_agent_timings.get(agent, 0.0) + float(duration or 0.0)
         merged["agent_timings"] = merged_agent_timings
 
         all_sources: list[dict[str, Any]] = []
@@ -3294,6 +3503,7 @@ class DataChatPipeline:
         synthesize_simple_sql: bool | None,
         event_callback: Any = None,
         correlation_prefix: str = "stream",
+        preplanned_sql: dict[str, Any] | None = None,
     ) -> PipelineState:
         """Execute one query while emitting per-agent callback events."""
         from datetime import datetime
@@ -3308,6 +3518,7 @@ class DataChatPipeline:
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
             correlation_prefix=correlation_prefix,
+            preplanned_sql=preplanned_sql,
         )
 
         logger.info(f"Starting streaming pipeline for query: {query[:100]}...")
@@ -3451,6 +3662,11 @@ class DataChatPipeline:
 
         sub_results: list[PipelineState] = []
         sub_answers: list[dict[str, Any]] = []
+        planned_sql_map, planner_llm_calls, planner_duration_ms = await self._plan_multi_sql_for_parts(
+            parts=parts,
+            database_type=database_type,
+            database_url=database_url,
+        )
         for index, part in enumerate(parts, start=1):
             result = await self._run_single_query(
                 query=part,
@@ -3461,6 +3677,7 @@ class DataChatPipeline:
                 database_url=database_url,
                 target_connection_id=target_connection_id,
                 synthesize_simple_sql=synthesize_simple_sql,
+                preplanned_sql=planned_sql_map.get(index),
             )
             sub_results.append(result)
             sub_answers.append(self._build_sub_answer(index, part, result))
@@ -3476,6 +3693,8 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            extra_llm_calls=planner_llm_calls,
+            extra_agent_timings={"multi_sql_planner": planner_duration_ms},
         )
 
     async def stream(
@@ -3587,12 +3806,44 @@ class DataChatPipeline:
         """
         parts = self._split_multi_query(query)
         if len(parts) > 1:
+            from datetime import datetime
+
             if event_callback:
                 await event_callback(
                     "decompose_complete",
                     {
                         "parts": parts,
                         "part_count": len(parts),
+                    },
+                )
+
+            planner_llm_calls = 0
+            planner_duration_ms = 0.0
+            planned_sql_map: dict[int, dict[str, Any]] = {}
+            if event_callback:
+                await event_callback(
+                    "agent_start",
+                    {
+                        "agent": "MultiSQLPlanner",
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    },
+                )
+            planned_sql_map, planner_llm_calls, planner_duration_ms = await self._plan_multi_sql_for_parts(
+                parts=parts,
+                database_type=database_type,
+                database_url=database_url,
+            )
+            if event_callback:
+                await event_callback(
+                    "agent_complete",
+                    {
+                        "agent": "MultiSQLPlanner",
+                        "data": {
+                            "planned_questions": len(planned_sql_map),
+                            "part_count": len(parts),
+                        },
+                        "duration_ms": planner_duration_ms,
+                        "timestamp": datetime.now(UTC).isoformat(),
                     },
                 )
 
@@ -3617,6 +3868,7 @@ class DataChatPipeline:
                     synthesize_simple_sql=synthesize_simple_sql,
                     event_callback=event_callback,
                     correlation_prefix=f"stream-q{index}",
+                    preplanned_sql=planned_sql_map.get(index),
                 )
                 sub_results.append(result)
                 sub_answers.append(self._build_sub_answer(index, part, result))
@@ -3632,6 +3884,8 @@ class DataChatPipeline:
                 database_url=database_url,
                 target_connection_id=target_connection_id,
                 synthesize_simple_sql=synthesize_simple_sql,
+                extra_llm_calls=planner_llm_calls,
+                extra_agent_timings={"multi_sql_planner": planner_duration_ms},
             )
 
         return await self._run_single_query_with_streaming_callback(

@@ -38,6 +38,7 @@ def _thinking_note_for_event(event_type: str, event_data: dict[str, Any]) -> str
 
     if event_type == "agent_start":
         start_notes = {
+            "MultiSQLPlanner": "Planning SQL for all sub-questions in one pass.",
             "ToolPlannerAgent": "Planning the safest tool path.",
             "ToolExecutor": "Running approved tools.",
             "ClassifierAgent": "Classifying your request intent.",
@@ -54,6 +55,11 @@ def _thinking_note_for_event(event_type: str, event_data: dict[str, Any]) -> str
         data = event_data.get("data")
         payload = data if isinstance(data, dict) else {}
         complete_notes = {
+            "MultiSQLPlanner": (
+                f"Multi-question SQL plan ready ({payload.get('planned_questions', 0)} planned)."
+                if payload
+                else "Multi-question SQL planning complete."
+            ),
             "ToolPlannerAgent": "Tool planning complete.",
             "ToolExecutor": (
                 f"Tools complete ({payload.get('tool_results', 0)} result(s))."

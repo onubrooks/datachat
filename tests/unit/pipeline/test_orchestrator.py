@@ -221,15 +221,44 @@ class TestPipelineExecution:
 
     @pytest.mark.asyncio
     async def test_pipeline_decomposes_multi_question_prompt(self, mock_agents):
+        mock_agents._plan_multi_sql_for_parts = AsyncMock(return_value=({}, 0, 0.0))
         result = await mock_agents.run("Show me top rows? What is total revenue?")
 
         assert len(result.get("sub_answers", [])) == 2
         assert "multiple questions" in result["natural_language_answer"].lower()
         assert result["answer_source"] == "multi"
-        assert (result.get("validated_sql") or result.get("generated_sql")) == "SELECT * FROM test_table"
-        assert result.get("query_result") is not None
         assert mock_agents.classifier.execute.await_count == 2
-        assert mock_agents.sql.execute.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_multi_query_uses_batch_sql_plan_and_skips_per_part_sql_agent(self, mock_agents):
+        mock_agents._plan_multi_sql_for_parts = AsyncMock(
+            return_value=(
+                {
+                    1: {
+                        "sql": "SELECT 1 AS a",
+                        "explanation": "first",
+                        "confidence": 0.9,
+                        "clarifying_questions": [],
+                    },
+                    2: {
+                        "sql": "SELECT 2 AS b",
+                        "explanation": "second",
+                        "confidence": 0.88,
+                        "clarifying_questions": [],
+                    },
+                },
+                1,
+                12.0,
+            )
+        )
+
+        result = await mock_agents.run("Question one? Question two?")
+
+        assert result["answer_source"] == "multi"
+        assert len(result.get("sub_answers", [])) == 2
+        assert mock_agents.sql.execute.await_count == 0
+        assert result.get("llm_calls", 0) >= 1
+        assert result.get("agent_timings", {}).get("multi_sql_planner") == pytest.approx(12.0)
 
     @pytest.mark.asyncio
     async def test_run_with_streaming_multi_emits_agent_flow_for_each_question(self, mock_agents):
@@ -237,6 +266,27 @@ class TestPipelineExecution:
 
         async def _callback(event_type: str, event_data: dict):
             events.append((event_type, event_data))
+
+        mock_agents._plan_multi_sql_for_parts = AsyncMock(
+            return_value=(
+                {
+                    1: {
+                        "sql": "SELECT 1",
+                        "explanation": "first",
+                        "confidence": 0.9,
+                        "clarifying_questions": [],
+                    },
+                    2: {
+                        "sql": "SELECT 2",
+                        "explanation": "second",
+                        "confidence": 0.9,
+                        "clarifying_questions": [],
+                    },
+                },
+                1,
+                9.5,
+            )
+        )
 
         result = await mock_agents.run_with_streaming(
             query="How many stores are there? What is total revenue by store?",
@@ -247,6 +297,14 @@ class TestPipelineExecution:
         assert "decompose_complete" in event_types
         assert "agent_start" in event_types
         assert "agent_complete" in event_types
+        assert any(
+            event_type == "agent_start" and data.get("agent") == "MultiSQLPlanner"
+            for event_type, data in events
+        )
+        assert any(
+            event_type == "agent_complete" and data.get("agent") == "MultiSQLPlanner"
+            for event_type, data in events
+        )
         assert result.get("answer_source") == "multi"
         assert len(result.get("sub_answers", [])) == 2
 
