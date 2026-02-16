@@ -157,6 +157,10 @@ class ChatResponse(BaseModel):
         default_factory=list,
         description="Per-question answers when a prompt is decomposed into multiple questions.",
     )
+    decision_trace: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Deterministic routing/decision trace for observability and evals.",
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -198,6 +202,13 @@ class ChatResponse(BaseModel):
                 "conversation_id": "conv_123",
                 "session_summary": "Intent summary: last_goal=What's the total revenue?",
                 "session_state": {"last_goal": "What's the total revenue?"},
+                "decision_trace": [
+                    {
+                        "stage": "intent_gate",
+                        "decision": "data_query_fast_path",
+                        "reason": "deterministic_sql_query",
+                    }
+                ],
             }
         }
     }

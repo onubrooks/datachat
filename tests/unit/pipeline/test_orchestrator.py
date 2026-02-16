@@ -1094,6 +1094,41 @@ class TestIntentGate:
         assert augmented[0]["role"] == "system"
         assert "Session memory:" in augmented[0]["content"]
 
+    def test_context_vs_sql_uses_configured_confidence_threshold(self, pipeline):
+        state = {
+            "query": "give an overview",
+            "intent": "data_query",
+            "context_confidence": 0.65,
+            "retrieved_datapoints": [{"datapoint_id": "metric_001"}],
+            "decision_trace": [],
+        }
+        assert pipeline._should_use_context_answer(state) == "sql"
+        pipeline.routing_policy["context_answer_confidence_threshold"] = 0.6
+        state["decision_trace"] = []
+        assert pipeline._should_use_context_answer(state) == "context"
+
+    def test_ambiguous_intent_uses_token_policy(self, pipeline):
+        state = {"query": "maybe later now"}
+        summary = {"last_clarifying_questions": []}
+        assert pipeline._is_ambiguous_intent(state, summary) is True
+        pipeline.routing_policy["ambiguous_query_max_tokens"] = 2
+        assert pipeline._is_ambiguous_intent(state, summary) is False
+
+    @pytest.mark.asyncio
+    async def test_intent_gate_populates_decision_trace(self, pipeline):
+        result = await pipeline.run("list tables")
+        trace = result.get("decision_trace", [])
+        assert any(
+            entry.get("stage") == "intent_gate"
+            and entry.get("decision") == "data_query_fast_path"
+            for entry in trace
+        )
+        assert any(
+            entry.get("stage") == "continue_after_intent_gate"
+            and entry.get("decision") == "sql"
+            for entry in trace
+        )
+
     def test_clean_hint_handles_regarding_prefix(self, pipeline):
         hint = pipeline._clean_hint(
             'Regarding "Which table should I list columns for?": vbs_registrations'

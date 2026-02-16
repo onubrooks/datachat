@@ -7,6 +7,7 @@ Usage:
   python scripts/eval_runner.py --mode qa --dataset eval/qa.json
   python scripts/eval_runner.py --mode intent --dataset eval/intent_credentials.json
   python scripts/eval_runner.py --mode catalog --dataset eval/catalog/mysql_credentials.json
+  python scripts/eval_runner.py --mode route --dataset eval/routes_credentials.json
 """
 
 from __future__ import annotations
@@ -380,9 +381,86 @@ def run_catalog(
     return 0
 
 
+def run_route(
+    api_base: str,
+    dataset: list[dict[str, Any]],
+    min_route_match_rate: float | None = None,
+    min_source_match_rate: float | None = None,
+) -> int:
+    """Evaluate deterministic routing behavior via response decision traces."""
+    total = len(dataset)
+    route_matches = 0
+    source_matches = 0
+
+    for idx, item in enumerate(dataset):
+        query = item["query"]
+        expected_source = item.get("expected_answer_source")
+        expected_decisions = item.get("expected_decisions") or []
+
+        response = _post_chat(
+            api_base=api_base,
+            message=query,
+            conversation_id=f"route_eval_{idx}",
+            conversation_history=item.get("conversation_history") or [],
+            target_database=item.get("target_database"),
+        )
+        source = response.get("answer_source")
+        decision_trace = response.get("decision_trace") or []
+
+        source_ok = expected_source is None or source == expected_source
+        if source_ok:
+            source_matches += 1
+
+        route_ok = True
+        for expected in expected_decisions:
+            stage = expected.get("stage")
+            decision = expected.get("decision")
+            matched = any(
+                isinstance(entry, dict)
+                and entry.get("stage") == stage
+                and entry.get("decision") == decision
+                for entry in decision_trace
+            )
+            if not matched:
+                route_ok = False
+                break
+        if route_ok:
+            route_matches += 1
+
+        print(f"- {query}")
+        print(
+            f"  source={source} expected_source={expected_source} "
+            f"source_ok={source_ok} route_ok={route_ok}"
+        )
+
+    route_match_rate = (route_matches / total) if total else 0.0
+    source_match_rate = (source_matches / total) if total else 0.0
+    print(f"\nRoute match rate: {route_matches}/{total} ({route_match_rate:.2f})")
+    print(f"Route source match rate: {source_matches}/{total} ({source_match_rate:.2f})")
+
+    failures: list[str] = []
+    if min_route_match_rate is not None and route_match_rate < min_route_match_rate:
+        failures.append(f"route_match_rate {route_match_rate:.2f} < {min_route_match_rate:.2f}")
+    if min_source_match_rate is not None and source_match_rate < min_source_match_rate:
+        failures.append(
+            f"route_source_match_rate {source_match_rate:.2f} < {min_source_match_rate:.2f}"
+        )
+
+    if failures:
+        print("Threshold failures:")
+        for failure in failures:
+            print(f"  - {failure}")
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="DataChat eval runner")
-    parser.add_argument("--mode", choices=["retrieval", "qa", "intent", "catalog"], required=True)
+    parser.add_argument(
+        "--mode",
+        choices=["retrieval", "qa", "intent", "catalog", "route"],
+        required=True,
+    )
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--api-base", default="http://localhost:8000")
     parser.add_argument(
@@ -419,13 +497,19 @@ def main() -> int:
         "--min-source-match-rate",
         type=float,
         default=None,
-        help="Optional minimum source match threshold for catalog mode.",
+        help="Optional minimum source match threshold for catalog/route modes.",
     )
     parser.add_argument(
         "--min-clarification-match-rate",
         type=float,
         default=None,
         help="Optional minimum clarification match threshold for catalog mode.",
+    )
+    parser.add_argument(
+        "--min-route-match-rate",
+        type=float,
+        default=None,
+        help="Optional minimum route match threshold for route mode.",
     )
     args = parser.parse_args()
 
@@ -460,6 +544,13 @@ def main() -> int:
             min_sql_match_rate=args.min_sql_match_rate,
             min_source_match_rate=args.min_source_match_rate,
             min_clarification_match_rate=args.min_clarification_match_rate,
+        )
+    if args.mode == "route":
+        return run_route(
+            args.api_base,
+            dataset,
+            min_route_match_rate=args.min_route_match_rate,
+            min_source_match_rate=args.min_source_match_rate,
         )
     return 1
 

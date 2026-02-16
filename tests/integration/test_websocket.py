@@ -69,6 +69,13 @@ class TestWebSocketStreaming:
             "error": None,
             "session_summary": "Intent summary: last_goal=What's the total revenue?",
             "session_state": {"last_goal": "What's the total revenue?"},
+            "decision_trace": [
+                {
+                    "stage": "intent_gate",
+                    "decision": "data_query_fast_path",
+                    "reason": "deterministic_sql_query",
+                }
+            ],
         }
 
     def test_websocket_connects_successfully(self, client):
@@ -203,6 +210,7 @@ class TestWebSocketStreaming:
                 assert "conversation_id" in final_message
                 assert "session_summary" in final_message
                 assert "session_state" in final_message
+                assert "decision_trace" in final_message
 
                 # Verify content
                 assert final_message["answer"] == "The total revenue is $1,234,567.89"
@@ -211,6 +219,7 @@ class TestWebSocketStreaming:
                 assert len(final_message["sources"]) == 1
                 assert final_message["metrics"]["llm_calls"] == 3
                 assert final_message["session_state"]["last_goal"] == "What's the total revenue?"
+                assert final_message["decision_trace"][0]["stage"] == "intent_gate"
 
     def test_websocket_uses_target_database_for_streaming_call(self, client):
         manager = AsyncMock()

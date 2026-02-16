@@ -271,6 +271,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
             "conversation_id": conversation_id,
             "session_summary": result.get("session_summary"),
             "session_state": result.get("session_state"),
+            "decision_trace": result.get("decision_trace", []),
         }
         await websocket.send_json(jsonable_encoder(payload))
 

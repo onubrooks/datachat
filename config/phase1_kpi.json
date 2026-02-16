@@ -56,6 +56,15 @@
           "min_source_match_rate": 0.8,
           "min_clarification_match_rate": 0.8
         }
+      },
+      {
+        "name": "route-credentials",
+        "mode": "route",
+        "dataset": "eval/routes_credentials.json",
+        "thresholds": {
+          "min_route_match_rate": 0.8,
+          "min_source_match_rate": 0.8
+        }
       }
     ]
   }

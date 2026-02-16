@@ -57,6 +57,13 @@ class TestChatEndpoint:
             "error": None,
             "session_summary": "Intent summary: last_goal=What's the total revenue?",
             "session_state": {"last_goal": "What's the total revenue?"},
+            "decision_trace": [
+                {
+                    "stage": "intent_gate",
+                    "decision": "data_query_fast_path",
+                    "reason": "deterministic_sql_query",
+                }
+            ],
         }
 
     @pytest.fixture
@@ -140,6 +147,7 @@ class TestChatEndpoint:
                 assert "conversation_id" in data
                 assert "session_summary" in data
                 assert "session_state" in data
+                assert "decision_trace" in data
 
                 # Assert content
                 assert data["answer"] == "The total revenue is $1,234,567.89"
@@ -150,6 +158,7 @@ class TestChatEndpoint:
                 assert data["metrics"]["llm_calls"] == 3
                 assert "sub_answers" in data
                 assert data["session_state"]["last_goal"] == "What's the total revenue?"
+                assert data["decision_trace"][0]["stage"] == "intent_gate"
 
     @pytest.mark.asyncio
     async def test_chat_returns_sub_answers_when_pipeline_decomposes_query(

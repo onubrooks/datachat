@@ -149,6 +149,7 @@ class PipelineState(TypedDict, total=False):
     llm_calls: int
     schema_refresh_attempted: bool
     sub_answers: list[dict[str, Any]]
+    decision_trace: list[dict[str, Any]]
 
 
 # ============================================================================
@@ -201,6 +202,7 @@ class DataChatPipeline:
         self.max_retries = max_retries
         self.max_clarifications = 3
         self.config = get_settings()
+        self.routing_policy = self._build_routing_policy()
 
         # Initialize agents
         self.classifier = ClassifierAgent()
@@ -228,6 +230,27 @@ class DataChatPipeline:
         self.graph = self._build_graph()
 
         logger.info("DataChatPipeline initialized")
+
+    def _build_routing_policy(self) -> dict[str, float | int]:
+        pipeline_cfg = getattr(self.config, "pipeline", None)
+        return {
+            "intent_llm_confidence_threshold": float(
+                getattr(pipeline_cfg, "intent_llm_confidence_threshold", 0.45)
+            ),
+            "context_answer_confidence_threshold": float(
+                getattr(pipeline_cfg, "context_answer_confidence_threshold", 0.7)
+            ),
+            "semantic_sql_clarification_confidence_threshold": float(
+                getattr(
+                    pipeline_cfg,
+                    "semantic_sql_clarification_confidence_threshold",
+                    0.55,
+                )
+            ),
+            "ambiguous_query_max_tokens": int(
+                getattr(pipeline_cfg, "ambiguous_query_max_tokens", 3)
+            ),
+        }
 
     def _build_graph(self) -> StateGraph:
         """
@@ -365,6 +388,13 @@ class DataChatPipeline:
         if resolved_query and resolved_query != query:
             state["original_query"] = query
             state["query"] = resolved_query
+            self._record_decision(
+                state,
+                stage="intent_gate.rewrite",
+                decision="rewrite_query",
+                reason="resolved_followup",
+                details={"from": query, "to": resolved_query},
+            )
 
         fast_path = self._is_deterministic_sql_query(state.get("query") or "")
         if fast_path:
@@ -372,6 +402,12 @@ class DataChatPipeline:
             state["intent_gate"] = "data_query"
             state["fast_path"] = True
             state["skip_response_synthesis"] = True
+            self._record_decision(
+                state,
+                stage="intent_gate",
+                decision="data_query_fast_path",
+                reason="deterministic_sql_query",
+            )
             elapsed = (time.time() - start_time) * 1000
             state.setdefault("agent_timings", {})["intent_gate"] = elapsed
             state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
@@ -387,6 +423,12 @@ class DataChatPipeline:
                 ),
             )
             state["intent_gate"] = "clarify"
+            self._record_decision(
+                state,
+                stage="intent_gate",
+                decision="clarify",
+                reason="rule_based_non_actionable",
+            )
             elapsed = (time.time() - start_time) * 1000
             state.setdefault("agent_timings", {})["intent_gate"] = elapsed
             state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
@@ -404,7 +446,7 @@ class DataChatPipeline:
                 question = llm_result.get("clarifying_question")
                 if intent_gate == "clarify" or (
                     intent_gate == "data_query"
-                    and confidence < 0.45
+                    and confidence < float(self.routing_policy["intent_llm_confidence_threshold"])
                     and self._is_ambiguous_intent(state, summary)
                 ):
                     question = question or "What would you like to do with your data?"
@@ -416,6 +458,17 @@ class DataChatPipeline:
                         ),
                     )
                     state["intent_gate"] = "clarify"
+                    self._record_decision(
+                        state,
+                        stage="intent_gate",
+                        decision="clarify",
+                        reason="intent_llm_low_confidence",
+                        details={
+                            "intent": intent_gate,
+                            "confidence": confidence,
+                            "threshold": self.routing_policy["intent_llm_confidence_threshold"],
+                        },
+                    )
                     elapsed = (time.time() - start_time) * 1000
                     state.setdefault("agent_timings", {})["intent_gate"] = elapsed
                     state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
@@ -432,6 +485,12 @@ class DataChatPipeline:
                         ),
                     )
                     state["intent_gate"] = "clarify"
+                    self._record_decision(
+                        state,
+                        stage="intent_gate",
+                        decision="clarify",
+                        reason="intent_llm_non_actionable_followup",
+                    )
                     elapsed = (time.time() - start_time) * 1000
                     state.setdefault("agent_timings", {})["intent_gate"] = elapsed
                     state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
@@ -448,11 +507,23 @@ class DataChatPipeline:
                 ),
             )
             state["intent_gate"] = "clarify"
+            self._record_decision(
+                state,
+                stage="intent_gate",
+                decision="clarify",
+                reason="ambiguous_query_requires_clarification",
+            )
             elapsed = (time.time() - start_time) * 1000
             state.setdefault("agent_timings", {})["intent_gate"] = elapsed
             state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
             return state
         state["intent_gate"] = intent_gate
+        self._record_decision(
+            state,
+            stage="intent_gate",
+            decision=str(intent_gate),
+            reason="rule_or_llm_classification",
+        )
 
         if intent_gate in {"exit", "out_of_scope", "small_talk", "setup_help"}:
             state["intent"] = intent_gate
@@ -1424,14 +1495,57 @@ class DataChatPipeline:
     # Conditional Edge Logic
     # ========================================================================
 
+    def _record_decision(
+        self,
+        state: PipelineState,
+        *,
+        stage: str,
+        decision: str,
+        reason: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        trace = state.setdefault("decision_trace", [])
+        entry: dict[str, Any] = {
+            "stage": stage,
+            "decision": decision,
+            "reason": reason,
+        }
+        if details:
+            entry["details"] = details
+        trace.append(entry)
+
     def _should_continue_after_intent_gate(self, state: PipelineState) -> str:
         intent_gate = state.get("intent_gate")
         if intent_gate in {"exit", "out_of_scope", "small_talk", "setup_help", "clarify"}:
+            self._record_decision(
+                state,
+                stage="continue_after_intent_gate",
+                decision="end",
+                reason=f"intent_gate={intent_gate}",
+            )
             return "end"
         if state.get("fast_path"):
+            self._record_decision(
+                state,
+                stage="continue_after_intent_gate",
+                decision="sql",
+                reason="fast_path",
+            )
             return "sql"
         if self._should_run_tool_planner(state):
+            self._record_decision(
+                state,
+                stage="continue_after_intent_gate",
+                decision="tool_planner",
+                reason="tool_planner_enabled_for_query",
+            )
             return "tool_planner"
+        self._record_decision(
+            state,
+            stage="continue_after_intent_gate",
+            decision="classifier",
+            reason="default_classifier_path",
+        )
         return "classifier"
 
     def _should_run_tool_planner(self, state: PipelineState) -> bool:
@@ -1471,6 +1585,12 @@ class DataChatPipeline:
 
     def _should_use_context_answer(self, state: PipelineState) -> str:
         if state.get("error"):
+            self._record_decision(
+                state,
+                stage="context_vs_sql",
+                decision="sql",
+                reason="state_error_present",
+            )
             return "sql"
 
         intent = state.get("intent") or "data_query"
@@ -1479,26 +1599,77 @@ class DataChatPipeline:
         retrieved = state.get("retrieved_datapoints") or []
 
         if not retrieved:
+            self._record_decision(
+                state,
+                stage="context_vs_sql",
+                decision="sql",
+                reason="no_retrieved_datapoints",
+            )
             return "sql"
 
         if self._query_is_table_list(query):
+            self._record_decision(
+                state,
+                stage="context_vs_sql",
+                decision="sql",
+                reason="deterministic_table_list_query",
+            )
             return "sql"
 
         if "datapoint" in query or "data point" in query:
+            self._record_decision(
+                state,
+                stage="context_vs_sql",
+                decision="context",
+                reason="datapoint_definition_request",
+            )
             return "context"
 
         if self._query_is_definition_intent(query):
+            self._record_decision(
+                state,
+                stage="context_vs_sql",
+                decision="context",
+                reason="definition_intent",
+            )
             return "context"
 
         if self._query_requires_sql(query):
+            self._record_decision(
+                state,
+                stage="context_vs_sql",
+                decision="sql",
+                reason="query_requires_sql_keywords",
+            )
             return "sql"
 
         if intent in ("exploration", "explanation", "meta"):
+            self._record_decision(
+                state,
+                stage="context_vs_sql",
+                decision="context",
+                reason=f"intent={intent}",
+            )
             return "context"
 
-        if confidence >= 0.7:
+        threshold = float(self.routing_policy["context_answer_confidence_threshold"])
+        if confidence >= threshold:
+            self._record_decision(
+                state,
+                stage="context_vs_sql",
+                decision="context",
+                reason="context_confidence_threshold_met",
+                details={"confidence": confidence, "threshold": threshold},
+            )
             return "context"
 
+        self._record_decision(
+            state,
+            stage="context_vs_sql",
+            decision="sql",
+            reason="context_confidence_below_threshold",
+            details={"confidence": confidence, "threshold": threshold},
+        )
         return "sql"
 
     def _query_is_definition_intent(self, query: str) -> bool:
@@ -1539,22 +1710,71 @@ class DataChatPipeline:
 
     def _should_use_tools(self, state: PipelineState) -> str:
         if state.get("tool_error"):
+            self._record_decision(
+                state,
+                stage="tool_plan_resolution",
+                decision="pipeline",
+                reason="tool_error_present",
+            )
             return "pipeline"
         tool_calls = state.get("tool_calls", [])
         tool_plan = state.get("tool_plan") or {}
         if tool_plan.get("fallback") == "pipeline":
+            self._record_decision(
+                state,
+                stage="tool_plan_resolution",
+                decision="pipeline",
+                reason="tool_plan_fallback_pipeline",
+            )
             return "pipeline"
         if tool_calls:
+            self._record_decision(
+                state,
+                stage="tool_plan_resolution",
+                decision="tools",
+                reason="tool_calls_planned",
+                details={"tool_calls": len(tool_calls)},
+            )
             return "tools"
+        self._record_decision(
+            state,
+            stage="tool_plan_resolution",
+            decision="pipeline",
+            reason="no_tool_calls",
+        )
         return "pipeline"
 
     def _should_continue_after_tool_execution(self, state: PipelineState) -> str:
         if state.get("tool_error"):
+            self._record_decision(
+                state,
+                stage="tool_execution_resolution",
+                decision="pipeline",
+                reason="tool_execution_error",
+            )
             return "pipeline"
         if state.get("tool_approval_required"):
+            self._record_decision(
+                state,
+                stage="tool_execution_resolution",
+                decision="end",
+                reason="tool_approval_required",
+            )
             return "end"
         if state.get("tool_used") and state.get("natural_language_answer"):
+            self._record_decision(
+                state,
+                stage="tool_execution_resolution",
+                decision="end",
+                reason="tool_answer_ready",
+            )
             return "end"
+        self._record_decision(
+            state,
+            stage="tool_execution_resolution",
+            decision="pipeline",
+            reason="continue_pipeline_after_tools",
+        )
         return "pipeline"
 
     def _query_requires_sql(self, query: str) -> bool:
@@ -2139,7 +2359,8 @@ class DataChatPipeline:
             return False
 
         confidence = float(output.generated_sql.confidence or 0.0)
-        if confidence >= 0.55:
+        threshold = float(self.routing_policy["semantic_sql_clarification_confidence_threshold"])
+        if confidence >= threshold:
             return False
 
         if self._extract_focus_hint(query):
@@ -2450,7 +2671,8 @@ class DataChatPipeline:
             return False
         if summary.get("last_clarifying_questions") and self._is_short_followup(query):
             return True
-        return len(query.split()) <= 3
+        max_tokens = int(self.routing_policy["ambiguous_query_max_tokens"])
+        return len(query.split()) <= max_tokens
 
     async def _llm_intent_gate(
         self, query: str, summary: dict[str, Any]
@@ -2640,6 +2862,7 @@ class DataChatPipeline:
             "total_cost": 0.0,
             "total_latency_ms": 0.0,
             "agent_timings": {},
+            "decision_trace": [],
             "llm_calls": 0,
             "retry_count": 0,
             "retries_exhausted": False,
@@ -2833,6 +3056,18 @@ class DataChatPipeline:
         merged["sql_formatter_fallback_successes"] = sum(
             int(result.get("sql_formatter_fallback_successes", 0) or 0) for result in sub_results
         )
+        merged["decision_trace"] = [
+            {
+                "stage": "subquery",
+                "decision": f"Q{idx + 1}",
+                "reason": result.get("query"),
+                "details": {
+                    "answer_source": result.get("answer_source"),
+                    "decision_trace": result.get("decision_trace", []),
+                },
+            }
+            for idx, result in enumerate(sub_results)
+        ]
 
         merged_agent_timings: dict[str, float] = {}
         for result in sub_results:

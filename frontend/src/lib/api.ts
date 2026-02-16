@@ -86,6 +86,12 @@ export interface ChatResponse {
   conversation_id: string;
   session_summary?: string | null;
   session_state?: Record<string, unknown> | null;
+  decision_trace?: Array<{
+    stage: string;
+    decision: string;
+    reason: string;
+    details?: Record<string, unknown>;
+  }>;
 }
 
 export interface AgentUpdate {

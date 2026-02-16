@@ -172,6 +172,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             session_summary=result.get("session_summary"),
             session_state=result.get("session_state"),
             sub_answers=result.get("sub_answers", []),
+            decision_trace=result.get("decision_trace", []),
         )
 
         logger.info(

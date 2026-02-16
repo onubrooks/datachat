@@ -193,6 +193,7 @@ python scripts/eval_runner.py --mode retrieval --dataset eval/retrieval.json
 python scripts/eval_runner.py --mode qa --dataset eval/qa.json
 python scripts/eval_runner.py --mode intent --dataset eval/intent_credentials.json
 python scripts/eval_runner.py --mode catalog --dataset eval/catalog/mysql_credentials.json
+python scripts/eval_runner.py --mode route --dataset eval/routes_credentials.json
 python scripts/eval_runner.py --mode retrieval --dataset eval/grocery/retrieval.json --min-hit-rate 0.6 --min-recall 0.5 --min-mrr 0.4
 python scripts/eval_runner.py --mode qa --dataset eval/grocery/qa.json --min-sql-match-rate 0.6 --min-answer-type-rate 0.6
 ```
@@ -201,6 +202,7 @@ python scripts/eval_runner.py --mode qa --dataset eval/grocery/qa.json --min-sql
 
 - Retrieval mode uses `sources` from `/api/v1/chat` as proxies for retrieved DataPoints.
 - Answer types support both API columnar payloads and row-oriented payloads.
+- Route mode validates deterministic orchestration path decisions from `decision_trace`.
 - Optional thresholds return non-zero exit codes to support CI gating.
 
 ### 4. `benchmark_latency_progressive.py` - Progressive Latency Benchmark
@@ -249,6 +251,7 @@ python scripts/phase1_kpi_gate.py --mode ci --report-json reports/phase1_ci_gate
 - connection type/url mismatch validation
 - release smoke checks (health/ready/system status)
 - release eval thresholds (intent + catalog)
+- release eval thresholds (intent + catalog + route)
 - release SLO/quality thresholds (intent latency, LLM-call budget, source accuracy, clarification match)
 - connector-aware release eval preconditions (`required_database_type` + `on_missing`)
 

@@ -53,6 +53,8 @@ Notes:
 - `session_summary` and `session_state` are optional turn-to-turn memory fields.
   Clients should echo these from one response into the next request to improve
   follow-up continuity with bounded token usage.
+- Responses include `decision_trace` (stage/decision/reason tuples) for routing
+  observability and regression evaluation.
 - When no DataPoints are loaded, responses include a live schema mode notice.
 - Single prompts with multiple questions may be decomposed (up to 3 sub-questions).
   In that case, response includes `sub_answers` and an aggregated `answer`.
@@ -72,6 +74,7 @@ Response fields (selected):
   - `error`
 - `session_summary`: compact summary to pass into the next turn.
 - `session_state`: structured memory object to pass into the next turn.
+- `decision_trace`: deterministic routing trace entries used by eval/ops gates.
 
 ## Database Connections
 
