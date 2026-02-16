@@ -535,7 +535,12 @@ async def create_pipeline_from_config() -> DataChatPipeline:
     return pipeline
 
 
-def format_answer(answer: str, sql: str | None = None, data: dict | None = None) -> None:
+def format_answer(
+    answer: str,
+    sql: str | None = None,
+    data: dict | None = None,
+    visualization_note: str | None = None,
+) -> None:
     """Format and display answer."""
     # Display answer
     console.print(Panel(Markdown(answer), title="[bold green]Answer[/bold green]"))
@@ -569,6 +574,9 @@ def format_answer(answer: str, sql: str | None = None, data: dict | None = None)
                 table.add_row(*row)
 
         console.print(table)
+
+    if visualization_note:
+        console.print(f"\n[bold yellow]Visualization note:[/bold yellow] {visualization_note}")
 
 
 def _build_columnar_data(query_result: dict[str, Any] | None) -> dict[str, list] | None:
@@ -623,7 +631,7 @@ def _emit_query_output(
     show_metrics: bool,
 ) -> None:
     console.print()
-    format_answer(answer, sql, data)
+    format_answer(answer, sql, data, result.get("visualization_note"))
     console.print()
 
     footer = _format_source_footer(result)

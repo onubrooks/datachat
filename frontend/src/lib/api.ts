@@ -65,6 +65,7 @@ export interface ChatResponse {
   sql: string | null;
   data: Record<string, unknown[]> | null;
   visualization_hint: string | null;
+  visualization_note?: string | null;
   sources: DataSource[];
   answer_source?: string | null;
   answer_confidence?: number | null;

@@ -260,6 +260,7 @@ export function ChatInterface() {
               sql: response.sql,
               data: response.data,
               visualization_hint: response.visualization_hint,
+              visualization_note: response.visualization_note,
               sources: response.sources,
               answer_source: response.answer_source,
               answer_confidence: response.answer_confidence,

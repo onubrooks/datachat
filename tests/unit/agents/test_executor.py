@@ -18,6 +18,7 @@ import pytest
 from backend.agents.executor import ExecutorAgent
 from backend.connectors.base import QueryError
 from backend.connectors.base import QueryResult as ConnectorQueryResult
+from backend.llm.models import LLMResponse, LLMUsage
 from backend.models import ExecutorAgentInput, ValidatedSQL
 
 
@@ -573,6 +574,75 @@ Insights:
         result = await executor_agent.execute(sample_input)
 
         assert result.executed_query.visualization_hint == "bar_chart"
+
+    @pytest.mark.asyncio
+    async def test_invalid_user_chart_request_is_overridden_with_note(
+        self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
+    ):
+        """If requested chart is invalid for data, override and explain."""
+        sample_input.query = "Show revenue by category as a pie chart"
+        mock_postgres_connector.execute = AsyncMock(
+            return_value=ConnectorQueryResult(
+                rows=[
+                    {"category": "A", "revenue": 120.0},
+                    {"category": "B", "revenue": -30.0},
+                    {"category": "C", "revenue": 75.0},
+                ],
+                row_count=3,
+                columns=["category", "revenue"],
+                execution_time_ms=32.0,
+            )
+        )
+        summary_response = LLMResponse(
+            content="Answer: Revenue by category.\nInsights: - Category A leads",
+            model="mock-model",
+            usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            finish_reason="stop",
+            provider="mock",
+            metadata={},
+        )
+        planner_response = LLMResponse(
+            content='{"visualization_hint":"bar_chart","confidence":0.92,"reason":"values include negatives"}',
+            model="mock-model",
+            usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            finish_reason="stop",
+            provider="mock",
+            metadata={},
+        )
+        mock_llm_provider.generate = AsyncMock(side_effect=[summary_response, planner_response])
+
+        result = await executor_agent.execute(sample_input)
+
+        assert result.executed_query.visualization_hint == "bar_chart"
+        assert result.executed_query.visualization_note is not None
+        assert "Requested pie chart was overridden" in result.executed_query.visualization_note
+        assert result.metadata.llm_calls == 2
+
+    @pytest.mark.asyncio
+    async def test_valid_user_chart_request_is_honored_without_override_note(
+        self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
+    ):
+        """If requested chart is valid for data, keep it and skip override note."""
+        sample_input.query = "Show revenue breakdown by category as a pie chart"
+        mock_postgres_connector.execute = AsyncMock(
+            return_value=ConnectorQueryResult(
+                rows=[
+                    {"category": "A", "revenue": 120.0},
+                    {"category": "B", "revenue": 80.0},
+                    {"category": "C", "revenue": 75.0},
+                ],
+                row_count=3,
+                columns=["category", "revenue"],
+                execution_time_ms=32.0,
+            )
+        )
+        mock_llm_provider.set_response("Answer: Revenue by category.")
+
+        result = await executor_agent.execute(sample_input)
+
+        assert result.executed_query.visualization_hint == "pie_chart"
+        assert result.executed_query.visualization_note is None
+        assert result.metadata.llm_calls == 1
 
     # Citations Tests
     # ============================================================================

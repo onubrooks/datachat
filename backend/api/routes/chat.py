@@ -142,6 +142,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
 
         # Extract visualization hint
         visualization_hint = result.get("visualization_hint")
+        visualization_note = result.get("visualization_note")
 
         # Build sources from retrieved datapoints
         sources = _build_sources(result)
@@ -158,6 +159,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             sql=sql_query,
             data=data,
             visualization_hint=visualization_hint,
+            visualization_note=visualization_note,
             sources=sources,
             answer_source=answer_source,
             answer_confidence=answer_confidence,

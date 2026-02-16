@@ -36,14 +36,17 @@ flowchart TD
   V0["Query Result"] --> V1{"No rows / single scalar?"}
   V1 -->|Yes| V2["Visualization: none"]
   V1 -->|No| V3{"User explicitly requested chart type?"}
-  V3 -->|Yes| V4["Respect request if shape is valid"]
-  V3 -->|No| V5{"Temporal axis + numeric metric?"}
-  V5 -->|Yes| V6["Visualization: line_chart"]
-  V5 -->|No| V7{"Category + metric?"}
-  V7 -->|Yes| V8{"Share/distribution query + small cardinality + positive values?"}
-  V8 -->|Yes| V9["Visualization: pie_chart"]
-  V8 -->|No| V10["Visualization: bar_chart"]
-  V7 -->|No| V11{"Numeric pair analysis + explicit scatter intent?"}
-  V11 -->|Yes| V12["Visualization: scatter"]
-  V11 -->|No| V13["Visualization: table"]
+  V3 -->|Yes| V4{"Request valid for data shape?"}
+  V4 -->|Yes| V5["Use requested chart"]
+  V4 -->|No| V6["Run mini LLM visualization planner"]
+  V3 -->|No| V6
+  V6 --> V7{"Planner output valid + confident?"}
+  V7 -->|Yes| V8["Use planner chart"]
+  V7 -->|No| V9["Use deterministic rule fallback"]
+  V8 --> V10{"Requested chart was overridden?"}
+  V10 -->|Yes| V11["Attach visualization_note explanation"]
+  V10 -->|No| V12["No note"]
+  V9 --> V13{"Requested chart invalid?"}
+  V13 -->|Yes| V11
+  V13 -->|No| V12
 ```

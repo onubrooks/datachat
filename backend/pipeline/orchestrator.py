@@ -128,6 +128,7 @@ class PipelineState(TypedDict, total=False):
     query_result: dict[str, Any] | None
     natural_language_answer: str | None
     visualization_hint: str | None
+    visualization_note: str | None
     key_insights: list[str]
     answer_source: str | None
     answer_confidence: float | None
@@ -973,6 +974,7 @@ class DataChatPipeline:
             state["validated_sql"] = None
             state["query_result"] = None
             state["visualization_hint"] = None
+            state["visualization_note"] = None
             if output.context_answer.needs_sql:
                 state["context_preface"] = output.context_answer.answer
                 state["context_evidence"] = [
@@ -1448,6 +1450,7 @@ class DataChatPipeline:
             }
             state["natural_language_answer"] = output.executed_query.natural_language_answer
             state["visualization_hint"] = output.executed_query.visualization_hint
+            state["visualization_note"] = output.executed_query.visualization_note
             state["key_insights"] = output.executed_query.key_insights
             state["answer_source"] = "sql"
             state["answer_confidence"] = state.get("sql_confidence", 0.7)
@@ -1943,6 +1946,8 @@ class DataChatPipeline:
                 state["query_result"] = payload.get("data")
             if payload.get("visualization_hint"):
                 state["visualization_hint"] = payload.get("visualization_hint")
+            if payload.get("visualization_note"):
+                state["visualization_note"] = payload.get("visualization_note")
             if payload.get("retrieved_datapoints"):
                 state["retrieved_datapoints"] = payload.get("retrieved_datapoints")
             if payload.get("used_datapoints"):
@@ -2970,6 +2975,7 @@ class DataChatPipeline:
             "validation_errors": [],
             "validation_warnings": [],
             "key_insights": [],
+            "visualization_note": None,
             "used_datapoints": [],
             "assumptions": [],
             "sql_formatter_fallback_calls": 0,
@@ -3480,6 +3486,7 @@ class DataChatPipeline:
                                     query_result.get("row_count", 0) if query_result else 0
                                 ),
                                 "visualization_hint": state_update.get("visualization_hint"),
+                                "visualization_note": state_update.get("visualization_note"),
                             }
                         elif current_agent == "ContextAnswerAgent":
                             agent_data = {

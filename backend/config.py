@@ -474,6 +474,37 @@ class PipelineSettings(BaseSettings):
         le=80,
         description="Maximum candidate tables sent to SQL resolver prompt.",
     )
+    visualization_planner_enabled: bool = Field(
+        default=True,
+        description=(
+            "Use a lightweight LLM planner for chart suggestion, with rule-based "
+            "guardrails and fallback."
+        ),
+    )
+    visualization_planner_confidence_threshold: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence required to trust LLM visualization planner output.",
+    )
+    visualization_planner_max_rows_sample: int = Field(
+        default=10,
+        ge=2,
+        le=50,
+        description="Maximum rows to send to LLM visualization planner.",
+    )
+    visualization_planner_max_columns_sample: int = Field(
+        default=12,
+        ge=2,
+        le=40,
+        description="Maximum columns to send to LLM visualization planner.",
+    )
+    visualization_planner_timeout_ms: int = Field(
+        default=1500,
+        ge=200,
+        le=10000,
+        description="Timeout budget for LLM visualization planner.",
+    )
     ambiguous_query_max_tokens: int = Field(
         default=3,
         ge=1,
