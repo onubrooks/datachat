@@ -3140,6 +3140,21 @@ class DataChatPipeline:
 
         merged["answer_source"] = "multi"
 
+        primary_index, primary_result = self._select_primary_sub_result(sub_results)
+        if primary_result is not None:
+            merged["generated_sql"] = primary_result.get("generated_sql")
+            merged["validated_sql"] = primary_result.get("validated_sql")
+            merged["query_result"] = primary_result.get("query_result")
+            merged["visualization_hint"] = primary_result.get("visualization_hint")
+            merged["visualization_note"] = primary_result.get("visualization_note")
+            merged["key_insights"] = primary_result.get("key_insights", [])
+            if primary_index is not None and 0 <= primary_index < len(sub_answers):
+                merged["natural_language_answer"] = (
+                    f"{merged['natural_language_answer']}\n\n"
+                    f"Primary SQL/table/visualization shown for question {primary_index + 1}: "
+                    f"{sub_answers[primary_index]['query']}"
+                )
+
         confidence_values = [
             float(item.get("answer_confidence"))
             for item in sub_answers
@@ -3214,6 +3229,57 @@ class DataChatPipeline:
             merged["session_state"] = sub_results[-1].get("session_state")
         self._finalize_session_memory(merged)
         return merged
+
+    def _select_primary_sub_result(
+        self, sub_results: list[PipelineState]
+    ) -> tuple[int | None, PipelineState | None]:
+        """
+        Select the sub-result whose SQL/data artifacts should back the rich UI tabs.
+
+        Priority:
+        1. Query results with at least one row
+        2. Query results with zero rows (still a concrete SQL outcome)
+        3. Validated/generated SQL without execution payload
+        4. First non-error/non-clarification answer
+        5. First sub-result (fallback)
+        """
+        if not sub_results:
+            return None, None
+
+        def _priority(result: PipelineState) -> tuple[int, int]:
+            query_result = result.get("query_result")
+            has_query_result = isinstance(query_result, dict)
+            row_count = 0
+            if has_query_result:
+                raw_row_count = query_result.get("row_count", 0)
+                try:
+                    row_count = int(raw_row_count or 0)
+                except (TypeError, ValueError):
+                    row_count = 0
+                if row_count > 0:
+                    return (4, row_count)
+                return (3, 0)
+
+            has_sql = bool(result.get("validated_sql") or result.get("generated_sql"))
+            if has_sql:
+                return (2, 0)
+
+            source = str(result.get("answer_source") or "").lower()
+            is_error = bool(result.get("error"))
+            if source not in {"clarification", "error"} and not is_error:
+                return (1, 0)
+
+            return (0, 0)
+
+        best_index = 0
+        best_priority = _priority(sub_results[0])
+        for idx, result in enumerate(sub_results[1:], start=1):
+            candidate_priority = _priority(result)
+            if candidate_priority > best_priority:
+                best_priority = candidate_priority
+                best_index = idx
+
+        return best_index, sub_results[best_index]
 
     # ========================================================================
     # Public API

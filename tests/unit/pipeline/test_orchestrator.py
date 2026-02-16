@@ -226,8 +226,35 @@ class TestPipelineExecution:
         assert len(result.get("sub_answers", [])) == 2
         assert "multiple questions" in result["natural_language_answer"].lower()
         assert result["answer_source"] == "multi"
+        assert (result.get("validated_sql") or result.get("generated_sql")) == "SELECT * FROM test_table"
+        assert result.get("query_result") is not None
         assert mock_agents.classifier.execute.await_count == 2
         assert mock_agents.sql.execute.await_count == 2
+
+    def test_select_primary_sub_result_prefers_query_result_with_rows(self, pipeline):
+        sub_results = [
+            {"answer_source": "sql", "generated_sql": "SELECT * FROM a", "query_result": {"row_count": 1}},
+            {"answer_source": "sql", "generated_sql": "SELECT * FROM b", "query_result": {"row_count": 8}},
+            {"answer_source": "context", "natural_language_answer": "context-only"},
+        ]
+
+        index, selected = pipeline._select_primary_sub_result(sub_results)  # type: ignore[arg-type]
+
+        assert index == 1
+        assert selected is not None
+        assert selected.get("generated_sql") == "SELECT * FROM b"
+
+    def test_select_primary_sub_result_prefers_sql_over_clarification(self, pipeline):
+        sub_results = [
+            {"answer_source": "clarification", "clarifying_questions": ["Which table?"]},
+            {"answer_source": "sql", "generated_sql": "SELECT count(*) FROM t"},
+        ]
+
+        index, selected = pipeline._select_primary_sub_result(sub_results)  # type: ignore[arg-type]
+
+        assert index == 1
+        assert selected is not None
+        assert selected.get("generated_sql") == "SELECT count(*) FROM t"
 
     @pytest.mark.asyncio
     async def test_filter_datapoints_by_live_schema_uses_related_tables(self, pipeline):
