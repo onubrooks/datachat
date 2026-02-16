@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from backend.agents.sql import SQLAgent
+from backend.agents.sql import SQLAgent, TableResolution
 from backend.llm.models import LLMResponse, LLMUsage
 from backend.models.agent import (
     GeneratedSQL,
@@ -750,14 +750,29 @@ class TestExecution:
         assert output.needs_clarification is False
         assert sql_agent.llm.generate.await_count == 1
 
+    def test_table_resolver_low_confidence_triggers_clarification(self, sql_agent):
+        """Low-confidence resolver output with no candidates should hard-clarify."""
+        decision = sql_agent._should_force_table_clarification(
+            query="Show rows from one of these tables",
+            table_resolution=TableResolution(
+                candidate_tables=[],
+                column_hints=["total_amount"],
+                confidence=0.31,
+                needs_clarification=True,
+                clarifying_question="Do you want sales transactions or inventory snapshots?",
+            ),
+        )
+
+        assert decision is True
+
     @pytest.mark.asyncio
-    async def test_table_resolver_low_confidence_triggers_clarification(self):
-        """LLM table resolver should request clarification when confidence is low."""
+    async def test_table_resolver_low_confidence_with_candidates_continues_generation(self):
+        """When resolver returns candidates, SQL generation should continue instead of hard-clarifying."""
         resolver_response = LLMResponse(
             content=json.dumps(
                 {
                     "candidate_tables": ["public.grocery_sales_transactions"],
-                    "column_hints": ["total_amount"],
+                    "column_hints": ["total_amount", "store_id"],
                     "confidence": 0.31,
                     "needs_clarification": True,
                     "clarifying_question": "Do you want sales transactions or inventory snapshots?",
@@ -768,6 +783,25 @@ class TestExecution:
             finish_reason="stop",
             provider="openai",
         )
+        sql_response = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT store_id, SUM(total_amount) AS total_amount "
+                        "FROM public.grocery_sales_transactions GROUP BY store_id"
+                    ),
+                    "explanation": "Revenue by store.",
+                    "used_datapoints": [],
+                    "confidence": 0.9,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=420, completion_tokens=140, total_tokens=560),
+            finish_reason="stop",
+            provider="openai",
+        )
 
         fast_provider = Mock()
         fast_provider.generate = AsyncMock(return_value=resolver_response)
@@ -775,7 +809,7 @@ class TestExecution:
         fast_provider.model = "gpt-4o-mini"
 
         main_provider = Mock()
-        main_provider.generate = AsyncMock()
+        main_provider.generate = AsyncMock(return_value=sql_response)
         main_provider.provider = "openai"
         main_provider.model = "gpt-4o"
 
@@ -787,6 +821,7 @@ class TestExecution:
             sql_table_resolver_confidence_threshold=0.55,
             sql_prompt_budget_enabled=False,
             schema_snapshot_cache_enabled=False,
+            sql_two_stage_enabled=True,
         )
 
         with (
@@ -799,7 +834,7 @@ class TestExecution:
             agent = SQLAgent()
 
         input_data = SQLAgentInput(
-            query="What is total amount by store for last month",
+            query="Which stores have the largest gap between inventory movement and recorded sales?",
             investigation_memory=InvestigationMemory(
                 query="resolver",
                 datapoints=[
@@ -811,11 +846,7 @@ class TestExecution:
                         source="vector",
                         metadata={
                             "table_name": "public.grocery_sales_transactions",
-                            "key_columns": [
-                                {"name": "store_id"},
-                                {"name": "total_amount"},
-                                {"name": "business_date"},
-                            ],
+                            "key_columns": [{"name": "store_id"}, {"name": "total_amount"}],
                         },
                     ),
                     RetrievedDataPoint(
@@ -826,11 +857,7 @@ class TestExecution:
                         source="vector",
                         metadata={
                             "table_name": "public.grocery_inventory_snapshots",
-                            "key_columns": [
-                                {"name": "store_id"},
-                                {"name": "on_hand_qty"},
-                                {"name": "reserved_qty"},
-                            ],
+                            "key_columns": [{"name": "store_id"}, {"name": "on_hand_qty"}],
                         },
                     ),
                 ],
@@ -842,13 +869,11 @@ class TestExecution:
         )
 
         output = await agent(input_data)
-        assert output.needs_clarification is True
-        assert (
-            output.generated_sql.clarifying_questions[0]
-            == "Do you want sales transactions or inventory snapshots?"
-        )
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "grocery_sales_transactions" in output.generated_sql.sql
         assert fast_provider.generate.await_count == 1
-        assert main_provider.generate.await_count == 0
+        assert main_provider.generate.await_count == 1
 
     @pytest.mark.asyncio
     async def test_table_resolver_candidates_are_injected_into_sql_prompt(self):

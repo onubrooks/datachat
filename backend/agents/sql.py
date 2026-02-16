@@ -422,8 +422,13 @@ class SQLAgent(BaseAgent):
                 or table_resolution.confidence < resolver_threshold
             )
         ):
-            question = table_resolution.clarifying_question or "Which table should I use to answer this?"
-            raise SQLClarificationNeeded([question])
+            should_force_clarification = self._should_force_table_clarification(
+                query=input.query,
+                table_resolution=table_resolution,
+            )
+            if should_force_clarification:
+                question = table_resolution.clarifying_question or "Which table should I use to answer this?"
+                raise SQLClarificationNeeded([question])
 
         # Build prompt with context
         prompt = await self._build_generation_prompt(input, table_resolution=table_resolution)
@@ -439,9 +444,11 @@ class SQLAgent(BaseAgent):
         )
 
         try:
+            resolver_already_used = table_resolution is not None
             use_two_stage = (
                 self._pipeline_flag("sql_two_stage_enabled", True)
                 and not self._providers_are_equivalent(self.fast_llm, self.llm)
+                and not resolver_already_used
             )
 
             if use_two_stage:
@@ -484,6 +491,41 @@ class SQLAgent(BaseAgent):
                 message=f"LLM generation failed: {e}",
                 context={"query": input.query},
             ) from e
+
+    def _should_force_table_clarification(
+        self,
+        *,
+        query: str,
+        table_resolution: TableResolution,
+    ) -> bool:
+        """Decide when resolver ambiguity should block SQL generation."""
+        # If resolver found candidates, let the SQL model attempt generation.
+        if table_resolution.candidate_tables:
+            return False
+
+        query_text = (query or "").lower()
+        analytic_markers = (
+            " by ",
+            " trend",
+            " compare",
+            " vs ",
+            " versus ",
+            " gap",
+            " rate",
+            " risk",
+            " largest",
+            " highest",
+            " lowest",
+            "average",
+            "total",
+            "sum",
+            "percentage",
+            "percent",
+        )
+        if any(marker in f" {query_text} " for marker in analytic_markers):
+            return False
+
+        return True
 
     async def _resolve_tables_with_llm(self, input: SQLAgentInput) -> TableResolution | None:
         """Use a lightweight LLM step to infer likely source tables before SQL generation."""
