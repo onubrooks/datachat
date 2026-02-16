@@ -426,6 +426,13 @@ class SQLAgent(BaseAgent):
         if weekday_weekend_lift_fallback is not None:
             return self._apply_row_limit_policy(weekday_weekend_lift_fallback, input.query)
 
+        movement_sales_gap_fallback = await self._build_inventory_movement_sales_gap_fallback(
+            input,
+            table_resolution=None,
+        )
+        if movement_sales_gap_fallback is not None:
+            return self._apply_row_limit_policy(movement_sales_gap_fallback, input.query)
+
         stockout_risk_fallback = await self._build_stockout_risk_ranking_fallback(
             input,
             table_resolution=None,
@@ -460,6 +467,13 @@ class SQLAgent(BaseAgent):
             )
             if weekday_weekend_lift_fallback is not None:
                 return self._apply_row_limit_policy(weekday_weekend_lift_fallback, input.query)
+
+            movement_sales_gap_fallback = await self._build_inventory_movement_sales_gap_fallback(
+                input,
+                table_resolution=table_resolution,
+            )
+            if movement_sales_gap_fallback is not None:
+                return self._apply_row_limit_policy(movement_sales_gap_fallback, input.query)
 
             stockout_risk_fallback = await self._build_stockout_risk_ranking_fallback(
                 input,
@@ -1035,6 +1049,175 @@ class SQLAgent(BaseAgent):
             ),
             used_datapoints=used_datapoints,
             confidence=0.91,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+
+    async def _build_inventory_movement_sales_gap_fallback(
+        self,
+        input: SQLAgentInput,
+        *,
+        table_resolution: TableResolution | None = None,
+    ) -> GeneratedSQL | None:
+        """
+        Deterministic fallback for inventory-movement vs recorded-sales gap by store.
+        """
+        text = (input.query or "").strip().lower()
+        if not text:
+            return None
+
+        has_store = "store" in text
+        has_inventory = "inventory" in text
+        has_movement = "movement" in text or "moved" in text
+        has_sales = "sales" in text
+        has_gap = "gap" in text or "difference" in text
+        if not (has_store and has_inventory and has_movement and has_sales and has_gap):
+            return None
+
+        table_columns: dict[str, set[str]] = {}
+        if table_resolution:
+            for table_name in table_resolution.candidate_tables:
+                table_columns.setdefault(table_name, set())
+        table_columns.update(self._schema_table_columns_from_memory(input))
+        if len(table_columns) < 3:
+            live_candidates = await self._load_live_table_candidates_for_fallback(input)
+            for table_name, columns in live_candidates:
+                existing = table_columns.get(table_name, set())
+                table_columns[table_name] = existing | {column.lower() for column in columns}
+        schema_tables = list(table_columns.keys()) or self._schema_tables_from_memory(input)
+
+        inventory_table = self._pick_table_name(
+            schema_tables,
+            includes=("grocery", "inventory"),
+            fallback_contains=("inventory_snapshots", "inventory", "stock"),
+        )
+        if inventory_table is None:
+            inventory_table = self._pick_table_by_columns(
+                table_columns,
+                required_columns={"snapshot_date", "store_id", "on_hand_qty"},
+            )
+
+        sales_table = self._pick_table_name(
+            schema_tables,
+            includes=("grocery", "sales"),
+            fallback_contains=("sales_transactions", "sales", "transactions"),
+        )
+        if sales_table is None:
+            sales_table = self._pick_table_by_columns(
+                table_columns,
+                required_columns={"store_id", "quantity"},
+                excluded_tables={inventory_table} if inventory_table else None,
+            )
+
+        stores_table = self._pick_table_name(
+            schema_tables,
+            includes=("grocery", "stores"),
+            fallback_contains=("stores", "store"),
+        )
+        if stores_table is None:
+            stores_table = self._pick_table_by_columns(
+                table_columns,
+                required_columns={"store_id", "store_name"},
+                excluded_tables={inventory_table, sales_table}
+                if inventory_table and sales_table
+                else None,
+            )
+
+        if not (inventory_table and sales_table and stores_table):
+            return None
+
+        inventory_cols = table_columns.get(inventory_table, set())
+        sales_cols = table_columns.get(sales_table, set())
+        stores_cols = table_columns.get(stores_table, set())
+
+        if inventory_cols and ("snapshot_date" not in inventory_cols or "on_hand_qty" not in inventory_cols):
+            return None
+
+        window_days = self._extract_last_days_window(text, default_days=30)
+        db_type = (input.database_type or "").strip().lower()
+        top_n = self._extract_top_n(text, default=10, max_value=25)
+
+        inventory_filter = (
+            f"snapshot_date >= DATE_SUB(CURDATE(), INTERVAL {window_days} DAY)"
+            if db_type == "mysql"
+            else f"snapshot_date >= CURRENT_DATE - INTERVAL '{window_days} days'"
+        )
+
+        if "business_date" in sales_cols:
+            sales_date_col = "business_date"
+        elif "sold_at" in sales_cols:
+            sales_date_col = "DATE(sold_at)" if db_type == "mysql" else "sold_at::date"
+        elif "event_date" in sales_cols:
+            sales_date_col = "event_date"
+        else:
+            sales_date_col = None
+
+        if sales_date_col:
+            sales_filter = (
+                f"{sales_date_col} >= DATE_SUB(CURDATE(), INTERVAL {window_days} DAY)"
+                if db_type == "mysql"
+                else f"{sales_date_col} >= CURRENT_DATE - INTERVAL '{window_days} days'"
+            )
+        else:
+            sales_filter = "1=1"
+
+        sales_units_expr = "SUM(quantity)" if "quantity" in sales_cols else "COUNT(*)"
+        store_name_expr = (
+            "s.store_name"
+            if "store_name" in stores_cols
+            else ("s.store_code" if "store_code" in stores_cols else "s.store_id")
+        )
+
+        gap_order = (
+            "ORDER BY ABS(COALESCE(i.movement_units, 0) - COALESCE(sa.recorded_sales_units, 0)) DESC"
+        )
+        sql = (
+            "WITH inventory_daily AS ("
+            " SELECT snapshot_date, store_id, SUM(on_hand_qty) AS on_hand_units"
+            f" FROM {inventory_table}"
+            f" WHERE {inventory_filter}"
+            " GROUP BY snapshot_date, store_id"
+            "), inventory_delta AS ("
+            " SELECT store_id, snapshot_date, "
+            "ABS(on_hand_units - LAG(on_hand_units) OVER (PARTITION BY store_id ORDER BY snapshot_date)) "
+            "AS movement_delta "
+            "FROM inventory_daily"
+            "), inventory_movement AS ("
+            " SELECT store_id, SUM(COALESCE(movement_delta, 0)) AS movement_units"
+            " FROM inventory_delta"
+            " GROUP BY store_id"
+            "), sales_agg AS ("
+            f" SELECT store_id, {sales_units_expr} AS recorded_sales_units"
+            f" FROM {sales_table}"
+            f" WHERE {sales_filter}"
+            " GROUP BY store_id"
+            ") "
+            "SELECT "
+            "s.store_id, "
+            f"{store_name_expr} AS store_name, "
+            "COALESCE(i.movement_units, 0) AS inventory_movement_units, "
+            "COALESCE(sa.recorded_sales_units, 0) AS recorded_sales_units, "
+            "(COALESCE(i.movement_units, 0) - COALESCE(sa.recorded_sales_units, 0)) AS movement_sales_gap "
+            f"FROM {stores_table} s "
+            "LEFT JOIN inventory_movement i ON i.store_id = s.store_id "
+            "LEFT JOIN sales_agg sa ON sa.store_id = s.store_id "
+            f"{gap_order} "
+            f"LIMIT {top_n}"
+        )
+
+        used_datapoints = [
+            dp.datapoint_id
+            for dp in input.investigation_memory.datapoints
+            if dp.datapoint_type in {"Schema", "Business"}
+        ][:8]
+        return GeneratedSQL(
+            sql=sql,
+            explanation=(
+                "Deterministic fallback comparing inventory movement against recorded sales "
+                f"by store over the last {window_days} days."
+            ),
+            used_datapoints=used_datapoints,
+            confidence=0.9,
             assumptions=[],
             clarifying_questions=[],
         )

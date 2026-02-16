@@ -383,6 +383,58 @@ class TestExecution:
         assert sql_agent.llm.generate.await_count == 0
 
     @pytest.mark.asyncio
+    async def test_inventory_movement_vs_sales_gap_fallback_skips_llm(self, sql_agent):
+        """Inventory movement vs recorded sales gap query should use deterministic fallback."""
+        input_data = SQLAgentInput(
+            query="Which stores have the largest gap between inventory movement and recorded sales?",
+            investigation_memory=InvestigationMemory(
+                query="movement vs sales gap",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_inventory_snapshots_001",
+                        datapoint_type="Schema",
+                        name="Inventory Snapshots",
+                        score=0.92,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_inventory_snapshots"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales Transactions",
+                        score=0.9,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_sales_transactions"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_stores_001",
+                        datapoint_type="Schema",
+                        name="Stores",
+                        score=0.88,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_stores"},
+                    ),
+                ],
+                total_retrieved=3,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "inventory_daily" in output.generated_sql.sql
+        assert "inventory_movement" in output.generated_sql.sql
+        assert "movement_sales_gap" in output.generated_sql.sql
+        assert "grocery_inventory_snapshots" in output.generated_sql.sql
+        assert "grocery_sales_transactions" in output.generated_sql.sql
+        assert "grocery_stores" in output.generated_sql.sql
+        assert sql_agent.llm.generate.await_count == 0
+
+    @pytest.mark.asyncio
     async def test_stockout_risk_fallback_supports_mysql_window_syntax(self, sql_agent):
         """Stockout risk fallback should emit MySQL-safe week filtering."""
         input_data = SQLAgentInput(
