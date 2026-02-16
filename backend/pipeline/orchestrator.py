@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC
 from pathlib import Path
 from typing import Any, TypedDict
+from urllib.parse import urlparse
 
 from langgraph.graph import END, StateGraph
 
@@ -31,6 +32,7 @@ from backend.agents.validator import ValidatorAgent
 from backend.config import get_settings
 from backend.connectors.base import BaseConnector
 from backend.connectors.factory import create_connector
+from backend.database.manager import DatabaseConnectionManager
 from backend.knowledge.retriever import Retriever
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
@@ -52,6 +54,7 @@ from backend.tools.policy import ToolPolicyError
 from backend.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+ENV_DATABASE_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada"
 
 
 # ============================================================================
@@ -203,6 +206,8 @@ class DataChatPipeline:
         self.max_clarifications = 3
         self.config = get_settings()
         self.routing_policy = self._build_routing_policy()
+        self._connection_scope_cache: dict[str, tuple[float, set[str]]] = {}
+        self._connection_scope_ttl_seconds = 300
 
         # Initialize agents
         self.classifier = ClassifierAgent()
@@ -705,6 +710,10 @@ class DataChatPipeline:
             output = await self.context.execute(input_data)
 
             # Update state
+            allowed_connection_ids = await self._resolve_equivalent_connection_ids(
+                target_connection_id=state.get("target_connection_id"),
+                database_url=state.get("database_url"),
+            )
             connection_scoped_datapoints = self._filter_datapoints_by_target_connection(
                 [
                     {
@@ -719,6 +728,7 @@ class DataChatPipeline:
                     for dp in output.investigation_memory.datapoints
                 ],
                 target_connection_id=state.get("target_connection_id"),
+                target_connection_ids=allowed_connection_ids,
             )
             filtered_datapoints = await self._filter_datapoints_by_live_schema(
                 connection_scoped_datapoints,
@@ -756,6 +766,7 @@ class DataChatPipeline:
         self,
         datapoints: list[dict[str, Any]],
         target_connection_id: str | None,
+        target_connection_ids: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Scope retrieved DataPoints to the selected connection.
@@ -769,6 +780,14 @@ class DataChatPipeline:
         """
         if not target_connection_id:
             return datapoints
+
+        allowed_connection_ids = {str(target_connection_id)}
+        if target_connection_ids:
+            allowed_connection_ids.update(
+                str(connection_id)
+                for connection_id in target_connection_ids
+                if connection_id
+            )
 
         scoped: list[dict[str, Any]] = []
         global_items: list[dict[str, Any]] = []
@@ -791,7 +810,7 @@ class DataChatPipeline:
                 unscoped.append(dp)
                 continue
 
-            if str(connection_id) != str(target_connection_id):
+            if str(connection_id) not in allowed_connection_ids:
                 removed_foreign += 1
                 continue
             scoped.append(dp)
@@ -815,6 +834,85 @@ class DataChatPipeline:
             return unscoped
 
         return []
+
+    async def _resolve_equivalent_connection_ids(
+        self,
+        *,
+        target_connection_id: str | None,
+        database_url: str | None,
+    ) -> set[str]:
+        """Resolve connection IDs that point to the same runtime database URL."""
+        resolved: set[str] = set()
+        if target_connection_id:
+            resolved.add(str(target_connection_id))
+        if not database_url:
+            return resolved
+
+        cache_key = self._database_identity(database_url)
+        if cache_key:
+            cached = self._connection_scope_cache.get(cache_key)
+            if cached:
+                cached_at, cached_ids = cached
+                if (time.time() - cached_at) < self._connection_scope_ttl_seconds:
+                    return resolved | set(cached_ids)
+
+        equivalents: set[str] = set()
+        if self.config.database.url and self._same_database_url(
+            str(self.config.database.url), database_url
+        ):
+            equivalents.add(ENV_DATABASE_CONNECTION_ID)
+
+        system_database_url = (
+            str(self.config.system_database.url)
+            if self.config.system_database.url
+            else None
+        )
+        if system_database_url:
+            manager = DatabaseConnectionManager(system_database_url=system_database_url)
+            try:
+                await manager.initialize()
+                for connection in await manager.list_connections():
+                    if self._same_database_url(
+                        connection.database_url.get_secret_value(),
+                        database_url,
+                    ):
+                        equivalents.add(str(connection.connection_id))
+            except Exception as exc:
+                logger.debug(
+                    "Failed to resolve equivalent connection IDs for datapoint scoping: %s",
+                    exc,
+                )
+            finally:
+                try:
+                    await manager.close()
+                except Exception:
+                    pass
+
+        if cache_key and equivalents:
+            self._connection_scope_cache[cache_key] = (time.time(), equivalents)
+
+        return resolved | equivalents
+
+    @staticmethod
+    def _database_identity(database_url: str | None) -> str | None:
+        if not database_url:
+            return None
+        normalized = database_url.replace("postgresql+asyncpg://", "postgresql://").strip()
+        if not normalized:
+            return None
+        parsed = urlparse(normalized)
+        if not parsed.scheme or not parsed.hostname:
+            return normalized.lower()
+        scheme = parsed.scheme.split("+", 1)[0].lower()
+        host = (parsed.hostname or "").lower()
+        default_ports = {"postgresql": 5432, "postgres": 5432, "mysql": 3306, "clickhouse": 8123}
+        port = parsed.port or default_ports.get(scheme)
+        username = parsed.username or ""
+        database = parsed.path.lstrip("/")
+        return f"{scheme}://{username}@{host}:{port}/{database}"
+
+    def _same_database_url(self, left: str | None, right: str | None) -> bool:
+        return self._database_identity(left) == self._database_identity(right)
 
     async def _run_context_answer(self, state: PipelineState) -> PipelineState:
         """Run ContextAnswerAgent."""
@@ -1141,6 +1239,17 @@ class DataChatPipeline:
 
             output = await self.sql.execute(input_data)
 
+            elapsed = (time.time() - start_time) * 1000
+            state["agent_timings"]["sql"] = elapsed
+            state["total_latency_ms"] += elapsed
+            state["llm_calls"] += output.metadata.llm_calls
+            state["sql_formatter_fallback_calls"] = int(
+                (output.data or {}).get("formatter_fallback_calls", 0)
+            )
+            state["sql_formatter_fallback_successes"] = int(
+                (output.data or {}).get("formatter_fallback_successes", 0)
+            )
+
             if output.needs_clarification:
                 questions = output.generated_sql.clarifying_questions or []
                 if not questions:
@@ -1181,18 +1290,6 @@ class DataChatPipeline:
                 getattr(output.generated_sql, "used_datapoint_ids", []),
             )
             state["assumptions"] = output.generated_sql.assumptions
-            state["sql_formatter_fallback_calls"] = int(
-                (output.data or {}).get("formatter_fallback_calls", 0)
-            )
-            state["sql_formatter_fallback_successes"] = int(
-                (output.data or {}).get("formatter_fallback_successes", 0)
-            )
-
-            # Update metadata
-            elapsed = (time.time() - start_time) * 1000
-            state["agent_timings"]["sql"] = elapsed
-            state["total_latency_ms"] += elapsed
-            state["llm_calls"] += output.metadata.llm_calls
 
             retry_info = (
                 f" (retry {state.get('retry_count', 0)})" if state.get("retry_count", 0) > 0 else ""

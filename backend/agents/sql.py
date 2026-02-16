@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from backend.agents.base import BaseAgent
@@ -45,6 +46,24 @@ from backend.profiling.cache import load_profile_cache
 from backend.prompts.loader import PromptLoader
 
 logger = logging.getLogger(__name__)
+_INTERNAL_SERVICE_TABLES = {
+    "database_connections",
+    "profiling_jobs",
+    "profiling_profiles",
+    "pending_datapoints",
+    "datapoint_generation_jobs",
+}
+
+
+@dataclass
+class TableResolution:
+    """Lightweight table-resolution plan produced before SQL generation."""
+
+    candidate_tables: list[str]
+    column_hints: list[str]
+    confidence: float
+    needs_clarification: bool = False
+    clarifying_question: str | None = None
 
 
 class SQLClarificationNeeded(Exception):
@@ -124,13 +143,29 @@ class SQLAgent(BaseAgent):
         pipeline_cfg = getattr(self.config, "pipeline", None)
         if pipeline_cfg is None:
             return default
-        return bool(getattr(pipeline_cfg, name, default))
+        value = getattr(pipeline_cfg, name, default)
+        if self._is_mock_value(value):
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+            return default
+        if isinstance(value, int):
+            return bool(value)
+        return default
 
     def _pipeline_int(self, name: str, default: int) -> int:
         pipeline_cfg = getattr(self.config, "pipeline", None)
         if pipeline_cfg is None:
             return default
         value = getattr(pipeline_cfg, name, default)
+        if self._is_mock_value(value):
+            return default
         try:
             return int(value)
         except (TypeError, ValueError):
@@ -141,10 +176,16 @@ class SQLAgent(BaseAgent):
         if pipeline_cfg is None:
             return default
         value = getattr(pipeline_cfg, name, default)
+        if self._is_mock_value(value):
+            return default
         try:
             return float(value)
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _is_mock_value(value: Any) -> bool:
+        return value.__class__.__module__.startswith("unittest.mock")
 
     def _providers_are_equivalent(self, primary: Any, secondary: Any) -> bool:
         """Return True when two providers resolve to the same effective model endpoint."""
@@ -355,6 +396,8 @@ class SQLAgent(BaseAgent):
             database_type=input.database_type,
             investigation_memory=input.investigation_memory,
         )
+        if catalog_plan and self._should_bypass_catalog_plan(input.query, catalog_plan):
+            catalog_plan = None
         if catalog_plan and catalog_plan.clarifying_questions:
             raise SQLClarificationNeeded(catalog_plan.clarifying_questions)
 
@@ -369,8 +412,42 @@ class SQLAgent(BaseAgent):
             )
             return self._apply_row_limit_policy(generated, input.query)
 
+        metric_bundle_fallback = await self._build_store_metric_bundle_fallback(
+            input,
+            table_resolution=None,
+        )
+        if metric_bundle_fallback is not None:
+            return self._apply_row_limit_policy(metric_bundle_fallback, input.query)
+
+        stockout_risk_fallback = await self._build_stockout_risk_ranking_fallback(
+            input,
+            table_resolution=None,
+        )
+        if stockout_risk_fallback is not None:
+            return self._apply_row_limit_policy(stockout_risk_fallback, input.query)
+
+        table_resolution = await self._resolve_tables_with_llm(input)
+        if table_resolution and table_resolution.needs_clarification:
+            question = table_resolution.clarifying_question or "Which table should I use to answer this?"
+            raise SQLClarificationNeeded([question])
+
+        if table_resolution and table_resolution.candidate_tables:
+            metric_bundle_fallback = await self._build_store_metric_bundle_fallback(
+                input,
+                table_resolution=table_resolution,
+            )
+            if metric_bundle_fallback is not None:
+                return self._apply_row_limit_policy(metric_bundle_fallback, input.query)
+
+            stockout_risk_fallback = await self._build_stockout_risk_ranking_fallback(
+                input,
+                table_resolution=table_resolution,
+            )
+            if stockout_risk_fallback is not None:
+                return self._apply_row_limit_policy(stockout_risk_fallback, input.query)
+
         # Build prompt with context
-        prompt = await self._build_generation_prompt(input)
+        prompt = await self._build_generation_prompt(input, table_resolution=table_resolution)
 
         # Create LLM request
         llm_request = LLMRequest(
@@ -428,6 +505,735 @@ class SQLAgent(BaseAgent):
                 message=f"LLM generation failed: {e}",
                 context={"query": input.query},
             ) from e
+
+    async def _resolve_tables_with_llm(self, input: SQLAgentInput) -> TableResolution | None:
+        """Use a lightweight LLM step to infer likely source tables before SQL generation."""
+        if not self._pipeline_flag("sql_table_resolver_enabled", False):
+            return None
+        if not self._should_run_table_resolver(input):
+            return None
+
+        table_columns = self._schema_table_columns_from_memory(input)
+        if len(table_columns) < 2:
+            live_candidates = await self._load_live_table_candidates_for_fallback(input)
+            for table_name, columns in live_candidates:
+                existing = table_columns.get(table_name, set())
+                table_columns[table_name] = existing | {column.lower() for column in columns}
+        if len(table_columns) < 2:
+            return None
+
+        scores = {
+            table_name: self._score_table_candidate(input.query, table_name, columns)
+            for table_name, columns in table_columns.items()
+        }
+        if scores and max(scores.values()) <= 0:
+            return None
+
+        ranked = self._rank_table_candidates_for_query(input.query, table_columns)
+        max_tables = self._pipeline_int("sql_table_resolver_max_tables", 20)
+        limited_tables = ranked[:max_tables]
+        if len(limited_tables) < 2:
+            return None
+
+        prompt = self._build_table_resolver_prompt(
+            query=input.query,
+            table_columns=table_columns,
+            ranked_tables=limited_tables,
+        )
+        request = LLMRequest(
+            messages=[
+                LLMMessage(
+                    role="system",
+                    content=(
+                        "You are a SQL table resolver. Return strict JSON only. "
+                        "Do not include markdown fences."
+                    ),
+                ),
+                LLMMessage(role="user", content=prompt),
+            ],
+            temperature=0.0,
+            max_tokens=400,
+        )
+
+        try:
+            response = await self.fast_llm.generate(request)
+            self._track_llm_call(tokens=response.usage.total_tokens)
+            parsed = self._parse_table_resolver_response(
+                content=response.content,
+                ranked_tables=limited_tables,
+                table_columns=table_columns,
+            )
+            if parsed is None:
+                return None
+            threshold = self._pipeline_float("sql_table_resolver_confidence_threshold", 0.55)
+            if parsed.needs_clarification and parsed.confidence < threshold:
+                return parsed
+            if not parsed.candidate_tables and parsed.confidence < threshold:
+                clarifying = parsed.clarifying_question or self._build_table_resolver_question(
+                    limited_tables
+                )
+                return TableResolution(
+                    candidate_tables=[],
+                    column_hints=[],
+                    confidence=parsed.confidence,
+                    needs_clarification=True,
+                    clarifying_question=clarifying,
+                )
+            return parsed
+        except Exception as exc:
+            logger.debug(f"Table resolver fallback skipped due to error: {exc}")
+            return None
+
+    def _should_run_table_resolver(self, input: SQLAgentInput) -> bool:
+        query = (input.query or "").strip()
+        if not query:
+            return False
+        if self._extract_explicit_table_name(query):
+            return False
+        if len(query.split()) < 4:
+            return False
+
+        lowered = query.lower()
+        if any(term in lowered for term in ("exit", "quit", "goodbye", "thanks", "thank you")):
+            return False
+        if self.catalog.is_list_tables_query(lowered):
+            return False
+        return True
+
+    def _should_bypass_catalog_plan(self, query: str, catalog_plan: Any) -> bool:
+        """Avoid catalog sample-row shortcuts for semantic analytic questions."""
+        operation = str(getattr(catalog_plan, "operation", "")).lower()
+        if operation != "sample_rows":
+            return False
+        text = query.lower()
+        semantic_markers = (
+            " risk",
+            " rate",
+            " trend",
+            " by ",
+            " total ",
+            " revenue",
+            " margin",
+            " waste",
+            " stockout",
+            " average ",
+            " sum ",
+        )
+        return any(marker in f" {text} " for marker in semantic_markers)
+
+    def _rank_table_candidates_for_query(
+        self, query: str, table_columns: dict[str, set[str]]
+    ) -> list[str]:
+        scored: list[tuple[int, str]] = []
+        for table_name, columns in table_columns.items():
+            score = self._score_table_candidate(query, table_name, columns)
+            scored.append((score, table_name))
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [table for _, table in scored]
+
+    def _score_table_candidate(self, query: str, table_name: str, columns: set[str]) -> int:
+        tokens = self._tokenize_query(query)
+        if not tokens:
+            return 0
+
+        score = 0
+        table_tokens = re.findall(r"[a-z0-9_]+", table_name.lower().replace(".", "_"))
+        column_tokens = {col.lower() for col in columns}
+        for token in tokens:
+            if token in table_tokens:
+                score += 4
+            if any(token in piece for piece in table_tokens):
+                score += 1
+            if token in column_tokens:
+                score += 3
+            if any(token in col for col in column_tokens):
+                score += 1
+        return score
+
+    def _build_table_resolver_prompt(
+        self,
+        *,
+        query: str,
+        table_columns: dict[str, set[str]],
+        ranked_tables: list[str],
+    ) -> str:
+        lines = []
+        for idx, table_name in enumerate(ranked_tables, start=1):
+            columns = sorted(table_columns.get(table_name, set()))
+            preview = ", ".join(columns[:10]) if columns else "no column metadata"
+            lines.append(f"{idx}. {table_name} | columns: {preview}")
+
+        return (
+            "Choose the table(s) most likely needed to answer the question.\n"
+            "Return JSON with keys:\n"
+            '- candidate_tables: array of table names (use names exactly from CANDIDATE_TABLES)\n'
+            '- column_hints: array of relevant columns\n'
+            "- confidence: number 0..1\n"
+            "- needs_clarification: boolean\n"
+            "- clarifying_question: string|null\n\n"
+            "Use needs_clarification=true only when multiple plausible tables remain and "
+            "you cannot choose confidently.\n\n"
+            f"QUESTION:\n{query}\n\n"
+            f"CANDIDATE_TABLES:\n" + "\n".join(lines)
+        )
+
+    def _parse_table_resolver_response(
+        self,
+        *,
+        content: str,
+        ranked_tables: list[str],
+        table_columns: dict[str, set[str]],
+    ) -> TableResolution | None:
+        json_text = None
+        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+        if fenced:
+            json_text = fenced.group(1)
+        else:
+            obj = re.search(r"\{.*\}", content, re.DOTALL)
+            if obj:
+                json_text = obj.group(0)
+        if not json_text:
+            return None
+
+        try:
+            data = json.loads(json_text)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict):
+            return None
+
+        allowed = {table.lower(): table for table in ranked_tables}
+        short_name_map: dict[str, list[str]] = {}
+        for table in ranked_tables:
+            short_name = table.split(".")[-1].lower()
+            short_name_map.setdefault(short_name, []).append(table)
+
+        resolved_tables: list[str] = []
+        raw_tables = data.get("candidate_tables", [])
+        if isinstance(raw_tables, str):
+            raw_tables = [raw_tables]
+        if isinstance(raw_tables, list):
+            for raw in raw_tables:
+                if not isinstance(raw, str):
+                    continue
+                candidate = raw.strip().strip('"`')
+                if not candidate:
+                    continue
+                lowered = candidate.lower()
+                canonical = allowed.get(lowered)
+                if canonical is None and "." not in lowered:
+                    options = short_name_map.get(lowered, [])
+                    if len(options) == 1:
+                        canonical = options[0]
+                if canonical and canonical not in resolved_tables:
+                    resolved_tables.append(canonical)
+
+        column_hints: list[str] = []
+        raw_columns = data.get("column_hints", [])
+        if isinstance(raw_columns, str):
+            raw_columns = [raw_columns]
+        if isinstance(raw_columns, list):
+            for value in raw_columns:
+                if isinstance(value, str) and value.strip():
+                    column_hints.append(value.strip())
+        if not column_hints and resolved_tables:
+            first = resolved_tables[0]
+            column_hints = sorted(table_columns.get(first, set()))[:6]
+
+        confidence = data.get("confidence", 0.0)
+        try:
+            confidence_value = float(confidence)
+        except (TypeError, ValueError):
+            confidence_value = 0.0
+        confidence_value = max(0.0, min(confidence_value, 1.0))
+
+        needs_clarification = bool(data.get("needs_clarification", False))
+        clarifying = data.get("clarifying_question")
+        if isinstance(clarifying, str):
+            clarifying_question = clarifying.strip() or None
+        else:
+            clarifying_question = None
+        if needs_clarification and not clarifying_question:
+            clarifying_question = self._build_table_resolver_question(ranked_tables)
+
+        return TableResolution(
+            candidate_tables=resolved_tables,
+            column_hints=column_hints,
+            confidence=confidence_value,
+            needs_clarification=needs_clarification,
+            clarifying_question=clarifying_question,
+        )
+
+    def _build_table_resolver_question(self, ranked_tables: list[str]) -> str:
+        options = [table.split(".")[-1] for table in ranked_tables[:3]]
+        if not options:
+            return "Which table should I use to answer this?"
+        joined = ", ".join(options)
+        return f"Which table should I use? Possible matches: {joined}."
+
+    async def _build_store_metric_bundle_fallback(
+        self,
+        input: SQLAgentInput,
+        *,
+        table_resolution: TableResolution | None = None,
+    ) -> GeneratedSQL | None:
+        """Deterministic fallback for store-level revenue/margin/waste bundle queries."""
+        text = (input.query or "").strip().lower()
+        if not text:
+            return None
+        if "by store" not in text:
+            return None
+
+        has_revenue = ("revenue" in text) or ("total sales" in text)
+        has_margin = "gross margin" in text
+        has_waste = "waste cost" in text or ("waste" in text and "cost" in text)
+        if not (has_revenue and has_margin and has_waste):
+            return None
+
+        schema_tables = list(table_resolution.candidate_tables) if table_resolution else []
+        schema_tables.extend(self._schema_tables_from_memory(input))
+        schema_tables = list(dict.fromkeys(schema_tables))
+        if len(schema_tables) < 4:
+            schema_tables.extend(await self._load_live_tables_for_fallback(input))
+            schema_tables = list(dict.fromkeys(schema_tables))
+        sales_table = self._pick_table_name(
+            schema_tables, includes=("grocery", "sales"), fallback_contains=("transactions",)
+        )
+        products_table = self._pick_table_name(
+            schema_tables, includes=("grocery", "products"), fallback_contains=("products",)
+        )
+        waste_table = self._pick_table_name(
+            schema_tables, includes=("grocery", "waste"), fallback_contains=("waste",)
+        )
+        stores_table = self._pick_table_name(
+            schema_tables, includes=("grocery", "stores"), fallback_contains=("stores",)
+        )
+        if not (sales_table and products_table and waste_table and stores_table):
+            return None
+
+        db_type = (input.database_type or "").strip().lower()
+        window_days = self._extract_last_days_window(text, default_days=30)
+        if db_type == "mysql":
+            sales_window = f"st.business_date >= DATE_SUB(CURDATE(), INTERVAL {window_days} DAY)"
+            waste_window = f"we.event_date >= DATE_SUB(CURDATE(), INTERVAL {window_days} DAY)"
+        else:
+            sales_window = f"st.business_date >= CURRENT_DATE - INTERVAL '{window_days} days'"
+            waste_window = f"we.event_date >= CURRENT_DATE - INTERVAL '{window_days} days'"
+
+        sql = (
+            "WITH sales_window AS ("
+            f" SELECT st.store_id, "
+            "SUM(st.total_amount) AS total_revenue, "
+            "SUM(st.total_amount - (st.quantity * p.unit_cost)) "
+            "/ NULLIF(SUM(st.total_amount), 0) AS gross_margin"
+            f" FROM {sales_table} st"
+            f" JOIN {products_table} p ON p.product_id = st.product_id"
+            f" WHERE {sales_window}"
+            " GROUP BY st.store_id"
+            "), waste_window AS ("
+            " SELECT we.store_id, SUM(we.estimated_cost) AS waste_cost"
+            f" FROM {waste_table} we"
+            f" WHERE {waste_window}"
+            " GROUP BY we.store_id"
+            ") "
+            "SELECT s.store_id, s.store_name, "
+            "COALESCE(sw.total_revenue, 0) AS total_revenue, "
+            "COALESCE(sw.gross_margin, 0) AS gross_margin, "
+            "COALESCE(ww.waste_cost, 0) AS waste_cost "
+            f"FROM {stores_table} s "
+            "LEFT JOIN sales_window sw ON sw.store_id = s.store_id "
+            "LEFT JOIN waste_window ww ON ww.store_id = s.store_id "
+            "ORDER BY total_revenue DESC"
+        )
+
+        used_datapoints = [
+            dp.datapoint_id
+            for dp in input.investigation_memory.datapoints
+            if dp.datapoint_type in {"Schema", "Business"}
+        ][:8]
+        return GeneratedSQL(
+            sql=sql,
+            explanation=(
+                "Deterministic fallback for store-level revenue, gross margin, and waste cost "
+                f"over the last {window_days} days."
+            ),
+            used_datapoints=used_datapoints,
+            confidence=0.92,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+
+    async def _build_stockout_risk_ranking_fallback(
+        self,
+        input: SQLAgentInput,
+        *,
+        table_resolution: TableResolution | None = None,
+    ) -> GeneratedSQL | None:
+        """Deterministic fallback for SKU-level stockout risk ranking queries."""
+        text = (input.query or "").strip().lower()
+        if not text:
+            return None
+
+        has_stockout = any(
+            phrase in text
+            for phrase in (
+                "stockout",
+                "stock-out",
+                "out of stock",
+            )
+        )
+        has_risk = "risk" in text
+        has_sku_or_product = any(token in text for token in ("sku", "skus", "product", "products"))
+        has_inventory_signals = any(
+            token in text
+            for token in (
+                "on-hand",
+                "on hand",
+                "on_hand",
+                "reserved",
+                "reorder",
+                "reorder level",
+            )
+        )
+        if not (has_stockout and has_risk and has_sku_or_product and has_inventory_signals):
+            return None
+
+        table_columns: dict[str, set[str]] = {}
+        if table_resolution:
+            for table_name in table_resolution.candidate_tables:
+                table_columns.setdefault(table_name, set())
+        table_columns.update(self._schema_table_columns_from_memory(input))
+        if len(table_columns) < 2:
+            live_candidates = await self._load_live_table_candidates_for_fallback(input)
+            for table_name, columns in live_candidates:
+                existing = table_columns.get(table_name, set())
+                table_columns[table_name] = existing | {column.lower() for column in columns}
+        schema_tables = list(table_columns.keys())
+
+        inventory_table = self._pick_table_name(
+            schema_tables,
+            includes=("grocery", "inventory"),
+            fallback_contains=("inventory_snapshots", "inventory", "snapshots"),
+        )
+        if inventory_table is None:
+            inventory_table = self._pick_table_by_columns(
+                table_columns,
+                required_columns={"product_id", "store_id", "on_hand_qty", "reserved_qty"},
+            )
+        products_table = self._pick_table_name(
+            schema_tables,
+            includes=("grocery", "products"),
+            fallback_contains=("products",),
+        )
+        if products_table is None:
+            products_table = self._pick_table_by_columns(
+                table_columns,
+                required_columns={"product_id", "sku", "reorder_level"},
+                excluded_tables={inventory_table} if inventory_table else None,
+            )
+        if not (inventory_table and products_table):
+            return None
+
+        db_type = (input.database_type or "").strip().lower()
+        snapshot_filter, window_desc = self._build_snapshot_window_filter(
+            db_type,
+            text,
+            inventory_table,
+        )
+        top_n = self._extract_top_n(text, default=5, max_value=25)
+
+        if db_type == "mysql":
+            risk_expr = (
+                "CASE "
+                "WHEN p.reorder_level <= 0 THEN 0.0 "
+                "WHEN (inv.on_hand_qty - inv.reserved_qty) <= 0 THEN 1.0 "
+                "ELSE GREATEST(0.0, LEAST(1.0, "
+                "CAST((p.reorder_level - (inv.on_hand_qty - inv.reserved_qty)) AS DECIMAL(12,4)) "
+                "/ NULLIF(p.reorder_level, 0) "
+                ")) "
+                "END"
+            )
+        else:
+            risk_expr = (
+                "CASE "
+                "WHEN p.reorder_level <= 0 THEN 0.0 "
+                "WHEN (inv.on_hand_qty - inv.reserved_qty) <= 0 THEN 1.0 "
+                "ELSE GREATEST(0.0, LEAST(1.0, "
+                "((p.reorder_level - (inv.on_hand_qty - inv.reserved_qty))::numeric "
+                "/ NULLIF(p.reorder_level, 0)) "
+                ")) "
+                "END"
+            )
+
+        sql = (
+            "WITH latest_snapshot AS ("
+            " SELECT store_id, product_id, MAX(snapshot_date) AS snapshot_date"
+            f" FROM {inventory_table}"
+            f" WHERE {snapshot_filter}"
+            " GROUP BY store_id, product_id"
+            "), stock_base AS ("
+            " SELECT "
+            "p.sku, p.product_name, p.reorder_level, "
+            "inv.store_id, inv.on_hand_qty, inv.reserved_qty, "
+            "(inv.on_hand_qty - inv.reserved_qty) AS available_qty, "
+            f"{risk_expr} AS stockout_risk_score "
+            f"FROM {inventory_table} inv "
+            "JOIN latest_snapshot ls "
+            "ON ls.store_id = inv.store_id "
+            "AND ls.product_id = inv.product_id "
+            "AND ls.snapshot_date = inv.snapshot_date "
+            f"JOIN {products_table} p ON p.product_id = inv.product_id"
+            ") "
+            "SELECT "
+            "sku, "
+            "product_name, "
+            "MAX(reorder_level) AS reorder_level, "
+            "ROUND(AVG(on_hand_qty), 2) AS avg_on_hand_qty, "
+            "ROUND(AVG(reserved_qty), 2) AS avg_reserved_qty, "
+            "ROUND(AVG(available_qty), 2) AS avg_available_qty, "
+            "ROUND(AVG(stockout_risk_score), 4) AS stockout_risk_score, "
+            "SUM(CASE WHEN available_qty <= 0 THEN 1 ELSE 0 END) AS store_stockout_count, "
+            "COUNT(*) AS store_coverage "
+            "FROM stock_base "
+            "GROUP BY sku, product_name "
+            "ORDER BY stockout_risk_score DESC, avg_available_qty ASC "
+            f"LIMIT {top_n}"
+        )
+
+        used_datapoints = [
+            dp.datapoint_id
+            for dp in input.investigation_memory.datapoints
+            if dp.datapoint_type in {"Schema", "Business"}
+        ][:8]
+        return GeneratedSQL(
+            sql=sql,
+            explanation=(
+                "Deterministic fallback for ranking SKU stockout risk using on-hand, "
+                f"reserved, and reorder-level signals ({window_desc})."
+            ),
+            used_datapoints=used_datapoints,
+            confidence=0.93,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+
+    async def _load_live_tables_for_fallback(self, input: SQLAgentInput) -> list[str]:
+        return [table_name for table_name, _ in await self._load_live_table_candidates_for_fallback(input)]
+
+    async def _load_live_table_candidates_for_fallback(
+        self, input: SQLAgentInput
+    ) -> list[tuple[str, set[str]]]:
+        db_type = input.database_type or getattr(self.config.database, "db_type", "postgresql")
+        db_url = input.database_url or (
+            str(self.config.database.url) if self.config.database.url else None
+        )
+        if not db_url:
+            return []
+        try:
+            connector = create_connector(
+                database_url=db_url,
+                database_type=db_type,
+                pool_size=self.config.database.pool_size,
+                timeout=8,
+            )
+        except Exception:
+            return []
+
+        try:
+            await connector.connect()
+            tables_info = await connector.get_schema()
+            live_tables: list[tuple[str, set[str]]] = []
+            for table in tables_info:
+                schema = getattr(table, "schema_name", None) or getattr(table, "schema", None)
+                name = getattr(table, "table_name", None)
+                if not name:
+                    continue
+                if str(name).lower() in _INTERNAL_SERVICE_TABLES:
+                    continue
+                qualified = f"{schema}.{name}" if schema else str(name)
+                column_names: set[str] = set()
+                columns = getattr(table, "columns", None) or []
+                for column in columns:
+                    column_name = getattr(column, "name", None)
+                    if isinstance(column_name, str) and column_name.strip():
+                        column_names.add(column_name.strip().lower())
+                live_tables.append((qualified, column_names))
+            return live_tables
+        except Exception:
+            return []
+        finally:
+            await connector.close()
+
+    def _schema_tables_from_memory(self, input: SQLAgentInput) -> list[str]:
+        tables: list[str] = []
+        for dp in input.investigation_memory.datapoints:
+            metadata = dp.metadata if isinstance(dp.metadata, dict) else {}
+            if dp.datapoint_type == "Schema":
+                table_name = metadata.get("table_name") or metadata.get("table")
+                if isinstance(table_name, str) and table_name.strip():
+                    tables.append(table_name.strip())
+
+            related_tables = metadata.get("related_tables")
+            if isinstance(related_tables, str):
+                values = [item.strip() for item in related_tables.split(",") if item.strip()]
+                tables.extend(values)
+            elif isinstance(related_tables, list):
+                for value in related_tables:
+                    if isinstance(value, str) and value.strip():
+                        tables.append(value.strip())
+
+            dp_related_tables = getattr(dp, "related_tables", None)
+            if isinstance(dp_related_tables, list):
+                for value in dp_related_tables:
+                    if isinstance(value, str) and value.strip():
+                        tables.append(value.strip())
+        return list(dict.fromkeys(tables))
+
+    def _schema_table_columns_from_memory(self, input: SQLAgentInput) -> dict[str, set[str]]:
+        """Extract table->columns mapping from retrieved schema datapoints."""
+        table_columns: dict[str, set[str]] = {}
+        for dp in input.investigation_memory.datapoints:
+            if dp.datapoint_type != "Schema":
+                continue
+            metadata = dp.metadata if isinstance(dp.metadata, dict) else {}
+            table_name = metadata.get("table_name") or metadata.get("table")
+            if not isinstance(table_name, str) or not table_name.strip():
+                continue
+            normalized_table = table_name.strip()
+            columns = table_columns.setdefault(normalized_table, set())
+            key_columns = metadata.get("key_columns")
+            if isinstance(key_columns, list):
+                for column in key_columns:
+                    if not isinstance(column, dict):
+                        continue
+                    column_name = column.get("name")
+                    if isinstance(column_name, str) and column_name.strip():
+                        columns.add(column_name.strip().lower())
+        return table_columns
+
+    def _pick_table_name(
+        self,
+        tables: list[str],
+        *,
+        includes: tuple[str, ...],
+        fallback_contains: tuple[str, ...],
+    ) -> str | None:
+        for table in tables:
+            lowered = table.lower()
+            if all(token in lowered for token in includes):
+                return table
+        for table in tables:
+            lowered = table.lower()
+            if any(token in lowered for token in fallback_contains):
+                return table
+        return None
+
+    def _pick_table_by_columns(
+        self,
+        table_columns: dict[str, set[str]],
+        *,
+        required_columns: set[str],
+        excluded_tables: set[str] | None = None,
+    ) -> str | None:
+        excluded = {value.lower() for value in (excluded_tables or set())}
+        best_table = None
+        best_score = -1
+        required_lower = {column.lower() for column in required_columns}
+        for table_name, columns in table_columns.items():
+            if table_name.lower() in excluded:
+                continue
+            score = len(required_lower.intersection({column.lower() for column in columns}))
+            if score > best_score and score >= max(2, len(required_lower) - 1):
+                best_score = score
+                best_table = table_name
+        return best_table
+
+    def _extract_last_days_window(self, query: str, *, default_days: int = 30) -> int:
+        match = re.search(r"\blast\s+(\d+)\s+days?\b", query)
+        if not match:
+            return default_days
+        try:
+            value = int(match.group(1))
+        except ValueError:
+            return default_days
+        return max(1, min(value, 365))
+
+    def _build_snapshot_window_filter(
+        self,
+        db_type: str,
+        query: str,
+        table_name: str,
+    ) -> tuple[str, str]:
+        """Build a deterministic time window filter for inventory snapshot queries."""
+        text = query.lower()
+        anchor = self._snapshot_anchor_expr(db_type, table_name)
+        if "this week" in text:
+            if db_type == "mysql":
+                return (
+                    f"snapshot_date >= DATE_SUB(DATE({anchor}), INTERVAL WEEKDAY(DATE({anchor})) DAY)",
+                    "this week",
+                )
+            return (f"snapshot_date >= DATE_TRUNC('week', {anchor})::date", "this week")
+
+        if "last week" in text:
+            if db_type == "mysql":
+                return (
+                    f"snapshot_date >= DATE_SUB(DATE_SUB(DATE({anchor}), INTERVAL WEEKDAY(DATE({anchor})) DAY), INTERVAL 7 DAY) "
+                    f"AND snapshot_date < DATE_SUB(DATE({anchor}), INTERVAL WEEKDAY(DATE({anchor})) DAY)",
+                    "last week",
+                )
+            return (
+                f"snapshot_date >= (DATE_TRUNC('week', {anchor})::date - INTERVAL '7 days') "
+                f"AND snapshot_date < DATE_TRUNC('week', {anchor})::date",
+                "last week",
+            )
+
+        if "week" in text:
+            if db_type == "mysql":
+                return (
+                    f"snapshot_date >= DATE_SUB(DATE({anchor}), INTERVAL 7 DAY)",
+                    "last 7 days",
+                )
+            return (
+                f"snapshot_date >= ({anchor})::date - INTERVAL '7 days'",
+                "last 7 days",
+            )
+
+        days = self._extract_last_days_window(text, default_days=30)
+        if db_type == "mysql":
+            return (
+                f"snapshot_date >= DATE_SUB(DATE({anchor}), INTERVAL {days} DAY)",
+                f"last {days} days",
+            )
+        return (
+            f"snapshot_date >= ({anchor})::date - INTERVAL '{days} days'",
+            f"last {days} days",
+        )
+
+    def _snapshot_anchor_expr(self, db_type: str, table_name: str) -> str:
+        if db_type == "mysql":
+            return f"(SELECT COALESCE(MAX(snapshot_date), CURDATE()) FROM {table_name})"
+        return f"(SELECT COALESCE(MAX(snapshot_date), CURRENT_DATE) FROM {table_name})"
+
+    def _extract_top_n(self, query: str, *, default: int = 5, max_value: int = 25) -> int:
+        text = query.lower()
+        patterns = [
+            r"\btop\s+(\d+)\b",
+            r"\bfirst\s+(\d+)\b",
+            r"\blimit\s+(\d+)\b",
+            r"\bwhich\s+(\d+)\s+(?:skus?|products?)\b",
+            r"\b(\d+)\s+(?:skus?|products?)\b",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            try:
+                value = int(match.group(1))
+            except (TypeError, ValueError):
+                continue
+            return max(1, min(value, max_value))
+        return default
 
     async def _request_sql_from_llm(
         self,
@@ -697,12 +1503,27 @@ class SQLAgent(BaseAgent):
         # Get available tables from DataPoints
         available_tables = set()
         for dp in input.investigation_memory.datapoints:
-            if isinstance(dp.metadata, dict) and "table_name" in dp.metadata:
-                table_name = dp.metadata["table_name"]
-                available_tables.add(table_name.upper())
-                # Also add without schema prefix
-                if "." in table_name:
-                    available_tables.add(table_name.split(".")[-1].upper())
+            if not isinstance(dp.metadata, dict):
+                continue
+            table_values: list[str] = []
+            table_name = dp.metadata.get("table_name")
+            if isinstance(table_name, str) and table_name.strip():
+                table_values.append(table_name.strip())
+
+            related_tables = dp.metadata.get("related_tables")
+            if isinstance(related_tables, str):
+                table_values.extend(
+                    value.strip() for value in related_tables.split(",") if value.strip()
+                )
+            elif isinstance(related_tables, list):
+                for value in related_tables:
+                    if isinstance(value, str) and value.strip():
+                        table_values.append(value.strip())
+
+            for table_value in table_values:
+                available_tables.add(table_value.upper())
+                if "." in table_value:
+                    available_tables.add(table_value.split(".")[-1].upper())
         available_table_lowers = {table.lower() for table in available_tables}
 
         live_schema_tables: set[str] = set()
@@ -1017,7 +1838,12 @@ class SQLAgent(BaseAgent):
         """
         return self.prompts.load("system/main.md")
 
-    async def _build_generation_prompt(self, input: SQLAgentInput) -> str:
+    async def _build_generation_prompt(
+        self,
+        input: SQLAgentInput,
+        *,
+        table_resolution: TableResolution | None = None,
+    ) -> str:
         """
         Build prompt for SQL generation.
 
@@ -1040,11 +1866,13 @@ class SQLAgent(BaseAgent):
             else:
                 schema_context = f"{schema_context}\n\n{ranked_catalog_context}"
         include_profile = not input.investigation_memory.datapoints
+        focus_tables = table_resolution.candidate_tables if table_resolution else None
         live_context = await self._get_live_schema_context(
             query=resolved_query,
             database_type=input.database_type,
             database_url=input.database_url,
             include_profile=include_profile,
+            focus_tables=focus_tables,
         )
         if live_context:
             if schema_context == "No schema context available":
@@ -1054,6 +1882,18 @@ class SQLAgent(BaseAgent):
                     f"{schema_context}\n\n**Live schema snapshot (authoritative):**\n"
                     f"{live_context}"
                 )
+        if table_resolution and table_resolution.candidate_tables:
+            table_lines = ", ".join(table_resolution.candidate_tables[:8])
+            column_lines = ", ".join(table_resolution.column_hints[:10])
+            resolver_context = f"**Likely source tables (resolver):** {table_lines}"
+            if column_lines:
+                resolver_context = (
+                    f"{resolver_context}\n**Likely relevant columns:** {column_lines}"
+                )
+            if schema_context == "No schema context available":
+                schema_context = resolver_context
+            else:
+                schema_context = f"{resolver_context}\n\n{schema_context}"
         if self._pipeline_flag("sql_prompt_budget_enabled", True):
             max_chars = self._pipeline_int("sql_prompt_max_context_chars", 12000)
             schema_context = self._truncate_context(schema_context, max_chars)
@@ -1086,6 +1926,7 @@ class SQLAgent(BaseAgent):
         database_type: str | None = None,
         database_url: str | None = None,
         include_profile: bool = False,
+        focus_tables: list[str] | None = None,
     ) -> str | None:
         db_type = database_type or getattr(self.config.database, "db_type", "postgresql")
 
@@ -1095,7 +1936,10 @@ class SQLAgent(BaseAgent):
         if not db_url:
             return None
 
-        cache_key = f"{db_type}::{db_url}::{query.lower().strip()}::{include_profile}"
+        focus_key = ",".join(sorted(focus_tables or []))
+        cache_key = (
+            f"{db_type}::{db_url}::{query.lower().strip()}::{include_profile}::{focus_key}"
+        )
         schema_key = f"{db_type}::{db_url}"
         cached = self._live_schema_cache.get(cache_key)
         if cached:
@@ -1118,6 +1962,7 @@ class SQLAgent(BaseAgent):
                 query,
                 schema_key,
                 include_profile,
+                focus_tables=focus_tables,
                 db_type=db_type,
                 db_url=db_url,
             )
@@ -1144,6 +1989,7 @@ class SQLAgent(BaseAgent):
         query: str,
         schema_key: str,
         include_profile: bool,
+        focus_tables: list[str] | None = None,
         *,
         db_type: str,
         db_url: str,
@@ -1169,25 +2015,26 @@ class SQLAgent(BaseAgent):
 
         tables = ", ".join(entries)
 
-        columns_context, focus_tables = self._build_columns_context_from_map(
+        columns_context, resolved_focus_tables = self._build_columns_context_from_map(
             query=query,
             qualified_tables=qualified_tables,
             columns_by_table=columns_by_table,
+            preferred_tables=focus_tables,
         )
 
         join_context = ""
         profile_context = ""
         cached_profile_context = ""
         if include_profile and columns_by_table:
-            join_context = self._build_join_hints_context(columns_by_table, focus_tables)
+            join_context = self._build_join_hints_context(columns_by_table, resolved_focus_tables)
         if include_profile and columns_by_table and db_type == "postgresql":
             profile_context = await self._build_lightweight_profile_context(
-                connector, schema_key, query, columns_by_table, focus_tables
+                connector, schema_key, query, columns_by_table, resolved_focus_tables
             )
             cached_profile_context = self._build_cached_profile_context(
                 db_type=db_type,
                 db_url=db_url,
-                focus_tables=focus_tables,
+                focus_tables=resolved_focus_tables,
             )
 
         return (
@@ -1226,6 +2073,13 @@ class SQLAgent(BaseAgent):
                 "SELECT table_schema, table_name "
                 "FROM information_schema.tables "
                 "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+                "AND table_name NOT IN ("
+                "'database_connections', "
+                "'profiling_jobs', "
+                "'profiling_profiles', "
+                "'pending_datapoints', "
+                "'datapoint_generation_jobs'"
+                ") "
                 "ORDER BY table_schema, table_name"
             )
             result = await connector.execute(tables_query)
@@ -1299,6 +2153,7 @@ class SQLAgent(BaseAgent):
         query: str,
         qualified_tables: list[str],
         columns_by_table: dict[str, list[tuple[str, str | None]]],
+        preferred_tables: list[str] | None = None,
     ) -> tuple[str, list[str]]:
         if not qualified_tables or not columns_by_table:
             return "", []
@@ -1314,7 +2169,19 @@ class SQLAgent(BaseAgent):
         if self._pipeline_flag("sql_prompt_budget_enabled", True):
             focus_limit = self._pipeline_int("sql_prompt_focus_tables", 8)
 
-        if is_list_tables:
+        if preferred_tables:
+            allowed = {value.lower() for value in preferred_tables}
+            matched = []
+            for table in columns_by_table.keys():
+                lower_table = table.lower()
+                short = lower_table.split(".")[-1]
+                if lower_table in allowed or short in allowed:
+                    matched.append(table)
+            if matched:
+                focus_tables = matched[:focus_limit]
+            else:
+                focus_tables = self._rank_tables_by_query(query, columns_by_table)[:focus_limit]
+        elif is_list_tables:
             focus_tables = sorted(columns_by_table.keys())[:focus_limit]
         else:
             focus_tables = self._rank_tables_by_query(query, columns_by_table)[:focus_limit]

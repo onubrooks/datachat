@@ -287,13 +287,16 @@ export function Message({
     if (!hasTable) {
       return "none";
     }
-    if (numericColumns.length >= 2 && rowCount <= 200) {
-      return "scatter";
-    }
     if (numericColumns.length >= 1 && columnNames.some((col) => isDateLikeColumn(col))) {
       return "line_chart";
     }
-    if (numericColumns.length >= 1 && rowCount <= 20) {
+    if (numericColumns.length >= 1 && nonNumericColumns.length >= 1) {
+      if (rowCount <= 30) {
+        return "bar_chart";
+      }
+      return "table";
+    }
+    if (numericColumns.length >= 1 && rowCount <= 25) {
       return "bar_chart";
     }
     return "table";

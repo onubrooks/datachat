@@ -39,6 +39,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import click
 import httpx
@@ -245,12 +246,33 @@ def _apply_datapoint_scope(
 
 def _default_connection_name(connection_string: str) -> str:
     """Build a stable default registry name from connection URL."""
-    from urllib.parse import urlparse
-
     parsed = urlparse(connection_string)
     host = parsed.hostname or "localhost"
     database = parsed.path.lstrip("/") if parsed.path else "datachat"
     return f"{host}/{database}"
+
+
+def _database_identity(database_url: str | None) -> str | None:
+    """Normalize a DB URL to a stable identity string for matching."""
+    if not database_url:
+        return None
+    normalized = database_url.replace("postgresql+asyncpg://", "postgresql://").strip()
+    if not normalized:
+        return None
+    parsed = urlparse(normalized)
+    if not parsed.scheme or not parsed.hostname:
+        return normalized.lower()
+    scheme = parsed.scheme.split("+", 1)[0].lower()
+    host = (parsed.hostname or "").lower()
+    default_ports = {"postgresql": 5432, "postgres": 5432, "mysql": 3306, "clickhouse": 8123}
+    port = parsed.port or default_ports.get(scheme)
+    username = parsed.username or ""
+    database = parsed.path.lstrip("/")
+    return f"{scheme}://{username}@{host}:{port}/{database}"
+
+
+def _same_database_url(left: str | None, right: str | None) -> bool:
+    return _database_identity(left) == _database_identity(right)
 
 
 async def _register_cli_connection(
@@ -315,6 +337,36 @@ async def _register_cli_connection(
         return (False, f"Registry skipped: {exc}")
     finally:
         await manager.close()
+
+
+async def _resolve_registry_connection_id_for_url(connection_string: str) -> str | None:
+    """Find a registry connection id matching the provided URL."""
+    settings = get_settings()
+    system_db_url, _ = _resolve_system_database_url(settings)
+    if not system_db_url:
+        return None
+
+    manager = DatabaseConnectionManager(system_database_url=system_db_url)
+    try:
+        await manager.initialize()
+        matches = [
+            connection
+            for connection in await manager.list_connections()
+            if _same_database_url(connection.database_url.get_secret_value(), connection_string)
+        ]
+        if not matches:
+            return None
+        default_match = next((item for item in matches if item.is_default), None)
+        selected = default_match or matches[0]
+        return str(selected.connection_id)
+    except Exception:
+        return None
+    finally:
+        try:
+            await manager.close()
+        except Exception:
+            pass
+    return None
 
 
 def _emit_entry_event_cli(
@@ -2015,7 +2067,10 @@ def demo(dataset: str, persona: str, reset: bool, no_workspace: bool):
             raise click.ClickException("No demo DataPoints loaded.")
         _apply_datapoint_scope(
             datapoints,
-            connection_id=ENV_DATABASE_CONNECTION_ID,
+            connection_id=(
+                await _resolve_registry_connection_id_for_url(target_database_url)
+                or ENV_DATABASE_CONNECTION_ID
+            ),
             global_scope=False,
         )
 

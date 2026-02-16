@@ -176,6 +176,523 @@ class TestExecution:
         assert output.metadata.tokens_used == 650
 
     @pytest.mark.asyncio
+    async def test_deterministic_store_metric_bundle_fallback_skips_llm(self, sql_agent):
+        """Store-level revenue+margin+waste bundle should use deterministic SQL fallback."""
+        input_data = SQLAgentInput(
+            query="What is total revenue, gross margin, and waste cost by store for the last 30 days?",
+            investigation_memory=InvestigationMemory(
+                query="metric bundle",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales Transactions",
+                        score=0.9,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_sales_transactions"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_products_001",
+                        datapoint_type="Schema",
+                        name="Products",
+                        score=0.88,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_products"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_waste_events_001",
+                        datapoint_type="Schema",
+                        name="Waste",
+                        score=0.87,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_waste_events"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_stores_001",
+                        datapoint_type="Schema",
+                        name="Stores",
+                        score=0.86,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_stores"},
+                    ),
+                ],
+                total_retrieved=4,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+        )
+
+        output = await sql_agent(input_data)
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "WITH sales_window AS" in output.generated_sql.sql
+        assert "grocery_sales_transactions" in output.generated_sql.sql
+        assert "grocery_waste_events" in output.generated_sql.sql
+        assert sql_agent.llm.generate.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_store_metric_bundle_fallback_uses_business_related_tables(self, sql_agent):
+        """Fallback should still work when some tables are only present via related_tables."""
+        input_data = SQLAgentInput(
+            query="What is total revenue, gross margin, and waste cost by store for the last 30 days?",
+            investigation_memory=InvestigationMemory(
+                query="metric bundle",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales Transactions",
+                        score=0.9,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_sales_transactions"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_waste_events_001",
+                        datapoint_type="Schema",
+                        name="Waste",
+                        score=0.87,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_waste_events"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_stores_001",
+                        datapoint_type="Schema",
+                        name="Stores",
+                        score=0.86,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_stores"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="metric_gross_margin_grocery_001",
+                        datapoint_type="Business",
+                        name="Gross Margin",
+                        score=0.85,
+                        source="vector",
+                        metadata={
+                            "related_tables": [
+                                "public.grocery_sales_transactions",
+                                "public.grocery_products",
+                            ]
+                        },
+                    ),
+                ],
+                total_retrieved=4,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+        )
+
+        output = await sql_agent(input_data)
+        assert output.success is True
+        assert "grocery_products" in output.generated_sql.sql
+
+    @pytest.mark.asyncio
+    async def test_stockout_risk_fallback_skips_llm_for_sku_ranking(self, sql_agent):
+        """SKU stockout risk ranking should use deterministic SQL fallback."""
+        input_data = SQLAgentInput(
+            query=(
+                "Which 5 SKUs have the highest stockout risk this week based on on-hand, "
+                "reserved, and reorder level?"
+            ),
+            investigation_memory=InvestigationMemory(
+                query="stockout risk ranking",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_inventory_snapshots_001",
+                        datapoint_type="Schema",
+                        name="Inventory Snapshots",
+                        score=0.92,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_inventory_snapshots"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_products_001",
+                        datapoint_type="Schema",
+                        name="Products",
+                        score=0.91,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_products"},
+                    ),
+                ],
+                total_retrieved=2,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "WITH latest_snapshot AS" in output.generated_sql.sql
+        assert "grocery_inventory_snapshots" in output.generated_sql.sql
+        assert "grocery_products" in output.generated_sql.sql
+        assert "LIMIT 5" in output.generated_sql.sql
+        assert "stockout_risk_score" in output.generated_sql.sql
+        assert sql_agent.llm.generate.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_stockout_risk_fallback_supports_mysql_window_syntax(self, sql_agent):
+        """Stockout risk fallback should emit MySQL-safe week filtering."""
+        input_data = SQLAgentInput(
+            query="Top 3 products by stockout risk this week using on hand reserved reorder level",
+            investigation_memory=InvestigationMemory(
+                query="stockout risk ranking mysql",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_inventory_snapshots_001",
+                        datapoint_type="Schema",
+                        name="Inventory Snapshots",
+                        score=0.92,
+                        source="vector",
+                        metadata={"table_name": "grocery_inventory_snapshots"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_products_001",
+                        datapoint_type="Schema",
+                        name="Products",
+                        score=0.91,
+                        source="vector",
+                        metadata={"table_name": "grocery_products"},
+                    ),
+                ],
+                total_retrieved=2,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="mysql",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.success is True
+        assert "COALESCE(MAX(snapshot_date), CURDATE())" in output.generated_sql.sql
+        assert "INTERVAL WEEKDAY(DATE(" in output.generated_sql.sql
+        assert "DECIMAL(12,4)" in output.generated_sql.sql
+        assert "LIMIT 3" in output.generated_sql.sql
+        assert sql_agent.llm.generate.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_stockout_risk_fallback_uses_live_schema_when_datapoints_missing(self, sql_agent):
+        """Fallback should still work from live schema names when no DataPoints are loaded."""
+        sql_agent._load_live_tables_for_fallback = AsyncMock(
+            return_value=[
+                "public.grocery_inventory_snapshots",
+                "public.grocery_products",
+            ]
+        )
+        input_data = SQLAgentInput(
+            query=(
+                "Which 5 SKUs have the highest stockout risk this week based on on-hand, "
+                "reserved, and reorder level?"
+            ),
+            investigation_memory=InvestigationMemory(
+                query="stockout risk ranking",
+                datapoints=[],
+                total_retrieved=0,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+            database_url="postgresql://postgres:@localhost:5432/datachat_grocery",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.success is True
+        assert "grocery_inventory_snapshots" in output.generated_sql.sql
+        assert "grocery_products" in output.generated_sql.sql
+        assert "LIMIT 5" in output.generated_sql.sql
+        assert sql_agent.llm.generate.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_stockout_risk_fallback_infers_tables_by_columns_not_names(self, sql_agent):
+        """Fallback should infer candidate tables from columns when names are domain-agnostic."""
+        input_data = SQLAgentInput(
+            query=(
+                "Which 5 SKUs have the highest stockout risk this week based on on-hand, "
+                "reserved, and reorder level?"
+            ),
+            investigation_memory=InvestigationMemory(
+                query="stockout risk ranking",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_inventory_daily_001",
+                        datapoint_type="Schema",
+                        name="Inventory Daily",
+                        score=0.9,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.inventory_daily",
+                            "key_columns": [
+                                {"name": "snapshot_date"},
+                                {"name": "store_id"},
+                                {"name": "product_id"},
+                                {"name": "on_hand_qty"},
+                                {"name": "reserved_qty"},
+                            ],
+                        },
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_product_catalog_001",
+                        datapoint_type="Schema",
+                        name="Product Catalog",
+                        score=0.88,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.product_catalog",
+                            "key_columns": [
+                                {"name": "product_id"},
+                                {"name": "sku"},
+                                {"name": "product_name"},
+                                {"name": "reorder_level"},
+                            ],
+                        },
+                    ),
+                ],
+                total_retrieved=2,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.success is True
+        assert "FROM public.inventory_daily" in output.generated_sql.sql
+        assert "JOIN public.product_catalog" in output.generated_sql.sql
+        assert output.needs_clarification is False
+        assert sql_agent.llm.generate.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_table_resolver_low_confidence_triggers_clarification(self):
+        """LLM table resolver should request clarification when confidence is low."""
+        resolver_response = LLMResponse(
+            content=json.dumps(
+                {
+                    "candidate_tables": ["public.grocery_sales_transactions"],
+                    "column_hints": ["total_amount"],
+                    "confidence": 0.31,
+                    "needs_clarification": True,
+                    "clarifying_question": "Do you want sales transactions or inventory snapshots?",
+                }
+            ),
+            model="gpt-4o-mini",
+            usage=LLMUsage(prompt_tokens=200, completion_tokens=80, total_tokens=280),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        fast_provider = Mock()
+        fast_provider.generate = AsyncMock(return_value=resolver_response)
+        fast_provider.provider = "openai"
+        fast_provider.model = "gpt-4o-mini"
+
+        main_provider = Mock()
+        main_provider.generate = AsyncMock()
+        main_provider.provider = "openai"
+        main_provider.model = "gpt-4o"
+
+        mock_settings = Mock()
+        mock_settings.llm = Mock()
+        mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
+        mock_settings.pipeline = Mock(
+            sql_table_resolver_enabled=True,
+            sql_table_resolver_confidence_threshold=0.55,
+            sql_prompt_budget_enabled=False,
+            schema_snapshot_cache_enabled=False,
+        )
+
+        with (
+            patch("backend.agents.sql.get_settings", return_value=mock_settings),
+            patch(
+                "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+                side_effect=[main_provider, fast_provider],
+            ),
+        ):
+            agent = SQLAgent()
+
+        input_data = SQLAgentInput(
+            query="What is total amount by store for last month",
+            investigation_memory=InvestigationMemory(
+                query="resolver",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales",
+                        score=0.9,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_sales_transactions",
+                            "key_columns": [
+                                {"name": "store_id"},
+                                {"name": "total_amount"},
+                                {"name": "business_date"},
+                            ],
+                        },
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_inventory_snapshots_001",
+                        datapoint_type="Schema",
+                        name="Inventory",
+                        score=0.88,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_inventory_snapshots",
+                            "key_columns": [
+                                {"name": "store_id"},
+                                {"name": "on_hand_qty"},
+                                {"name": "reserved_qty"},
+                            ],
+                        },
+                    ),
+                ],
+                total_retrieved=2,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        output = await agent(input_data)
+        assert output.needs_clarification is True
+        assert (
+            output.generated_sql.clarifying_questions[0]
+            == "Do you want sales transactions or inventory snapshots?"
+        )
+        assert fast_provider.generate.await_count == 1
+        assert main_provider.generate.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_table_resolver_candidates_are_injected_into_sql_prompt(self):
+        """Resolver-selected tables should be injected into SQL generation context."""
+        resolver_response = LLMResponse(
+            content=json.dumps(
+                {
+                    "candidate_tables": [
+                        "public.grocery_sales_transactions",
+                        "public.grocery_stores",
+                    ],
+                    "column_hints": ["total_amount", "store_id", "business_date"],
+                    "confidence": 0.84,
+                    "needs_clarification": False,
+                    "clarifying_question": None,
+                }
+            ),
+            model="gpt-4o-mini",
+            usage=LLMUsage(prompt_tokens=220, completion_tokens=90, total_tokens=310),
+            finish_reason="stop",
+            provider="openai",
+        )
+        sql_response = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT s.store_name, SUM(t.total_amount) AS total_revenue "
+                        "FROM public.grocery_sales_transactions t "
+                        "JOIN public.grocery_stores s ON s.store_id = t.store_id "
+                        "GROUP BY s.store_name ORDER BY total_revenue DESC"
+                    ),
+                    "explanation": "Revenue by store",
+                    "used_datapoints": [],
+                    "confidence": 0.9,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=600, completion_tokens=180, total_tokens=780),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        fast_provider = Mock()
+        fast_provider.generate = AsyncMock(return_value=resolver_response)
+        fast_provider.provider = "openai"
+        fast_provider.model = "gpt-4o-mini"
+
+        main_provider = Mock()
+        main_provider.generate = AsyncMock(return_value=sql_response)
+        main_provider.provider = "openai"
+        main_provider.model = "gpt-4o"
+
+        mock_settings = Mock()
+        mock_settings.llm = Mock()
+        mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
+        mock_settings.pipeline = Mock(
+            sql_table_resolver_enabled=True,
+            sql_table_resolver_confidence_threshold=0.55,
+            sql_prompt_budget_enabled=False,
+            schema_snapshot_cache_enabled=False,
+            sql_two_stage_enabled=False,
+        )
+
+        with (
+            patch("backend.agents.sql.get_settings", return_value=mock_settings),
+            patch(
+                "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+                side_effect=[main_provider, fast_provider],
+            ),
+        ):
+            agent = SQLAgent()
+
+        input_data = SQLAgentInput(
+            query="What is total revenue by store?",
+            investigation_memory=InvestigationMemory(
+                query="resolver",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales",
+                        score=0.9,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_sales_transactions",
+                            "key_columns": [
+                                {"name": "store_id"},
+                                {"name": "total_amount"},
+                                {"name": "business_date"},
+                            ],
+                        },
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_stores_001",
+                        datapoint_type="Schema",
+                        name="Stores",
+                        score=0.88,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_stores",
+                            "key_columns": [
+                                {"name": "store_id"},
+                                {"name": "store_name"},
+                            ],
+                        },
+                    ),
+                ],
+                total_retrieved=2,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        output = await agent(input_data)
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "grocery_sales_transactions" in output.generated_sql.sql
+        assert fast_provider.generate.await_count == 1
+        assert main_provider.generate.await_count == 1
+
+        call_args = main_provider.generate.await_args[0][0]
+        assert "Likely source tables (resolver)" in call_args.messages[1].content
+        assert "public.grocery_stores" in call_args.messages[1].content
+
+    @pytest.mark.asyncio
     async def test_two_stage_sql_accepts_fast_model_when_confident(
         self, sample_sql_agent_input, sample_valid_llm_response
     ):

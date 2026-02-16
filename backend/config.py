@@ -455,6 +455,25 @@ class PipelineSettings(BaseSettings):
             "a clarification round."
         ),
     )
+    sql_table_resolver_enabled: bool = Field(
+        default=True,
+        description=(
+            "Use a lightweight LLM table resolver to pick likely source tables "
+            "before SQL generation."
+        ),
+    )
+    sql_table_resolver_confidence_threshold: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description="Confidence threshold below which SQL resolver asks clarification.",
+    )
+    sql_table_resolver_max_tables: int = Field(
+        default=20,
+        ge=5,
+        le=80,
+        description="Maximum candidate tables sent to SQL resolver prompt.",
+    )
     ambiguous_query_max_tokens: int = Field(
         default=3,
         ge=1,

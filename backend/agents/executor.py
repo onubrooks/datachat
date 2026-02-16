@@ -762,13 +762,19 @@ class ExecutorAgent(BaseAgent):
         num_cols = len(query_result.columns)
         num_rows = query_result.row_count
         sample_rows = query_result.rows[: min(len(query_result.rows), 50)]
+        column_names = list(query_result.columns)
         numeric_col_count = sum(
             1
-            for col in query_result.columns
+            for col in column_names
             if any(self._is_numeric_value(row.get(col)) for row in sample_rows)
         )
+        temporal_columns = [
+            col for col in column_names if self._is_temporal_column(col, sample_rows)
+        ]
+        temporal_col_count = len(temporal_columns)
+        categorical_col_count = max(0, num_cols - numeric_col_count - temporal_col_count)
         has_time_dimension = any(
-            self._is_temporal_column(col, sample_rows) for col in query_result.columns
+            self._is_temporal_column(col, sample_rows) for col in column_names
         )
 
         # Single value
@@ -790,6 +796,7 @@ class ExecutorAgent(BaseAgent):
             and num_rows >= 2
             and num_rows <= 12
             and numeric_col_count >= 1
+            and self._all_numeric_values_positive(query_result, sample_rows)
         ):
             return "pie_chart"
         if requested_hint == "scatter" and num_cols >= 2 and num_rows >= 2 and numeric_col_count >= 2:
@@ -797,27 +804,71 @@ class ExecutorAgent(BaseAgent):
         if requested_hint == "line_chart" and num_cols >= 2 and num_rows >= 2 and numeric_col_count >= 1:
             return "bar_chart"
 
-        # Time series detection (prioritize over other 2-column logic)
-        if has_time_dimension and num_cols >= 2 and numeric_col_count >= 1:
+        # Time series detection (prioritize over generic category logic)
+        if has_time_dimension and numeric_col_count >= 1 and num_rows >= 2:
             return "line_chart"
 
-        # Two columns - likely category + value
-        if num_cols == 2:
-            if num_rows <= 10:
+        # Category + metric distributions
+        if categorical_col_count >= 1 and numeric_col_count >= 1:
+            if (
+                self._looks_like_share_distribution_query(original_query)
+                and num_rows <= 8
+                and self._all_numeric_values_positive(query_result, sample_rows)
+            ):
+                return "pie_chart"
+            if num_rows <= 30:
                 return "bar_chart"
-            elif num_rows <= 20:
-                return "line_chart"
-            else:
-                return "table"
+            return "table"
 
-        # Multiple columns - scatter or table
-        if num_cols >= 3:
-            if num_rows <= 100 and numeric_col_count >= 2:
+        # Numeric pair analysis only when explicitly requested.
+        if numeric_col_count >= 2 and num_rows <= 120:
+            if requested_hint == "scatter" or self._looks_like_scatter_query(original_query):
                 return "scatter"
+            if num_rows <= 25:
+                return "bar_chart"
+            return "table"
+
+        if numeric_col_count >= 1:
+            if num_rows <= 25:
+                return "bar_chart"
             return "table"
 
         # Default
         return "table"
+
+    def _all_numeric_values_positive(
+        self, query_result: QueryResult, sample_rows: list[dict[str, Any]]
+    ) -> bool:
+        numeric_columns = [
+            col
+            for col in query_result.columns
+            if any(self._is_numeric_value(row.get(col)) for row in sample_rows)
+        ]
+        if not numeric_columns:
+            return False
+        for row in sample_rows:
+            for col in numeric_columns:
+                value = row.get(col)
+                if self._is_numeric_value(value) and float(value) < 0:
+                    return False
+        return True
+
+    def _looks_like_share_distribution_query(self, query: str | None) -> bool:
+        text = (query or "").lower()
+        if not text:
+            return False
+        return bool(
+            re.search(
+                r"\b(share|distribution|breakdown|composition|contribution|percent|percentage|proportion)\b",
+                text,
+            )
+        )
+
+    def _looks_like_scatter_query(self, query: str | None) -> bool:
+        text = (query or "").lower()
+        if not text:
+            return False
+        return bool(re.search(r"\b(scatter|correlation|relationship|regression)\b", text))
 
     def _requested_visualization_hint(self, query: str | None) -> str | None:
         """Infer user visualization preference from query text."""

@@ -10,7 +10,7 @@ Tests pipeline execution including:
 - State management
 """
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -334,6 +334,60 @@ class TestPipelineExecution:
             "dp_fintech",
             "dp_global",
         ]
+
+    def test_filter_datapoints_by_target_connection_accepts_equivalent_connection_ids(self, pipeline):
+        datapoints = [
+            {
+                "datapoint_id": "dp_env",
+                "metadata": {"connection_id": "00000000-0000-0000-0000-00000000dada"},
+            },
+            {
+                "datapoint_id": "dp_other",
+                "metadata": {"connection_id": "conn-grocery"},
+            },
+        ]
+
+        filtered = pipeline._filter_datapoints_by_target_connection(
+            datapoints,
+            target_connection_id="conn-managed",
+            target_connection_ids={
+                "conn-managed",
+                "00000000-0000-0000-0000-00000000dada",
+                "conn-grocery",
+            },
+        )
+
+        assert [item["datapoint_id"] for item in filtered] == ["dp_env", "dp_other"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_equivalent_connection_ids_includes_registry_and_env_matches(self, pipeline):
+        matching = MagicMock()
+        matching.connection_id = "conn-matching"
+        matching.database_url.get_secret_value.return_value = (
+            "postgresql://postgres:@localhost:5432/postgres"
+        )
+        other = MagicMock()
+        other.connection_id = "conn-other"
+        other.database_url.get_secret_value.return_value = (
+            "postgresql://postgres:@localhost:5432/otherdb"
+        )
+        manager = AsyncMock()
+        manager.list_connections.return_value = [other, matching]
+
+        pipeline.config.database.url = "postgresql://postgres:@localhost:5432/postgres"
+        pipeline.config.system_database.url = "postgresql://system:pass@localhost:5432/systemdb"
+
+        with patch("backend.pipeline.orchestrator.DatabaseConnectionManager", return_value=manager):
+            connection_ids = await pipeline._resolve_equivalent_connection_ids(
+                target_connection_id="conn-target",
+                database_url="postgresql://postgres@localhost/postgres",
+            )
+
+        assert connection_ids == {
+            "conn-target",
+            "conn-matching",
+            "00000000-0000-0000-0000-00000000dada",
+        }
 
     @pytest.mark.asyncio
     async def test_pipeline_tracks_metadata(self, mock_agents):
@@ -1248,6 +1302,54 @@ class TestIntentGate:
         assert "revenue" in result.get("clarifying_questions", [""])[0].lower()
         assert pipeline.validator.execute.call_count == 0
         assert pipeline.executor.execute.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_sql_clarification_path_records_sql_timing_and_formatter_metrics(self, pipeline):
+        pipeline.sql.execute = AsyncMock(
+            return_value=SQLAgentOutput(
+                success=True,
+                generated_sql=GeneratedSQL(
+                    sql="SELECT 1",
+                    explanation="Clarification required",
+                    confidence=0.0,
+                    used_datapoints=[],
+                    assumptions=[],
+                    clarifying_questions=["Which table should I use?"],
+                ),
+                metadata=AgentMetadata(agent_name="SQLAgent", llm_calls=2),
+                data={"formatter_fallback_calls": 1, "formatter_fallback_successes": 0},
+                needs_clarification=True,
+            )
+        )
+
+        state = pipeline._build_initial_state(
+            query="show me revenue",
+            conversation_history=[],
+            session_summary=None,
+            session_state=None,
+            database_type="postgresql",
+            database_url=None,
+            target_connection_id=None,
+            synthesize_simple_sql=None,
+            correlation_prefix="test",
+        )
+        state["retrieved_datapoints"] = []
+        state["investigation_memory"] = {
+            "query": "show me revenue",
+            "datapoints": [],
+            "total_retrieved": 0,
+            "retrieval_mode": "hybrid",
+            "sources_used": [],
+        }
+
+        result = await pipeline._run_sql(state)
+
+        assert result["clarification_needed"] is True
+        assert result["clarifying_questions"] == ["Which table should I use?"]
+        assert result["agent_timings"]["sql"] >= 0
+        assert result["llm_calls"] == 2
+        assert result["sql_formatter_fallback_calls"] == 1
+        assert result["sql_formatter_fallback_successes"] == 0
 
     def test_normalize_answer_metadata_assigns_defaults(self, pipeline):
         state = {

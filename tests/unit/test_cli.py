@@ -15,6 +15,7 @@ from backend.cli import (
     _apply_datapoint_scope,
     _emit_entry_event_cli,
     _register_cli_connection,
+    _resolve_registry_connection_id_for_url,
     _resolve_target_database_url,
     _should_exit_chat,
     _split_sql_statements,
@@ -496,6 +497,40 @@ class TestConnectCommand:
 
         assert registered is True
         manager.update_connection.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_resolve_registry_connection_id_for_url(self):
+        """Should resolve matching registry connection by normalized URL identity."""
+        matching = MagicMock()
+        matching.connection_id = "conn-123"
+        matching.is_default = False
+        matching.database_url.get_secret_value.return_value = (
+            "postgresql://user:other@localhost/testdb"
+        )
+        matching_default = MagicMock()
+        matching_default.connection_id = "conn-222"
+        matching_default.is_default = True
+        matching_default.database_url.get_secret_value.return_value = (
+            "postgresql://user:pass@localhost:5432/testdb"
+        )
+        other = MagicMock()
+        other.connection_id = "conn-999"
+        other.is_default = False
+        other.database_url.get_secret_value.return_value = (
+            "postgresql://user:pass@localhost:5432/otherdb"
+        )
+        manager = AsyncMock()
+        manager.list_connections.return_value = [other, matching, matching_default]
+
+        with (
+            patch("backend.cli._resolve_system_database_url", return_value=("postgresql://system", "settings")),
+            patch("backend.cli.DatabaseConnectionManager", return_value=manager),
+        ):
+            resolved = await _resolve_registry_connection_id_for_url(
+                "postgresql://user:pass@localhost:5432/testdb"
+            )
+
+        assert resolved == "conn-222"
 
 
 class TestAskCommand:

@@ -435,10 +435,10 @@ Insights:
         assert result.executed_query.visualization_hint == "none"
 
     @pytest.mark.asyncio
-    async def test_suggests_scatter_for_multi_column(
+    async def test_suggests_bar_for_multi_column_without_scatter_intent(
         self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
     ):
-        """Test scatter plot suggestion for multi-column data."""
+        """Multi-column metrics default to bar/table unless scatter intent is explicit."""
         multi_col = [
             {"x": 1, "y": 10, "z": 100},
             {"x": 2, "y": 20, "z": 200},
@@ -447,6 +447,31 @@ Insights:
             return_value=ConnectorQueryResult(rows=multi_col, row_count=2, columns=["x", "y", "z"], execution_time_ms=25.0)
         )
         mock_llm_provider.set_response("Answer: Multi-dimensional data.")
+
+        result = await executor_agent.execute(sample_input)
+
+        assert result.executed_query.visualization_hint == "bar_chart"
+
+    @pytest.mark.asyncio
+    async def test_suggests_scatter_when_query_explicitly_requests_it(
+        self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
+    ):
+        """Scatter should be selected only for explicit relationship/correlation asks."""
+        sample_input.query = "Show correlation between x and y as scatter plot"
+        multi_col = [
+            {"x": 1, "y": 10, "z": 100},
+            {"x": 2, "y": 20, "z": 200},
+            {"x": 3, "y": 35, "z": 210},
+        ]
+        mock_postgres_connector.execute = AsyncMock(
+            return_value=ConnectorQueryResult(
+                rows=multi_col,
+                row_count=3,
+                columns=["x", "y", "z"],
+                execution_time_ms=25.0,
+            )
+        )
+        mock_llm_provider.set_response("Answer: Correlation shown.")
 
         result = await executor_agent.execute(sample_input)
 

@@ -74,6 +74,7 @@ export function ChatInterface() {
   const [isBackendReachable, setIsBackendReachable] = useState(false);
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [targetDatabaseId, setTargetDatabaseId] = useState<string | null>(null);
+  const [databaseSelectionReady, setDatabaseSelectionReady] = useState(false);
   const [conversationDatabaseId, setConversationDatabaseId] = useState<string | null>(null);
   const [waitingMode, setWaitingMode] = useState<WaitingUxMode>("animated");
   const [resultLayoutMode, setResultLayoutMode] =
@@ -115,11 +116,13 @@ export function ChatInterface() {
           dbs[0] ||
           null;
         setTargetDatabaseId(selected?.connection_id ?? null);
+        setDatabaseSelectionReady(true);
       })
       .catch((err) => {
         if (!isMounted) return;
         console.error("System status error:", err);
         setIsBackendReachable(false);
+        setDatabaseSelectionReady(true);
       });
     return () => {
       isMounted = false;
@@ -127,12 +130,15 @@ export function ChatInterface() {
   }, []);
 
   useEffect(() => {
+    if (!databaseSelectionReady) {
+      return;
+    }
     if (!targetDatabaseId) {
       window.localStorage.removeItem(ACTIVE_DATABASE_STORAGE_KEY);
       return;
     }
     window.localStorage.setItem(ACTIVE_DATABASE_STORAGE_KEY, targetDatabaseId);
-  }, [targetDatabaseId]);
+  }, [targetDatabaseId, databaseSelectionReady]);
 
   useEffect(() => {
     setWaitingMode(getWaitingUxMode());

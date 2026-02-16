@@ -18,6 +18,13 @@ _CATALOG_TEMPLATES: dict[str, CatalogTemplates] = {
             "SELECT table_schema, table_name "
             "FROM information_schema.tables "
             "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+            "AND table_name NOT IN ("
+            "'database_connections', "
+            "'profiling_jobs', "
+            "'profiling_profiles', "
+            "'pending_datapoints', "
+            "'datapoint_generation_jobs'"
+            ") "
             "ORDER BY table_schema, table_name"
         ),
         list_columns=(
@@ -33,6 +40,13 @@ _CATALOG_TEMPLATES: dict[str, CatalogTemplates] = {
             "SELECT table_schema, table_name "
             "FROM information_schema.tables "
             "WHERE table_schema NOT IN ('mysql', 'performance_schema', 'information_schema', 'sys') "
+            "AND table_name NOT IN ("
+            "'database_connections', "
+            "'profiling_jobs', "
+            "'profiling_profiles', "
+            "'pending_datapoints', "
+            "'datapoint_generation_jobs'"
+            ") "
             "ORDER BY table_schema, table_name"
         ),
         list_columns=(
