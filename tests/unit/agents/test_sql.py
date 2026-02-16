@@ -1002,6 +1002,135 @@ class TestExecution:
         assert "public.grocery_stores" in call_args.messages[1].content
 
     @pytest.mark.asyncio
+    async def test_table_resolver_falls_back_to_ranked_candidates_on_invalid_json(self):
+        """Invalid resolver JSON should fall back to ranked candidates instead of clarifying."""
+        resolver_response = LLMResponse(
+            content="not-json",
+            model="gpt-4o-mini",
+            usage=LLMUsage(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+            finish_reason="stop",
+            provider="openai",
+        )
+        sql_response = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT s.store_name, SUM(t.quantity) AS sold_qty "
+                        "FROM public.grocery_sales_transactions t "
+                        "JOIN public.grocery_inventory_snapshots i ON i.store_id = t.store_id "
+                        "JOIN public.grocery_stores s ON s.store_id = t.store_id "
+                        "GROUP BY s.store_name"
+                    ),
+                    "explanation": "Inventory movement vs sales by store.",
+                    "used_datapoints": [],
+                    "confidence": 0.89,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=520, completion_tokens=140, total_tokens=660),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        fast_provider = Mock()
+        fast_provider.generate = AsyncMock(return_value=resolver_response)
+        fast_provider.provider = "openai"
+        fast_provider.model = "gpt-4o-mini"
+
+        main_provider = Mock()
+        main_provider.generate = AsyncMock(return_value=sql_response)
+        main_provider.provider = "openai"
+        main_provider.model = "gpt-4o"
+
+        mock_settings = Mock()
+        mock_settings.llm = Mock()
+        mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
+        mock_settings.pipeline = Mock(
+            sql_table_resolver_enabled=True,
+            sql_table_resolver_confidence_threshold=0.55,
+            sql_prompt_budget_enabled=False,
+            schema_snapshot_cache_enabled=False,
+            sql_two_stage_enabled=False,
+            sql_table_resolver_ranked_min_score=2,
+            sql_table_resolver_ranked_max_tables=3,
+        )
+
+        with (
+            patch("backend.agents.sql.get_settings", return_value=mock_settings),
+            patch(
+                "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+                side_effect=[main_provider, fast_provider],
+            ),
+        ):
+            agent = SQLAgent()
+
+        input_data = SQLAgentInput(
+            query="Which stores have the largest gap between inventory movement and recorded sales?",
+            investigation_memory=InvestigationMemory(
+                query="resolver",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales",
+                        score=0.9,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_sales_transactions",
+                            "key_columns": [
+                                {"name": "store_id"},
+                                {"name": "product_id"},
+                                {"name": "quantity"},
+                                {"name": "business_date"},
+                            ],
+                        },
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_inventory_snapshots_001",
+                        datapoint_type="Schema",
+                        name="Inventory Snapshots",
+                        score=0.89,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_inventory_snapshots",
+                            "key_columns": [
+                                {"name": "store_id"},
+                                {"name": "product_id"},
+                                {"name": "snapshot_date"},
+                                {"name": "on_hand_qty"},
+                            ],
+                        },
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_stores_001",
+                        datapoint_type="Schema",
+                        name="Stores",
+                        score=0.88,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_stores",
+                            "key_columns": [{"name": "store_id"}, {"name": "store_name"}],
+                        },
+                    ),
+                ],
+                total_retrieved=3,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        output = await agent(input_data)
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "grocery_sales_transactions" in output.generated_sql.sql
+        assert "grocery_inventory_snapshots" in output.generated_sql.sql
+        assert fast_provider.generate.await_count == 1
+        assert main_provider.generate.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_table_resolver_uses_candidates_when_clarification_flagged_but_confident(self):
         """When candidates are clear and confidence is high, proceed without clarification."""
         resolver_response = LLMResponse(

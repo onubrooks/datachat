@@ -585,9 +585,22 @@ class SQLAgent(BaseAgent):
                 table_columns=table_columns,
             )
             if parsed is None:
-                return None
+                return self._build_ranked_table_resolution_fallback(
+                    query=input.query,
+                    ranked_tables=limited_tables,
+                    table_columns=table_columns,
+                    scores=scores,
+                )
             threshold = self._pipeline_float("sql_table_resolver_confidence_threshold", 0.55)
             if parsed.needs_clarification and parsed.confidence < threshold:
+                ranked_fallback = self._build_ranked_table_resolution_fallback(
+                    query=input.query,
+                    ranked_tables=limited_tables,
+                    table_columns=table_columns,
+                    scores=scores,
+                )
+                if ranked_fallback is not None:
+                    return ranked_fallback
                 return parsed
             if parsed.needs_clarification and parsed.candidate_tables and parsed.confidence >= threshold:
                 return TableResolution(
@@ -611,7 +624,60 @@ class SQLAgent(BaseAgent):
             return parsed
         except Exception as exc:
             logger.debug(f"Table resolver fallback skipped due to error: {exc}")
+            return self._build_ranked_table_resolution_fallback(
+                query=input.query,
+                ranked_tables=limited_tables,
+                table_columns=table_columns,
+                scores=scores,
+            )
+
+    def _build_ranked_table_resolution_fallback(
+        self,
+        *,
+        query: str,
+        ranked_tables: list[str],
+        table_columns: dict[str, set[str]],
+        scores: dict[str, int],
+    ) -> TableResolution | None:
+        """Fallback resolver when LLM table resolution is unavailable/uncertain."""
+        min_score = self._pipeline_int("sql_table_resolver_ranked_min_score", 2)
+        positive_tables = [table for table in ranked_tables if scores.get(table, 0) >= min_score]
+        if not positive_tables:
             return None
+
+        query_text = f" {(query or '').lower()} "
+        multi_table_markers = (
+            " and ",
+            " vs ",
+            " versus ",
+            " compare ",
+            " between ",
+            " gap ",
+            " ratio ",
+            " rate ",
+            " by ",
+        )
+        wants_multi = any(marker in query_text for marker in multi_table_markers)
+        max_candidates = self._pipeline_int("sql_table_resolver_ranked_max_tables", 3)
+        candidate_count = 2 if wants_multi and len(positive_tables) >= 2 else 1
+        candidate_count = max(1, min(candidate_count, max_candidates, len(positive_tables)))
+        candidate_tables = positive_tables[:candidate_count]
+
+        column_hints: list[str] = []
+        for table_name in candidate_tables:
+            for column in sorted(table_columns.get(table_name, set()))[:4]:
+                if column not in column_hints:
+                    column_hints.append(column)
+            if len(column_hints) >= 8:
+                break
+
+        return TableResolution(
+            candidate_tables=candidate_tables,
+            column_hints=column_hints,
+            confidence=0.56,
+            needs_clarification=False,
+            clarifying_question=None,
+        )
 
     def _should_run_table_resolver(self, input: SQLAgentInput) -> bool:
         query = (input.query or "").strip()
