@@ -419,6 +419,13 @@ class SQLAgent(BaseAgent):
         if metric_bundle_fallback is not None:
             return self._apply_row_limit_policy(metric_bundle_fallback, input.query)
 
+        weekday_weekend_lift_fallback = await self._build_weekday_weekend_sales_lift_fallback(
+            input,
+            table_resolution=None,
+        )
+        if weekday_weekend_lift_fallback is not None:
+            return self._apply_row_limit_policy(weekday_weekend_lift_fallback, input.query)
+
         stockout_risk_fallback = await self._build_stockout_risk_ranking_fallback(
             input,
             table_resolution=None,
@@ -427,7 +434,15 @@ class SQLAgent(BaseAgent):
             return self._apply_row_limit_policy(stockout_risk_fallback, input.query)
 
         table_resolution = await self._resolve_tables_with_llm(input)
-        if table_resolution and table_resolution.needs_clarification:
+        resolver_threshold = self._pipeline_float("sql_table_resolver_confidence_threshold", 0.55)
+        if (
+            table_resolution
+            and table_resolution.needs_clarification
+            and (
+                not table_resolution.candidate_tables
+                or table_resolution.confidence < resolver_threshold
+            )
+        ):
             question = table_resolution.clarifying_question or "Which table should I use to answer this?"
             raise SQLClarificationNeeded([question])
 
@@ -438,6 +453,13 @@ class SQLAgent(BaseAgent):
             )
             if metric_bundle_fallback is not None:
                 return self._apply_row_limit_policy(metric_bundle_fallback, input.query)
+
+            weekday_weekend_lift_fallback = await self._build_weekday_weekend_sales_lift_fallback(
+                input,
+                table_resolution=table_resolution,
+            )
+            if weekday_weekend_lift_fallback is not None:
+                return self._apply_row_limit_policy(weekday_weekend_lift_fallback, input.query)
 
             stockout_risk_fallback = await self._build_stockout_risk_ranking_fallback(
                 input,
@@ -568,6 +590,14 @@ class SQLAgent(BaseAgent):
             threshold = self._pipeline_float("sql_table_resolver_confidence_threshold", 0.55)
             if parsed.needs_clarification and parsed.confidence < threshold:
                 return parsed
+            if parsed.needs_clarification and parsed.candidate_tables and parsed.confidence >= threshold:
+                return TableResolution(
+                    candidate_tables=parsed.candidate_tables,
+                    column_hints=parsed.column_hints,
+                    confidence=parsed.confidence,
+                    needs_clarification=False,
+                    clarifying_question=None,
+                )
             if not parsed.candidate_tables and parsed.confidence < threshold:
                 clarifying = parsed.clarifying_question or self._build_table_resolver_question(
                     limited_tables
@@ -859,6 +889,152 @@ class SQLAgent(BaseAgent):
             ),
             used_datapoints=used_datapoints,
             confidence=0.92,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+
+    async def _build_weekday_weekend_sales_lift_fallback(
+        self,
+        input: SQLAgentInput,
+        *,
+        table_resolution: TableResolution | None = None,
+    ) -> GeneratedSQL | None:
+        """Deterministic fallback for weekend-vs-weekday sales lift by store and category."""
+        text = (input.query or "").strip().lower()
+        if not text:
+            return None
+
+        has_weekend_weekday = "weekend" in text and "weekday" in text
+        has_sales_signal = any(token in text for token in ("sales", "revenue"))
+        has_dimensions = "category" in text and "store" in text
+        if not (has_weekend_weekday and has_sales_signal and has_dimensions):
+            return None
+
+        table_columns: dict[str, set[str]] = {}
+        if table_resolution:
+            for table_name in table_resolution.candidate_tables:
+                table_columns.setdefault(table_name, set())
+        table_columns.update(self._schema_table_columns_from_memory(input))
+        if len(table_columns) < 3:
+            live_candidates = await self._load_live_table_candidates_for_fallback(input)
+            for table_name, columns in live_candidates:
+                existing = table_columns.get(table_name, set())
+                table_columns[table_name] = existing | {column.lower() for column in columns}
+        schema_tables = list(table_columns.keys()) or self._schema_tables_from_memory(input)
+
+        sales_table = self._pick_table_name(
+            schema_tables,
+            includes=("grocery", "sales"),
+            fallback_contains=("sales_transactions", "transactions", "sales"),
+        )
+        if sales_table is None:
+            sales_table = self._pick_table_by_columns(
+                table_columns,
+                required_columns={"business_date", "store_id", "product_id", "total_amount"},
+            )
+
+        products_table = self._pick_table_name(
+            schema_tables,
+            includes=("grocery", "products"),
+            fallback_contains=("products", "product"),
+        )
+        if products_table is None:
+            products_table = self._pick_table_by_columns(
+                table_columns,
+                required_columns={"product_id", "category"},
+                excluded_tables={sales_table} if sales_table else None,
+            )
+
+        stores_table = self._pick_table_name(
+            schema_tables,
+            includes=("grocery", "stores"),
+            fallback_contains=("stores", "store"),
+        )
+        if stores_table is None:
+            stores_table = self._pick_table_by_columns(
+                table_columns,
+                required_columns={"store_id", "store_name"},
+                excluded_tables={sales_table, products_table}
+                if sales_table and products_table
+                else None,
+            )
+
+        if not (sales_table and products_table and stores_table):
+            return None
+
+        db_type = (input.database_type or "").strip().lower()
+        window_days = self._extract_last_days_window(text, default_days=90)
+
+        if db_type == "mysql":
+            date_filter = f"st.business_date >= DATE_SUB(CURDATE(), INTERVAL {window_days} DAY)"
+            day_type_expr = (
+                "CASE WHEN DAYOFWEEK(st.business_date) IN (1, 7) "
+                "THEN 'weekend' ELSE 'weekday' END"
+            )
+            order_clause = (
+                "ORDER BY weekend_sales_lift_pct IS NULL ASC, "
+                "weekend_sales_lift_pct DESC, a.category ASC, s.store_name ASC"
+            )
+        else:
+            date_filter = f"st.business_date >= CURRENT_DATE - INTERVAL '{window_days} days'"
+            day_type_expr = (
+                "CASE WHEN DATE_PART('dow', st.business_date) IN (0, 6) "
+                "THEN 'weekend' ELSE 'weekday' END"
+            )
+            order_clause = "ORDER BY weekend_sales_lift_pct DESC NULLS LAST, a.category ASC, s.store_name ASC"
+
+        sql = (
+            "WITH daily_sales AS ("
+            " SELECT "
+            "st.store_id, "
+            "p.category, "
+            "st.business_date, "
+            f"{day_type_expr} AS day_type, "
+            "SUM(st.total_amount) AS daily_sales "
+            f"FROM {sales_table} st "
+            f"JOIN {products_table} p ON p.product_id = st.product_id "
+            f"WHERE {date_filter} "
+            "GROUP BY st.store_id, p.category, st.business_date, day_type"
+            "), aggregated AS ("
+            " SELECT "
+            "store_id, "
+            "category, "
+            "AVG(CASE WHEN day_type = 'weekend' THEN daily_sales END) AS avg_weekend_sales, "
+            "AVG(CASE WHEN day_type = 'weekday' THEN daily_sales END) AS avg_weekday_sales "
+            "FROM daily_sales "
+            "GROUP BY store_id, category"
+            ") "
+            "SELECT "
+            "s.store_id, "
+            "s.store_name, "
+            "a.category, "
+            "ROUND(COALESCE(a.avg_weekend_sales, 0), 2) AS avg_weekend_sales, "
+            "ROUND(COALESCE(a.avg_weekday_sales, 0), 2) AS avg_weekday_sales, "
+            "ROUND( "
+            "CASE "
+            "WHEN COALESCE(a.avg_weekday_sales, 0) = 0 THEN NULL "
+            "ELSE ((a.avg_weekend_sales / a.avg_weekday_sales) - 1) * 100 "
+            "END, "
+            "2"
+            ") AS weekend_sales_lift_pct "
+            "FROM aggregated a "
+            f"JOIN {stores_table} s ON s.store_id = a.store_id "
+            f"{order_clause}"
+        )
+
+        used_datapoints = [
+            dp.datapoint_id
+            for dp in input.investigation_memory.datapoints
+            if dp.datapoint_type in {"Schema", "Business"}
+        ][:8]
+        return GeneratedSQL(
+            sql=sql,
+            explanation=(
+                "Deterministic fallback comparing weekend vs weekday average daily sales by "
+                f"store and category over the last {window_days} days."
+            ),
+            used_datapoints=used_datapoints,
+            confidence=0.91,
             assumptions=[],
             clarifying_questions=[],
         )
