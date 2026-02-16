@@ -6,6 +6,7 @@ Base URL: `http://localhost:8000/api/v1`
 
 - `GET /system/status` - Returns initialization status and setup steps.
 - `POST /system/initialize` - Initialize with a database URL and optional auto-profiling.
+- `POST /system/entry-event` - Record lightweight setup/quickstart telemetry events.
 
 Request body:
 
@@ -22,6 +23,20 @@ Notes:
 - When provided, `database_url` and `system_database_url` are persisted to `~/.datachat/config.json`.
 - `is_initialized=true` means a target database is connected and chat can run.
 - DataPoints are optional enrichment; when absent, chat runs in live schema mode.
+
+Entry telemetry payload:
+
+```json
+{
+  "flow": "phase1_4_quickstart_ui",
+  "step": "profile_database",
+  "status": "started",
+  "source": "ui",
+  "metadata": {
+    "connection_id": "..."
+  }
+}
+```
 
 ## Chat
 

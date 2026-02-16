@@ -122,6 +122,23 @@ What it does today:
 - initializes runtime components
 - can trigger auto-profiling when registry prerequisites are present
 
+## 6.1 Quickstart Wrapper (Phase 1.4)
+
+Use this to run connect + setup in one command:
+
+```bash
+datachat quickstart --database-url postgresql://user:pass@host:5432/db
+```
+
+With optional demo load and first question:
+
+```bash
+datachat quickstart \
+  --database-url postgresql://user:pass@host:5432/db \
+  --dataset grocery \
+  --question "list all grocery stores"
+```
+
 ---
 
 ## 7. Optional DataPoints (quality boost)
@@ -139,6 +156,16 @@ Review generated pending DataPoints (from profiling):
 ```bash
 datachat dp pending list
 datachat dp pending approve <pending_id>
+```
+
+Thin training helper over existing flows:
+
+```bash
+# Wrapper over dp sync
+datachat train --mode sync --datapoints-dir ./datapoints
+
+# Wrapper over profile start (+ optional generation)
+datachat train --mode profile --profile-connection-id <connection_id> --generate-after-profile
 ```
 
 ---
@@ -176,5 +203,5 @@ See [`docs/CREDENTIALS_ONLY_MODE.md`](docs/CREDENTIALS_ONLY_MODE.md).
 
 Not fully implemented yet:
 - workspace/folder indexing as a production feature
-- runtime connectors for MySQL/BigQuery/Redshift (templates exist, connectors pending)
+- runtime connectors for BigQuery/Redshift (templates exist, connectors pending)
 - automated Level 3-5 intelligence features

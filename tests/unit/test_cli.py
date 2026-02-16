@@ -13,6 +13,7 @@ from click.testing import CliRunner
 
 from backend.cli import (
     _apply_datapoint_scope,
+    _emit_entry_event_cli,
     _register_cli_connection,
     _resolve_target_database_url,
     _should_exit_chat,
@@ -78,6 +79,18 @@ class TestCLIBasics:
         result = runner.invoke(cli, ["setup", "--help"])
         assert result.exit_code == 0
         assert "Guide system initialization" in result.output
+
+    def test_quickstart_command_exists(self, runner):
+        """Test that quickstart command exists."""
+        result = runner.invoke(cli, ["quickstart", "--help"])
+        assert result.exit_code == 0
+        assert "guided bootstrap flow" in result.output.lower()
+
+    def test_train_command_exists(self, runner):
+        """Test that train command exists."""
+        result = runner.invoke(cli, ["train", "--help"])
+        assert result.exit_code == 0
+        assert "sync/profile generation flows" in result.output.lower()
 
     def test_reset_command_exposes_datapoint_clear_flags(self, runner):
         """Reset command should expose datapoint clear/keep options."""
@@ -718,6 +731,58 @@ class TestCLIState:
                 resolved_url, source = _resolve_target_database_url(settings)
                 assert resolved_url == "postgresql://saved:pw@localhost:5432/saved_db"
                 assert source == "saved_config"
+
+    def test_emit_entry_event_cli_writes_jsonl(self, temp_config_dir):
+        """Entry events should be appended to local CLI telemetry file."""
+        from backend.cli import CLIState, state
+
+        with patch("pathlib.Path.home", return_value=temp_config_dir.parent):
+            temp_state = CLIState()
+            with (
+                patch.object(state, "config_dir", temp_state.config_dir),
+                patch.object(state, "config_file", temp_state.config_file),
+            ):
+                _emit_entry_event_cli(
+                    flow="phase1_4_quickstart",
+                    step="start",
+                    status="started",
+                    metadata={"dataset": "none"},
+                )
+                events_path = temp_state.config_dir / "entry_events.jsonl"
+                assert events_path.exists()
+                line = events_path.read_text(encoding="utf-8").strip()
+                payload = json.loads(line)
+                assert payload["flow"] == "phase1_4_quickstart"
+                assert payload["step"] == "start"
+                assert payload["status"] == "started"
+
+
+class TestQuickstartAndTrainCommands:
+    """Test quickstart/train wrappers."""
+
+    @pytest.fixture
+    def runner(self):
+        return CliRunner()
+
+    def test_quickstart_non_interactive_requires_database_url(self, runner):
+        settings = type(
+            "Settings",
+            (),
+            {"database": type("DatabaseSettings", (), {"url": None})()},
+        )()
+        with (
+            patch("backend.cli.apply_config_defaults"),
+            patch("backend.cli.get_settings", return_value=settings),
+            patch("backend.cli.state.get_connection_string", return_value=None),
+        ):
+            result = runner.invoke(cli, ["quickstart", "--non-interactive"])
+        assert result.exit_code != 0
+        assert "Missing target database URL" in result.output
+
+    def test_train_profile_mode_requires_connection_id(self, runner):
+        result = runner.invoke(cli, ["train", "--mode", "profile"])
+        assert result.exit_code != 0
+        assert "requires --profile-connection-id" in result.output
 
 
 class TestCLIErrorHandling:

@@ -315,6 +315,28 @@ class SystemInitializeResponse(BaseModel):
     )
 
 
+class EntryEventRequest(BaseModel):
+    """Entry-layer telemetry event payload."""
+
+    flow: str = Field(..., min_length=1, description="Flow identifier")
+    step: str = Field(..., min_length=1, description="Step identifier")
+    status: str = Field(
+        ...,
+        description="Step status (started, completed, failed, skipped)",
+    )
+    source: str = Field(default="ui", description="Event source (ui, cli, api)")
+    metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional structured metadata for this event",
+    )
+
+
+class EntryEventResponse(BaseModel):
+    """Entry-layer telemetry response."""
+
+    ok: bool = Field(default=True, description="Whether event ingestion succeeded")
+
+
 class ToolExecuteRequest(BaseModel):
     """Tool execution request payload."""
 
