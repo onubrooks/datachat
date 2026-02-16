@@ -2269,6 +2269,14 @@ class TestErrorHandling:
             "SELECT SUM(total_amount) AS total_revenue FROM public.grocery_sales_transactions"
         )
 
+    def test_parse_llm_response_handles_non_string_content(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(update={"query": "Show tables"})
+
+        with pytest.raises(ValueError, match="missing 'sql' field|empty content"):
+            sql_agent._parse_llm_response(AsyncMock(), sql_input)
+
 
 class TestInputValidation:
     """Test input validation."""

@@ -1546,10 +1546,11 @@ class SQLAgent(BaseAgent):
         runtime_stats: dict[str, int],
     ) -> GeneratedSQL:
         response = await provider.generate(llm_request)
-        self._track_llm_call(tokens=response.usage.total_tokens)
+        self._track_llm_call(tokens=self._extract_response_tokens(response))
+        primary_content = self._coerce_llm_content(getattr(response, "content", ""))
 
         try:
-            return self._parse_llm_response(response.content, input)
+            return self._parse_llm_response(primary_content, input)
         except ValueError:
             retry_request = llm_request.model_copy()
             retry_request.messages.append(
@@ -1559,12 +1560,13 @@ class SQLAgent(BaseAgent):
                 )
             )
             retry_response = await provider.generate(retry_request)
-            self._track_llm_call(tokens=retry_response.usage.total_tokens)
+            self._track_llm_call(tokens=self._extract_response_tokens(retry_response))
+            retry_content = self._coerce_llm_content(getattr(retry_response, "content", ""))
             try:
-                return self._parse_llm_response(retry_response.content, input)
+                return self._parse_llm_response(retry_content, input)
             except ValueError as exc:
                 recovered = await self._recover_sql_with_formatter(
-                    raw_content=retry_response.content or response.content,
+                    raw_content=retry_content or primary_content,
                     input=input,
                     runtime_stats=runtime_stats,
                 )
@@ -1655,12 +1657,13 @@ class SQLAgent(BaseAgent):
             ) from e
 
     async def _recover_sql_with_formatter(
-        self, *, raw_content: str, input: SQLAgentInput, runtime_stats: dict[str, int]
+        self, *, raw_content: Any, input: SQLAgentInput, runtime_stats: dict[str, int]
     ) -> GeneratedSQL | None:
         """Attempt to recover malformed SQL-agent output with a formatter model."""
         if not self._pipeline_flag("sql_formatter_fallback_enabled", True):
             return None
-        if not raw_content or not raw_content.strip():
+        raw_text = self._coerce_llm_content(raw_content)
+        if not raw_text or not raw_text.strip():
             return None
 
         provider = getattr(self, "formatter_llm", None) or self.fast_llm or self.llm
@@ -1673,7 +1676,7 @@ class SQLAgent(BaseAgent):
         elif not formatter_model.strip():
             formatter_model = None
 
-        formatter_prompt = self._build_sql_formatter_prompt(raw_content, input.query)
+        formatter_prompt = self._build_sql_formatter_prompt(raw_text, input.query)
         formatter_request = LLMRequest(
             messages=[
                 LLMMessage(
@@ -1695,8 +1698,11 @@ class SQLAgent(BaseAgent):
                 int(runtime_stats.get("formatter_fallback_calls", 0)) + 1
             )
             formatter_response = await provider.generate(formatter_request)
-            self._track_llm_call(tokens=formatter_response.usage.total_tokens)
-            parsed = self._parse_llm_response(formatter_response.content, input)
+            self._track_llm_call(tokens=self._extract_response_tokens(formatter_response))
+            parsed = self._parse_llm_response(
+                self._coerce_llm_content(getattr(formatter_response, "content", "")),
+                input,
+            )
             runtime_stats["formatter_fallback_successes"] = (
                 int(runtime_stats.get("formatter_fallback_successes", 0)) + 1
             )
@@ -3063,6 +3069,11 @@ class SQLAgent(BaseAgent):
         Raises:
             ValueError: If response cannot be parsed
         """
+        if not isinstance(content, str):
+            content = self._coerce_llm_content(content)
+        if not content.strip():
+            raise ValueError("Failed to parse LLM response: empty content")
+
         # Try JSON first.
         json_str = None
         json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
@@ -3112,6 +3123,24 @@ class SQLAgent(BaseAgent):
         logger.warning("Failed to parse LLM response: Response missing 'sql' field")
         logger.debug(f"LLM response content: {content}")
         raise ValueError("Failed to parse LLM response: Response missing 'sql' field")
+
+    @staticmethod
+    def _coerce_llm_content(content: Any) -> str:
+        """Normalize provider output content into text safely."""
+        if isinstance(content, str):
+            return content
+        if content is None:
+            return ""
+        return str(content)
+
+    @staticmethod
+    def _extract_response_tokens(response: Any) -> int | None:
+        usage = getattr(response, "usage", None)
+        total_tokens = getattr(usage, "total_tokens", None)
+        try:
+            return int(total_tokens)
+        except (TypeError, ValueError):
+            return None
 
     def _apply_row_limit_policy(self, generated: GeneratedSQL, query: str) -> GeneratedSQL:
         """Normalize SQL limits for safe interactive responses."""
