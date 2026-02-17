@@ -128,6 +128,10 @@ class ChatResponse(BaseModel):
     sql: str | None = Field(None, description="Generated SQL query (if applicable)")
     data: dict[str, list] | None = Field(None, description="Query results in columnar format")
     visualization_hint: str | None = Field(None, description="Suggested visualization type")
+    visualization_metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional visualization decision metadata and resolution reason.",
+    )
     sources: list[DataSource] = Field(
         default_factory=list, description="Data sources used to answer"
     )
@@ -181,6 +185,13 @@ class ChatResponse(BaseModel):
                 "sql": "SELECT SUM(amount) as total_revenue FROM analytics.fact_sales WHERE status = 'completed'",
                 "data": {"total_revenue": [1234567.89]},
                 "visualization_hint": "none",
+                "visualization_metadata": {
+                    "requested": None,
+                    "deterministic": "none",
+                    "llm_suggested": None,
+                    "final": "none",
+                    "resolution_reason": "deterministic_default",
+                },
                 "sources": [
                     {
                         "datapoint_id": "table_fact_sales_001",

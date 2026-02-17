@@ -842,6 +842,13 @@ class ExecutedQuery(BaseModel):
     visualization_hint: (
         Literal["table", "bar_chart", "line_chart", "pie_chart", "scatter", "none"] | None
     ) = Field(None, description="Suggested visualization type")
+    visualization_metadata: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Optional visualization decision metadata: requested, deterministic, llm_suggested, "
+            "final, and resolution reason."
+        ),
+    )
     key_insights: list[str] = Field(default_factory=list, description="Key insights from the data")
     source_citations: list[str] = Field(
         default_factory=list, description="DataPoint IDs used in pipeline"
@@ -858,6 +865,13 @@ class ExecutedQuery(BaseModel):
                 },
                 "natural_language_answer": "Customer 123 had total sales of $5,000",
                 "visualization_hint": "table",
+                "visualization_metadata": {
+                    "requested": None,
+                    "deterministic": "bar_chart",
+                    "llm_suggested": "bar_chart",
+                    "final": "bar_chart",
+                    "resolution_reason": "llm_recommended",
+                },
                 "key_insights": ["Single customer dominates sales"],
                 "source_citations": ["table_fact_sales_001"],
             }

@@ -508,6 +508,16 @@ class PipelineSettings(BaseSettings):
         le=1.0,
         description="Minimum deterministic query-compiler confidence before skipping LLM refinement.",
     )
+    visualization_llm_enabled: bool = Field(
+        default=True,
+        description="Enable mini-LLM visualization recommendation with deterministic guardrails.",
+    )
+    visualization_llm_row_sample: int = Field(
+        default=8,
+        ge=2,
+        le=30,
+        description="Maximum result rows sampled for visualization recommendation prompts.",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="PIPELINE_",

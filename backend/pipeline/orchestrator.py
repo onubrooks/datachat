@@ -129,6 +129,7 @@ class PipelineState(TypedDict, total=False):
     query_result: dict[str, Any] | None
     natural_language_answer: str | None
     visualization_hint: str | None
+    visualization_metadata: dict[str, Any] | None
     key_insights: list[str]
     answer_source: str | None
     answer_confidence: float | None
@@ -1379,6 +1380,7 @@ class DataChatPipeline:
             }
             state["natural_language_answer"] = output.executed_query.natural_language_answer
             state["visualization_hint"] = output.executed_query.visualization_hint
+            state["visualization_metadata"] = output.executed_query.visualization_metadata
             state["key_insights"] = output.executed_query.key_insights
             state["answer_source"] = "sql"
             state["answer_confidence"] = state.get("sql_confidence", 0.7)
@@ -2901,6 +2903,7 @@ class DataChatPipeline:
             "validation_errors": [],
             "validation_warnings": [],
             "key_insights": [],
+            "visualization_metadata": None,
             "used_datapoints": [],
             "assumptions": [],
             "sql_formatter_fallback_calls": 0,

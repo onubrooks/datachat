@@ -283,6 +283,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     data_result = {col: [row.get(col) for row in rows] for col in columns}
 
         visualization_hint = result.get("visualization_hint")
+        visualization_metadata = result.get("visualization_metadata")
 
         # Build sources
         sources = []
@@ -329,6 +330,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
             "sql": sql_query,
             "data": data_result,
             "visualization_hint": visualization_hint,
+            "visualization_metadata": visualization_metadata,
             "sources": sources,
             "answer_source": result.get("answer_source"),
             "answer_confidence": result.get("answer_confidence"),
