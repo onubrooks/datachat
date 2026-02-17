@@ -105,4 +105,14 @@ describe("ChatInterface target database", () => {
     const request = mockStreamChat.mock.calls[0][0] as Record<string, unknown>;
     expect(request.target_database).toBe("db_pg");
   });
+
+  it("preserves selected database from localStorage on refresh", async () => {
+    window.localStorage.setItem("datachat.active_connection_id", "db_pg");
+    render(<ChatInterface />);
+
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+
+    const select = await screen.findByLabelText("Target database");
+    expect((select as HTMLSelectElement).value).toBe("db_pg");
+  });
 });

@@ -116,6 +116,10 @@ class ChatResponse(BaseModel):
     sql: str | None = Field(None, description="Generated SQL query (if applicable)")
     data: dict[str, list] | None = Field(None, description="Query results in columnar format")
     visualization_hint: str | None = Field(None, description="Suggested visualization type")
+    visualization_note: str | None = Field(
+        default=None,
+        description="Optional note explaining chart selection or override decisions.",
+    )
     sources: list[DataSource] = Field(
         default_factory=list, description="Data sources used to answer"
     )
@@ -169,6 +173,7 @@ class ChatResponse(BaseModel):
                 "sql": "SELECT SUM(amount) as total_revenue FROM analytics.fact_sales WHERE status = 'completed'",
                 "data": {"total_revenue": [1234567.89]},
                 "visualization_hint": "none",
+                "visualization_note": None,
                 "sources": [
                     {
                         "datapoint_id": "table_fact_sales_001",
@@ -313,6 +318,28 @@ class SystemInitializeResponse(BaseModel):
         default_factory=list,
         description="Remaining setup/recommended steps",
     )
+
+
+class EntryEventRequest(BaseModel):
+    """Entry-layer telemetry event payload."""
+
+    flow: str = Field(..., min_length=1, description="Flow identifier")
+    step: str = Field(..., min_length=1, description="Step identifier")
+    status: str = Field(
+        ...,
+        description="Step status (started, completed, failed, skipped)",
+    )
+    source: str = Field(default="ui", description="Event source (ui, cli, api)")
+    metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional structured metadata for this event",
+    )
+
+
+class EntryEventResponse(BaseModel):
+    """Entry-layer telemetry response."""
+
+    ok: bool = Field(default=True, description="Whether event ingestion succeeded")
 
 
 class ToolExecuteRequest(BaseModel):

@@ -4,6 +4,7 @@ System Routes
 Initialization status and guided setup endpoints.
 """
 
+import logging
 import shutil
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from backend.connectors.postgres import PostgresConnector
 from backend.initialization.initializer import SystemInitializer
 from backend.knowledge.vectors import VectorStore
 from backend.models.api import (
+    EntryEventRequest,
+    EntryEventResponse,
     SystemInitializeRequest,
     SystemInitializeResponse,
     SystemStatusResponse,
@@ -27,10 +30,27 @@ from backend.settings_store import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class SystemResetResponse(SystemStatusResponse):
     message: str
+
+
+@router.post("/system/entry-event", response_model=EntryEventResponse)
+async def system_entry_event(payload: EntryEventRequest) -> EntryEventResponse:
+    """Record lightweight setup/entry telemetry events."""
+    logger.info(
+        "entry_event",
+        extra={
+            "flow": payload.flow,
+            "step": payload.step,
+            "status": payload.status,
+            "source": payload.source,
+            "metadata": payload.metadata or {},
+        },
+    )
+    return EntryEventResponse(ok=True)
 
 
 @router.get("/system/status", response_model=SystemStatusResponse)

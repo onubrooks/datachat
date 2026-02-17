@@ -10,7 +10,7 @@ Tests pipeline execution including:
 - State management
 """
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -221,13 +221,127 @@ class TestPipelineExecution:
 
     @pytest.mark.asyncio
     async def test_pipeline_decomposes_multi_question_prompt(self, mock_agents):
+        mock_agents._plan_multi_sql_for_parts = AsyncMock(return_value=({}, 0, 0.0))
         result = await mock_agents.run("Show me top rows? What is total revenue?")
 
         assert len(result.get("sub_answers", [])) == 2
         assert "multiple questions" in result["natural_language_answer"].lower()
         assert result["answer_source"] == "multi"
         assert mock_agents.classifier.execute.await_count == 2
-        assert mock_agents.sql.execute.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_multi_query_uses_batch_sql_plan_and_skips_per_part_sql_agent(self, mock_agents):
+        mock_agents._plan_multi_sql_for_parts = AsyncMock(
+            return_value=(
+                {
+                    1: {
+                        "sql": "SELECT 1 AS a",
+                        "explanation": "first",
+                        "confidence": 0.9,
+                        "clarifying_questions": [],
+                    },
+                    2: {
+                        "sql": "SELECT 2 AS b",
+                        "explanation": "second",
+                        "confidence": 0.88,
+                        "clarifying_questions": [],
+                    },
+                },
+                1,
+                12.0,
+            )
+        )
+
+        result = await mock_agents.run("Question one? Question two?")
+
+        assert result["answer_source"] == "multi"
+        assert len(result.get("sub_answers", [])) == 2
+        assert mock_agents.sql.execute.await_count == 0
+        assert result.get("llm_calls", 0) >= 1
+        assert result.get("agent_timings", {}).get("multi_sql_planner") == pytest.approx(12.0)
+
+    @pytest.mark.asyncio
+    async def test_run_with_streaming_multi_emits_agent_flow_for_each_question(self, mock_agents):
+        events: list[tuple[str, dict]] = []
+
+        async def _callback(event_type: str, event_data: dict):
+            events.append((event_type, event_data))
+
+        mock_agents._plan_multi_sql_for_parts = AsyncMock(
+            return_value=(
+                {
+                    1: {
+                        "sql": "SELECT 1",
+                        "explanation": "first",
+                        "confidence": 0.9,
+                        "clarifying_questions": [],
+                    },
+                    2: {
+                        "sql": "SELECT 2",
+                        "explanation": "second",
+                        "confidence": 0.9,
+                        "clarifying_questions": [],
+                    },
+                },
+                1,
+                9.5,
+            )
+        )
+
+        result = await mock_agents.run_with_streaming(
+            query="How many stores are there? What is total revenue by store?",
+            event_callback=_callback,
+        )
+
+        event_types = [event_type for event_type, _ in events]
+        assert "decompose_complete" in event_types
+        assert "agent_start" in event_types
+        assert "agent_complete" in event_types
+        assert any(
+            event_type == "agent_start" and data.get("agent") == "MultiSQLPlanner"
+            for event_type, data in events
+        )
+        assert any(
+            event_type == "agent_complete" and data.get("agent") == "MultiSQLPlanner"
+            for event_type, data in events
+        )
+        assert result.get("answer_source") == "multi"
+        assert len(result.get("sub_answers", [])) == 2
+
+        decompose = next(data for event_type, data in events if event_type == "decompose_complete")
+        assert decompose.get("part_count") == 2
+        thinking_notes = [
+            data.get("note", "")
+            for event_type, data in events
+            if event_type == "thinking"
+        ]
+        question_notes = [note for note in thinking_notes if "live agent flow for question:" in note]
+        assert len(question_notes) == 2
+
+    def test_select_primary_sub_result_prefers_query_result_with_rows(self, pipeline):
+        sub_results = [
+            {"answer_source": "sql", "generated_sql": "SELECT * FROM a", "query_result": {"row_count": 1}},
+            {"answer_source": "sql", "generated_sql": "SELECT * FROM b", "query_result": {"row_count": 8}},
+            {"answer_source": "context", "natural_language_answer": "context-only"},
+        ]
+
+        index, selected = pipeline._select_primary_sub_result(sub_results)  # type: ignore[arg-type]
+
+        assert index == 1
+        assert selected is not None
+        assert selected.get("generated_sql") == "SELECT * FROM b"
+
+    def test_select_primary_sub_result_prefers_sql_over_clarification(self, pipeline):
+        sub_results = [
+            {"answer_source": "clarification", "clarifying_questions": ["Which table?"]},
+            {"answer_source": "sql", "generated_sql": "SELECT count(*) FROM t"},
+        ]
+
+        index, selected = pipeline._select_primary_sub_result(sub_results)  # type: ignore[arg-type]
+
+        assert index == 1
+        assert selected is not None
+        assert selected.get("generated_sql") == "SELECT count(*) FROM t"
 
     @pytest.mark.asyncio
     async def test_filter_datapoints_by_live_schema_uses_related_tables(self, pipeline):
@@ -334,6 +448,60 @@ class TestPipelineExecution:
             "dp_fintech",
             "dp_global",
         ]
+
+    def test_filter_datapoints_by_target_connection_accepts_equivalent_connection_ids(self, pipeline):
+        datapoints = [
+            {
+                "datapoint_id": "dp_env",
+                "metadata": {"connection_id": "00000000-0000-0000-0000-00000000dada"},
+            },
+            {
+                "datapoint_id": "dp_other",
+                "metadata": {"connection_id": "conn-grocery"},
+            },
+        ]
+
+        filtered = pipeline._filter_datapoints_by_target_connection(
+            datapoints,
+            target_connection_id="conn-managed",
+            target_connection_ids={
+                "conn-managed",
+                "00000000-0000-0000-0000-00000000dada",
+                "conn-grocery",
+            },
+        )
+
+        assert [item["datapoint_id"] for item in filtered] == ["dp_env", "dp_other"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_equivalent_connection_ids_includes_registry_and_env_matches(self, pipeline):
+        matching = MagicMock()
+        matching.connection_id = "conn-matching"
+        matching.database_url.get_secret_value.return_value = (
+            "postgresql://postgres:@localhost:5432/postgres"
+        )
+        other = MagicMock()
+        other.connection_id = "conn-other"
+        other.database_url.get_secret_value.return_value = (
+            "postgresql://postgres:@localhost:5432/otherdb"
+        )
+        manager = AsyncMock()
+        manager.list_connections.return_value = [other, matching]
+
+        pipeline.config.database.url = "postgresql://postgres:@localhost:5432/postgres"
+        pipeline.config.system_database.url = "postgresql://system:pass@localhost:5432/systemdb"
+
+        with patch("backend.pipeline.orchestrator.DatabaseConnectionManager", return_value=manager):
+            connection_ids = await pipeline._resolve_equivalent_connection_ids(
+                target_connection_id="conn-target",
+                database_url="postgresql://postgres@localhost/postgres",
+            )
+
+        assert connection_ids == {
+            "conn-target",
+            "conn-matching",
+            "00000000-0000-0000-0000-00000000dada",
+        }
 
     @pytest.mark.asyncio
     async def test_pipeline_tracks_metadata(self, mock_agents):
@@ -1248,6 +1416,54 @@ class TestIntentGate:
         assert "revenue" in result.get("clarifying_questions", [""])[0].lower()
         assert pipeline.validator.execute.call_count == 0
         assert pipeline.executor.execute.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_sql_clarification_path_records_sql_timing_and_formatter_metrics(self, pipeline):
+        pipeline.sql.execute = AsyncMock(
+            return_value=SQLAgentOutput(
+                success=True,
+                generated_sql=GeneratedSQL(
+                    sql="SELECT 1",
+                    explanation="Clarification required",
+                    confidence=0.0,
+                    used_datapoints=[],
+                    assumptions=[],
+                    clarifying_questions=["Which table should I use?"],
+                ),
+                metadata=AgentMetadata(agent_name="SQLAgent", llm_calls=2),
+                data={"formatter_fallback_calls": 1, "formatter_fallback_successes": 0},
+                needs_clarification=True,
+            )
+        )
+
+        state = pipeline._build_initial_state(
+            query="show me revenue",
+            conversation_history=[],
+            session_summary=None,
+            session_state=None,
+            database_type="postgresql",
+            database_url=None,
+            target_connection_id=None,
+            synthesize_simple_sql=None,
+            correlation_prefix="test",
+        )
+        state["retrieved_datapoints"] = []
+        state["investigation_memory"] = {
+            "query": "show me revenue",
+            "datapoints": [],
+            "total_retrieved": 0,
+            "retrieval_mode": "hybrid",
+            "sources_used": [],
+        }
+
+        result = await pipeline._run_sql(state)
+
+        assert result["clarification_needed"] is True
+        assert result["clarifying_questions"] == ["Which table should I use?"]
+        assert result["agent_timings"]["sql"] >= 0
+        assert result["llm_calls"] == 2
+        assert result["sql_formatter_fallback_calls"] == 1
+        assert result["sql_formatter_fallback_successes"] == 0
 
     def test_normalize_answer_metadata_assigns_defaults(self, pipeline):
         state = {

@@ -31,6 +31,7 @@ Planned (not yet implemented as full product features):
 - `METADATAOPS_FOUNDATION.md` - philosophy, priorities, and contributor alignment for metadata quality + observability.
 - `SESSION_MEMORY.md` - chat history + memory strategy for follow-ups across UI/CLI/API.
 - `PHASE1_KPI_GATES.md` - CI and release KPI gates for Phase 1 operational hardening.
+- `PHASE14_SIMPLE_ENTRY_LAYER.md` - quickstart/train wrappers and UI onboarding flow.
 - `ROUTING_POLICY.md` - routing thresholds, decision trace model, and route eval checks.
 - `MANUAL_EVAL_SCORECARD.md` - manual scoring rubric + runner commands for UI/CLI comparison.
 - `OPERATIONS.md` - deployment and operational guidance.

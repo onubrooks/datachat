@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from backend.agents.sql import SQLAgent
+from backend.agents.sql import SQLAgent, TableResolution
 from backend.llm.models import LLMResponse, LLMUsage
 from backend.models.agent import (
     GeneratedSQL,
@@ -174,6 +174,1080 @@ class TestExecution:
         assert output.needs_clarification is False
         assert output.metadata.llm_calls == 1
         assert output.metadata.tokens_used == 650
+
+    @pytest.mark.asyncio
+    async def test_metric_bundle_query_uses_llm_generation(self, sql_agent):
+        """Store-level revenue+margin+waste bundle should go through LLM SQL generation."""
+        input_data = SQLAgentInput(
+            query="What is total revenue, gross margin, and waste cost by store for the last 30 days?",
+            investigation_memory=InvestigationMemory(
+                query="metric bundle",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales Transactions",
+                        score=0.9,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_sales_transactions"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_products_001",
+                        datapoint_type="Schema",
+                        name="Products",
+                        score=0.88,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_products"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_waste_events_001",
+                        datapoint_type="Schema",
+                        name="Waste",
+                        score=0.87,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_waste_events"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_stores_001",
+                        datapoint_type="Schema",
+                        name="Stores",
+                        score=0.86,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_stores"},
+                    ),
+                ],
+                total_retrieved=4,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+        )
+
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT s.store_name, SUM(t.total_amount) AS revenue, "
+                        "SUM(t.total_amount) - SUM(t.quantity * COALESCE(p.unit_cost, 0)) AS gross_margin, "
+                        "SUM(w.waste_cost) AS waste_cost "
+                        "FROM public.grocery_sales_transactions t "
+                        "JOIN public.grocery_products p ON p.product_id = t.product_id "
+                        "JOIN public.grocery_stores s ON s.store_id = t.store_id "
+                        "LEFT JOIN public.grocery_waste_events w ON w.store_id = t.store_id "
+                        "GROUP BY s.store_name"
+                    ),
+                    "explanation": "Revenue, margin, and waste by store.",
+                    "used_datapoints": [],
+                    "confidence": 0.92,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=320, completion_tokens=160, total_tokens=480),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        output = await sql_agent(input_data)
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "SELECT s.store_name" in output.generated_sql.sql
+        assert "grocery_sales_transactions" in output.generated_sql.sql
+        assert "grocery_waste_events" in output.generated_sql.sql
+        assert sql_agent.llm.generate.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_store_metric_bundle_query_uses_related_tables_context(self, sql_agent):
+        """LLM output can use tables surfaced via related_tables context."""
+        input_data = SQLAgentInput(
+            query="What is total revenue, gross margin, and waste cost by store for the last 30 days?",
+            investigation_memory=InvestigationMemory(
+                query="metric bundle",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales Transactions",
+                        score=0.9,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_sales_transactions"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_waste_events_001",
+                        datapoint_type="Schema",
+                        name="Waste",
+                        score=0.87,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_waste_events"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_stores_001",
+                        datapoint_type="Schema",
+                        name="Stores",
+                        score=0.86,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_stores"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="metric_gross_margin_grocery_001",
+                        datapoint_type="Business",
+                        name="Gross Margin",
+                        score=0.85,
+                        source="vector",
+                        metadata={
+                            "related_tables": [
+                                "public.grocery_sales_transactions",
+                                "public.grocery_products",
+                            ]
+                        },
+                    ),
+                ],
+                total_retrieved=4,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+        )
+
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT SUM(t.total_amount) AS revenue, "
+                        "SUM(t.total_amount) - SUM(t.quantity * p.unit_cost) AS gross_margin "
+                        "FROM public.grocery_sales_transactions t "
+                        "JOIN public.grocery_products p ON p.product_id = t.product_id"
+                    ),
+                    "explanation": "Uses product costs for margin.",
+                    "used_datapoints": [],
+                    "confidence": 0.9,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=300, completion_tokens=110, total_tokens=410),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        output = await sql_agent(input_data)
+        assert output.success is True
+        assert "grocery_products" in output.generated_sql.sql
+        assert sql_agent.llm.generate.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_stockout_risk_query_uses_llm_generation(self, sql_agent):
+        """SKU stockout risk ranking should use the LLM SQL generation path."""
+        input_data = SQLAgentInput(
+            query=(
+                "Which 5 SKUs have the highest stockout risk this week based on on-hand, "
+                "reserved, and reorder level?"
+            ),
+            investigation_memory=InvestigationMemory(
+                query="stockout risk ranking",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_inventory_snapshots_001",
+                        datapoint_type="Schema",
+                        name="Inventory Snapshots",
+                        score=0.92,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_inventory_snapshots"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_products_001",
+                        datapoint_type="Schema",
+                        name="Products",
+                        score=0.91,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_products"},
+                    ),
+                ],
+                total_retrieved=2,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT p.sku, p.product_name, i.on_hand_qty, i.reserved_qty, p.reorder_level "
+                        "FROM public.grocery_inventory_snapshots i "
+                        "JOIN public.grocery_products p ON p.product_id = i.product_id "
+                        "ORDER BY (p.reorder_level + i.reserved_qty - i.on_hand_qty) DESC LIMIT 5"
+                    ),
+                    "explanation": "Top stockout risk SKUs.",
+                    "used_datapoints": [],
+                    "confidence": 0.9,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=280, completion_tokens=120, total_tokens=400),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "ORDER BY (p.reorder_level + i.reserved_qty - i.on_hand_qty) DESC" in output.generated_sql.sql
+        assert "grocery_inventory_snapshots" in output.generated_sql.sql
+        assert "grocery_products" in output.generated_sql.sql
+        assert "LIMIT 5" in output.generated_sql.sql
+        assert sql_agent.llm.generate.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_weekend_weekday_sales_lift_query_uses_llm_generation(self, sql_agent):
+        """Weekend vs weekday sales-lift query should use LLM SQL generation."""
+        input_data = SQLAgentInput(
+            query="Compare weekend vs weekday sales lift by category and store.",
+            investigation_memory=InvestigationMemory(
+                query="sales lift",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales Transactions",
+                        score=0.92,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_sales_transactions"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_products_001",
+                        datapoint_type="Schema",
+                        name="Products",
+                        score=0.9,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_products"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_stores_001",
+                        datapoint_type="Schema",
+                        name="Stores",
+                        score=0.88,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_stores"},
+                    ),
+                ],
+                total_retrieved=3,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT s.store_name, p.category, "
+                        "AVG(CASE WHEN t.is_weekend = TRUE THEN t.total_amount END) AS weekend_avg, "
+                        "AVG(CASE WHEN t.is_weekend = FALSE THEN t.total_amount END) AS weekday_avg "
+                        "FROM public.grocery_sales_transactions t "
+                        "JOIN public.grocery_products p ON p.product_id = t.product_id "
+                        "JOIN public.grocery_stores s ON s.store_id = t.store_id "
+                        "GROUP BY s.store_name, p.category"
+                    ),
+                    "explanation": "Weekend vs weekday comparison.",
+                    "used_datapoints": [],
+                    "confidence": 0.9,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=320, completion_tokens=150, total_tokens=470),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "weekend_avg" in output.generated_sql.sql
+        assert "grocery_sales_transactions" in output.generated_sql.sql
+        assert "grocery_products" in output.generated_sql.sql
+        assert "grocery_stores" in output.generated_sql.sql
+        assert sql_agent.llm.generate.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_inventory_movement_vs_sales_gap_query_uses_llm_generation(self, sql_agent):
+        """Inventory movement vs recorded sales gap should use LLM SQL generation."""
+        input_data = SQLAgentInput(
+            query="Which stores have the largest gap between inventory movement and recorded sales?",
+            investigation_memory=InvestigationMemory(
+                query="movement vs sales gap",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_inventory_snapshots_001",
+                        datapoint_type="Schema",
+                        name="Inventory Snapshots",
+                        score=0.92,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_inventory_snapshots"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales Transactions",
+                        score=0.9,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_sales_transactions"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_stores_001",
+                        datapoint_type="Schema",
+                        name="Stores",
+                        score=0.88,
+                        source="vector",
+                        metadata={"table_name": "public.grocery_stores"},
+                    ),
+                ],
+                total_retrieved=3,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "WITH movement AS ("
+                        "SELECT store_id, product_id, snapshot_date, "
+                        "GREATEST(on_hand_qty - LEAD(on_hand_qty) OVER (PARTITION BY store_id, product_id ORDER BY snapshot_date), 0) AS movement_qty "
+                        "FROM public.grocery_inventory_snapshots) "
+                        "SELECT s.store_name, SUM(m.movement_qty) AS inventory_movement, "
+                        "SUM(t.quantity) AS recorded_sales, "
+                        "SUM(m.movement_qty) - SUM(t.quantity) AS movement_sales_gap "
+                        "FROM movement m "
+                        "JOIN public.grocery_sales_transactions t ON t.store_id = m.store_id AND t.product_id = m.product_id "
+                        "JOIN public.grocery_stores s ON s.store_id = m.store_id "
+                        "GROUP BY s.store_name"
+                    ),
+                    "explanation": "Gap between inventory movement and sales by store.",
+                    "used_datapoints": [],
+                    "confidence": 0.89,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=360, completion_tokens=180, total_tokens=540),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "movement AS (" in output.generated_sql.sql
+        assert "movement_sales_gap" in output.generated_sql.sql
+        assert "grocery_inventory_snapshots" in output.generated_sql.sql
+        assert "grocery_sales_transactions" in output.generated_sql.sql
+        assert "grocery_stores" in output.generated_sql.sql
+        assert sql_agent.llm.generate.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_stockout_risk_query_supports_mysql_sql_generation(self, sql_agent):
+        """Stockout risk query should accept MySQL-safe SQL from the LLM path."""
+        input_data = SQLAgentInput(
+            query="Top 3 products by stockout risk this week using on hand reserved reorder level",
+            investigation_memory=InvestigationMemory(
+                query="stockout risk ranking mysql",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_inventory_snapshots_001",
+                        datapoint_type="Schema",
+                        name="Inventory Snapshots",
+                        score=0.92,
+                        source="vector",
+                        metadata={"table_name": "grocery_inventory_snapshots"},
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_products_001",
+                        datapoint_type="Schema",
+                        name="Products",
+                        score=0.91,
+                        source="vector",
+                        metadata={"table_name": "grocery_products"},
+                    ),
+                ],
+                total_retrieved=2,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="mysql",
+        )
+
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT p.sku, p.product_name, i.on_hand_qty, i.reserved_qty, p.reorder_level "
+                        "FROM grocery_inventory_snapshots i "
+                        "JOIN grocery_products p ON p.product_id = i.product_id "
+                        "WHERE i.snapshot_date >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY) "
+                        "ORDER BY (p.reorder_level + i.reserved_qty - i.on_hand_qty) DESC LIMIT 3"
+                    ),
+                    "explanation": "MySQL stockout ranking.",
+                    "used_datapoints": [],
+                    "confidence": 0.88,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=260, completion_tokens=110, total_tokens=370),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.success is True
+        assert "DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)" in output.generated_sql.sql
+        assert "LIMIT 3" in output.generated_sql.sql
+        assert sql_agent.llm.generate.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_stockout_risk_query_uses_llm_when_datapoints_missing(self, sql_agent):
+        """LLM SQL generation should still work with live schema mode and zero DataPoints."""
+        input_data = SQLAgentInput(
+            query=(
+                "Which 5 SKUs have the highest stockout risk this week based on on-hand, "
+                "reserved, and reorder level?"
+            ),
+            investigation_memory=InvestigationMemory(
+                query="stockout risk ranking",
+                datapoints=[],
+                total_retrieved=0,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+            database_url="postgresql://postgres:@localhost:5432/datachat_grocery",
+        )
+
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT p.sku, p.product_name "
+                        "FROM public.grocery_inventory_snapshots i "
+                        "JOIN public.grocery_products p ON p.product_id = i.product_id "
+                        "ORDER BY (p.reorder_level + i.reserved_qty - i.on_hand_qty) DESC LIMIT 5"
+                    ),
+                    "explanation": "Stockout ranking.",
+                    "used_datapoints": [],
+                    "confidence": 0.86,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=250, completion_tokens=90, total_tokens=340),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.success is True
+        assert "grocery_inventory_snapshots" in output.generated_sql.sql
+        assert "grocery_products" in output.generated_sql.sql
+        assert "LIMIT 5" in output.generated_sql.sql
+        assert sql_agent.llm.generate.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_stockout_risk_query_uses_llm_with_domain_agnostic_table_names(self, sql_agent):
+        """LLM SQL generation should work with domain-agnostic table names."""
+        input_data = SQLAgentInput(
+            query=(
+                "Which 5 SKUs have the highest stockout risk this week based on on-hand, "
+                "reserved, and reorder level?"
+            ),
+            investigation_memory=InvestigationMemory(
+                query="stockout risk ranking",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_inventory_daily_001",
+                        datapoint_type="Schema",
+                        name="Inventory Daily",
+                        score=0.9,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.inventory_daily",
+                            "key_columns": [
+                                {"name": "snapshot_date"},
+                                {"name": "store_id"},
+                                {"name": "product_id"},
+                                {"name": "on_hand_qty"},
+                                {"name": "reserved_qty"},
+                            ],
+                        },
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_product_catalog_001",
+                        datapoint_type="Schema",
+                        name="Product Catalog",
+                        score=0.88,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.product_catalog",
+                            "key_columns": [
+                                {"name": "product_id"},
+                                {"name": "sku"},
+                                {"name": "product_name"},
+                                {"name": "reorder_level"},
+                            ],
+                        },
+                    ),
+                ],
+                total_retrieved=2,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        sql_agent.llm.generate.return_value = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT p.sku, p.product_name, i.on_hand_qty "
+                        "FROM public.inventory_daily i "
+                        "JOIN public.product_catalog p ON p.product_id = i.product_id "
+                        "ORDER BY (p.reorder_level + i.reserved_qty - i.on_hand_qty) DESC LIMIT 5"
+                    ),
+                    "explanation": "Stockout ranking from generic tables.",
+                    "used_datapoints": [],
+                    "confidence": 0.9,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=240, completion_tokens=90, total_tokens=330),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        output = await sql_agent(input_data)
+
+        assert output.success is True
+        assert "FROM public.inventory_daily" in output.generated_sql.sql
+        assert "JOIN public.product_catalog" in output.generated_sql.sql
+        assert output.needs_clarification is False
+        assert sql_agent.llm.generate.await_count == 1
+
+    def test_table_resolver_low_confidence_triggers_clarification(self, sql_agent):
+        """Low-confidence resolver output with no candidates should hard-clarify."""
+        decision = sql_agent._should_force_table_clarification(
+            query="Show rows from one of these tables",
+            table_resolution=TableResolution(
+                candidate_tables=[],
+                column_hints=["total_amount"],
+                confidence=0.31,
+                needs_clarification=True,
+                clarifying_question="Do you want sales transactions or inventory snapshots?",
+            ),
+        )
+
+        assert decision is True
+
+    @pytest.mark.asyncio
+    async def test_table_resolver_low_confidence_with_candidates_continues_generation(self):
+        """When resolver returns candidates, SQL generation should continue instead of hard-clarifying."""
+        resolver_response = LLMResponse(
+            content=json.dumps(
+                {
+                    "candidate_tables": ["public.grocery_sales_transactions"],
+                    "column_hints": ["total_amount", "store_id"],
+                    "confidence": 0.31,
+                    "needs_clarification": True,
+                    "clarifying_question": "Do you want sales transactions or inventory snapshots?",
+                }
+            ),
+            model="gpt-4o-mini",
+            usage=LLMUsage(prompt_tokens=200, completion_tokens=80, total_tokens=280),
+            finish_reason="stop",
+            provider="openai",
+        )
+        sql_response = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT store_id, SUM(total_amount) AS total_amount "
+                        "FROM public.grocery_sales_transactions GROUP BY store_id"
+                    ),
+                    "explanation": "Revenue by store.",
+                    "used_datapoints": [],
+                    "confidence": 0.9,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=420, completion_tokens=140, total_tokens=560),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        fast_provider = Mock()
+        fast_provider.generate = AsyncMock(return_value=resolver_response)
+        fast_provider.provider = "openai"
+        fast_provider.model = "gpt-4o-mini"
+
+        main_provider = Mock()
+        main_provider.generate = AsyncMock(return_value=sql_response)
+        main_provider.provider = "openai"
+        main_provider.model = "gpt-4o"
+
+        mock_settings = Mock()
+        mock_settings.llm = Mock()
+        mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
+        mock_settings.pipeline = Mock(
+            sql_table_resolver_enabled=True,
+            sql_table_resolver_confidence_threshold=0.55,
+            sql_prompt_budget_enabled=False,
+            schema_snapshot_cache_enabled=False,
+            sql_two_stage_enabled=True,
+        )
+
+        with (
+            patch("backend.agents.sql.get_settings", return_value=mock_settings),
+            patch(
+                "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+                side_effect=[main_provider, fast_provider],
+            ),
+        ):
+            agent = SQLAgent()
+
+        input_data = SQLAgentInput(
+            query="Which stores have the largest gap between inventory movement and recorded sales?",
+            investigation_memory=InvestigationMemory(
+                query="resolver",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales",
+                        score=0.9,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_sales_transactions",
+                            "key_columns": [{"name": "store_id"}, {"name": "total_amount"}],
+                        },
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_inventory_snapshots_001",
+                        datapoint_type="Schema",
+                        name="Inventory",
+                        score=0.88,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_inventory_snapshots",
+                            "key_columns": [{"name": "store_id"}, {"name": "on_hand_qty"}],
+                        },
+                    ),
+                ],
+                total_retrieved=2,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        output = await agent(input_data)
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "grocery_sales_transactions" in output.generated_sql.sql
+        assert fast_provider.generate.await_count == 1
+        assert main_provider.generate.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_table_resolver_candidates_are_injected_into_sql_prompt(self):
+        """Resolver-selected tables should be injected into SQL generation context."""
+        resolver_response = LLMResponse(
+            content=json.dumps(
+                {
+                    "candidate_tables": [
+                        "public.grocery_sales_transactions",
+                        "public.grocery_stores",
+                    ],
+                    "column_hints": ["total_amount", "store_id", "business_date"],
+                    "confidence": 0.84,
+                    "needs_clarification": False,
+                    "clarifying_question": None,
+                }
+            ),
+            model="gpt-4o-mini",
+            usage=LLMUsage(prompt_tokens=220, completion_tokens=90, total_tokens=310),
+            finish_reason="stop",
+            provider="openai",
+        )
+        sql_response = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT s.store_name, SUM(t.total_amount) AS total_revenue "
+                        "FROM public.grocery_sales_transactions t "
+                        "JOIN public.grocery_stores s ON s.store_id = t.store_id "
+                        "GROUP BY s.store_name ORDER BY total_revenue DESC"
+                    ),
+                    "explanation": "Revenue by store",
+                    "used_datapoints": [],
+                    "confidence": 0.9,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=600, completion_tokens=180, total_tokens=780),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        fast_provider = Mock()
+        fast_provider.generate = AsyncMock(return_value=resolver_response)
+        fast_provider.provider = "openai"
+        fast_provider.model = "gpt-4o-mini"
+
+        main_provider = Mock()
+        main_provider.generate = AsyncMock(return_value=sql_response)
+        main_provider.provider = "openai"
+        main_provider.model = "gpt-4o"
+
+        mock_settings = Mock()
+        mock_settings.llm = Mock()
+        mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
+        mock_settings.pipeline = Mock(
+            sql_table_resolver_enabled=True,
+            sql_table_resolver_confidence_threshold=0.55,
+            sql_prompt_budget_enabled=False,
+            schema_snapshot_cache_enabled=False,
+            sql_two_stage_enabled=False,
+        )
+
+        with (
+            patch("backend.agents.sql.get_settings", return_value=mock_settings),
+            patch(
+                "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+                side_effect=[main_provider, fast_provider],
+            ),
+        ):
+            agent = SQLAgent()
+
+        input_data = SQLAgentInput(
+            query="What is total revenue by store?",
+            investigation_memory=InvestigationMemory(
+                query="resolver",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales",
+                        score=0.9,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_sales_transactions",
+                            "key_columns": [
+                                {"name": "store_id"},
+                                {"name": "total_amount"},
+                                {"name": "business_date"},
+                            ],
+                        },
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_stores_001",
+                        datapoint_type="Schema",
+                        name="Stores",
+                        score=0.88,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_stores",
+                            "key_columns": [
+                                {"name": "store_id"},
+                                {"name": "store_name"},
+                            ],
+                        },
+                    ),
+                ],
+                total_retrieved=2,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        output = await agent(input_data)
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "grocery_sales_transactions" in output.generated_sql.sql
+        assert fast_provider.generate.await_count == 1
+        assert main_provider.generate.await_count == 1
+
+        call_args = main_provider.generate.await_args[0][0]
+        assert "Likely source tables (resolver)" in call_args.messages[1].content
+        assert "public.grocery_stores" in call_args.messages[1].content
+
+    @pytest.mark.asyncio
+    async def test_table_resolver_falls_back_to_ranked_candidates_on_invalid_json(self):
+        """Invalid resolver JSON should fall back to ranked candidates instead of clarifying."""
+        resolver_response = LLMResponse(
+            content="not-json",
+            model="gpt-4o-mini",
+            usage=LLMUsage(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+            finish_reason="stop",
+            provider="openai",
+        )
+        sql_response = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT s.store_name, SUM(t.quantity) AS sold_qty "
+                        "FROM public.grocery_sales_transactions t "
+                        "JOIN public.grocery_inventory_snapshots i ON i.store_id = t.store_id "
+                        "JOIN public.grocery_stores s ON s.store_id = t.store_id "
+                        "GROUP BY s.store_name"
+                    ),
+                    "explanation": "Inventory movement vs sales by store.",
+                    "used_datapoints": [],
+                    "confidence": 0.89,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=520, completion_tokens=140, total_tokens=660),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        fast_provider = Mock()
+        fast_provider.generate = AsyncMock(return_value=resolver_response)
+        fast_provider.provider = "openai"
+        fast_provider.model = "gpt-4o-mini"
+
+        main_provider = Mock()
+        main_provider.generate = AsyncMock(return_value=sql_response)
+        main_provider.provider = "openai"
+        main_provider.model = "gpt-4o"
+
+        mock_settings = Mock()
+        mock_settings.llm = Mock()
+        mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
+        mock_settings.pipeline = Mock(
+            sql_table_resolver_enabled=True,
+            sql_table_resolver_confidence_threshold=0.55,
+            sql_prompt_budget_enabled=False,
+            schema_snapshot_cache_enabled=False,
+            sql_two_stage_enabled=False,
+            sql_table_resolver_ranked_min_score=2,
+            sql_table_resolver_ranked_max_tables=3,
+        )
+
+        with (
+            patch("backend.agents.sql.get_settings", return_value=mock_settings),
+            patch(
+                "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+                side_effect=[main_provider, fast_provider],
+            ),
+        ):
+            agent = SQLAgent()
+
+        input_data = SQLAgentInput(
+            query="Which stores have the largest gap between inventory movement and recorded sales?",
+            investigation_memory=InvestigationMemory(
+                query="resolver",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales",
+                        score=0.9,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_sales_transactions",
+                            "key_columns": [
+                                {"name": "store_id"},
+                                {"name": "product_id"},
+                                {"name": "quantity"},
+                                {"name": "business_date"},
+                            ],
+                        },
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_inventory_snapshots_001",
+                        datapoint_type="Schema",
+                        name="Inventory Snapshots",
+                        score=0.89,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_inventory_snapshots",
+                            "key_columns": [
+                                {"name": "store_id"},
+                                {"name": "product_id"},
+                                {"name": "snapshot_date"},
+                                {"name": "on_hand_qty"},
+                            ],
+                        },
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_stores_001",
+                        datapoint_type="Schema",
+                        name="Stores",
+                        score=0.88,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_stores",
+                            "key_columns": [{"name": "store_id"}, {"name": "store_name"}],
+                        },
+                    ),
+                ],
+                total_retrieved=3,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        output = await agent(input_data)
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "grocery_sales_transactions" in output.generated_sql.sql
+        assert "grocery_inventory_snapshots" in output.generated_sql.sql
+        assert fast_provider.generate.await_count == 1
+        assert main_provider.generate.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_table_resolver_uses_candidates_when_clarification_flagged_but_confident(self):
+        """When candidates are clear and confidence is high, proceed without clarification."""
+        resolver_response = LLMResponse(
+            content=json.dumps(
+                {
+                    "candidate_tables": ["public.grocery_sales_transactions"],
+                    "column_hints": ["total_amount", "business_date"],
+                    "confidence": 0.82,
+                    "needs_clarification": True,
+                    "clarifying_question": "Which sales table should I use?",
+                }
+            ),
+            model="gpt-4o-mini",
+            usage=LLMUsage(prompt_tokens=180, completion_tokens=70, total_tokens=250),
+            finish_reason="stop",
+            provider="openai",
+        )
+        sql_response = LLMResponse(
+            content=json.dumps(
+                {
+                    "sql": (
+                        "SELECT business_date, SUM(total_amount) AS total_sales "
+                        "FROM public.grocery_sales_transactions "
+                        "GROUP BY business_date ORDER BY business_date"
+                    ),
+                    "explanation": "Daily sales totals",
+                    "used_datapoints": [],
+                    "confidence": 0.87,
+                    "assumptions": [],
+                    "clarifying_questions": [],
+                }
+            ),
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=420, completion_tokens=120, total_tokens=540),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        fast_provider = Mock()
+        fast_provider.generate = AsyncMock(return_value=resolver_response)
+        fast_provider.provider = "openai"
+        fast_provider.model = "gpt-4o-mini"
+
+        main_provider = Mock()
+        main_provider.generate = AsyncMock(return_value=sql_response)
+        main_provider.provider = "openai"
+        main_provider.model = "gpt-4o"
+
+        mock_settings = Mock()
+        mock_settings.llm = Mock()
+        mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
+        mock_settings.pipeline = Mock(
+            sql_table_resolver_enabled=True,
+            sql_table_resolver_confidence_threshold=0.55,
+            sql_prompt_budget_enabled=False,
+            schema_snapshot_cache_enabled=False,
+            sql_two_stage_enabled=False,
+        )
+
+        with (
+            patch("backend.agents.sql.get_settings", return_value=mock_settings),
+            patch(
+                "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+                side_effect=[main_provider, fast_provider],
+            ),
+        ):
+            agent = SQLAgent()
+
+        input_data = SQLAgentInput(
+            query="Show daily sales totals",
+            investigation_memory=InvestigationMemory(
+                query="resolver confident candidates",
+                datapoints=[
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_sales_transactions_001",
+                        datapoint_type="Schema",
+                        name="Sales",
+                        score=0.9,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_sales_transactions",
+                            "key_columns": [
+                                {"name": "business_date"},
+                                {"name": "total_amount"},
+                            ],
+                        },
+                    ),
+                    RetrievedDataPoint(
+                        datapoint_id="table_grocery_inventory_snapshots_001",
+                        datapoint_type="Schema",
+                        name="Inventory",
+                        score=0.88,
+                        source="vector",
+                        metadata={
+                            "table_name": "public.grocery_inventory_snapshots",
+                            "key_columns": [
+                                {"name": "snapshot_date"},
+                                {"name": "on_hand_qty"},
+                            ],
+                        },
+                    ),
+                ],
+                total_retrieved=2,
+                retrieval_mode="hybrid",
+                sources_used=[],
+            ),
+            database_type="postgresql",
+        )
+
+        output = await agent(input_data)
+
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert output.generated_sql.clarifying_questions == []
+        assert "grocery_sales_transactions" in output.generated_sql.sql
+        assert fast_provider.generate.await_count == 1
+        assert main_provider.generate.await_count == 1
 
     @pytest.mark.asyncio
     async def test_two_stage_sql_accepts_fast_model_when_confident(
@@ -1348,6 +2422,14 @@ class TestErrorHandling:
         assert generated.sql == (
             "SELECT SUM(total_amount) AS total_revenue FROM public.grocery_sales_transactions"
         )
+
+    def test_parse_llm_response_handles_non_string_content(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(update={"query": "Show tables"})
+
+        with pytest.raises(ValueError, match="missing 'sql' field|empty content"):
+            sql_agent._parse_llm_response(AsyncMock(), sql_input)
 
 
 class TestInputValidation:

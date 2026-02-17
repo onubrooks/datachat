@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC
 from pathlib import Path
 from typing import Any, TypedDict
+from urllib.parse import urlparse
 
 from langgraph.graph import END, StateGraph
 
@@ -31,6 +32,7 @@ from backend.agents.validator import ValidatorAgent
 from backend.config import get_settings
 from backend.connectors.base import BaseConnector
 from backend.connectors.factory import create_connector
+from backend.database.manager import DatabaseConnectionManager
 from backend.knowledge.retriever import Retriever
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
@@ -52,6 +54,7 @@ from backend.tools.policy import ToolPolicyError
 from backend.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+ENV_DATABASE_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada"
 
 
 # ============================================================================
@@ -125,6 +128,7 @@ class PipelineState(TypedDict, total=False):
     query_result: dict[str, Any] | None
     natural_language_answer: str | None
     visualization_hint: str | None
+    visualization_note: str | None
     key_insights: list[str]
     answer_source: str | None
     answer_confidence: float | None
@@ -150,6 +154,7 @@ class PipelineState(TypedDict, total=False):
     schema_refresh_attempted: bool
     sub_answers: list[dict[str, Any]]
     decision_trace: list[dict[str, Any]]
+    preplanned_sql: dict[str, Any] | None
 
 
 # ============================================================================
@@ -203,6 +208,8 @@ class DataChatPipeline:
         self.max_clarifications = 3
         self.config = get_settings()
         self.routing_policy = self._build_routing_policy()
+        self._connection_scope_cache: dict[str, tuple[float, set[str]]] = {}
+        self._connection_scope_ttl_seconds = 300
 
         # Initialize agents
         self.classifier = ClassifierAgent()
@@ -705,6 +712,10 @@ class DataChatPipeline:
             output = await self.context.execute(input_data)
 
             # Update state
+            allowed_connection_ids = await self._resolve_equivalent_connection_ids(
+                target_connection_id=state.get("target_connection_id"),
+                database_url=state.get("database_url"),
+            )
             connection_scoped_datapoints = self._filter_datapoints_by_target_connection(
                 [
                     {
@@ -719,6 +730,7 @@ class DataChatPipeline:
                     for dp in output.investigation_memory.datapoints
                 ],
                 target_connection_id=state.get("target_connection_id"),
+                target_connection_ids=allowed_connection_ids,
             )
             filtered_datapoints = await self._filter_datapoints_by_live_schema(
                 connection_scoped_datapoints,
@@ -756,6 +768,7 @@ class DataChatPipeline:
         self,
         datapoints: list[dict[str, Any]],
         target_connection_id: str | None,
+        target_connection_ids: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Scope retrieved DataPoints to the selected connection.
@@ -769,6 +782,14 @@ class DataChatPipeline:
         """
         if not target_connection_id:
             return datapoints
+
+        allowed_connection_ids = {str(target_connection_id)}
+        if target_connection_ids:
+            allowed_connection_ids.update(
+                str(connection_id)
+                for connection_id in target_connection_ids
+                if connection_id
+            )
 
         scoped: list[dict[str, Any]] = []
         global_items: list[dict[str, Any]] = []
@@ -791,7 +812,7 @@ class DataChatPipeline:
                 unscoped.append(dp)
                 continue
 
-            if str(connection_id) != str(target_connection_id):
+            if str(connection_id) not in allowed_connection_ids:
                 removed_foreign += 1
                 continue
             scoped.append(dp)
@@ -815,6 +836,85 @@ class DataChatPipeline:
             return unscoped
 
         return []
+
+    async def _resolve_equivalent_connection_ids(
+        self,
+        *,
+        target_connection_id: str | None,
+        database_url: str | None,
+    ) -> set[str]:
+        """Resolve connection IDs that point to the same runtime database URL."""
+        resolved: set[str] = set()
+        if target_connection_id:
+            resolved.add(str(target_connection_id))
+        if not database_url:
+            return resolved
+
+        cache_key = self._database_identity(database_url)
+        if cache_key:
+            cached = self._connection_scope_cache.get(cache_key)
+            if cached:
+                cached_at, cached_ids = cached
+                if (time.time() - cached_at) < self._connection_scope_ttl_seconds:
+                    return resolved | set(cached_ids)
+
+        equivalents: set[str] = set()
+        if self.config.database.url and self._same_database_url(
+            str(self.config.database.url), database_url
+        ):
+            equivalents.add(ENV_DATABASE_CONNECTION_ID)
+
+        system_database_url = (
+            str(self.config.system_database.url)
+            if self.config.system_database.url
+            else None
+        )
+        if system_database_url:
+            manager = DatabaseConnectionManager(system_database_url=system_database_url)
+            try:
+                await manager.initialize()
+                for connection in await manager.list_connections():
+                    if self._same_database_url(
+                        connection.database_url.get_secret_value(),
+                        database_url,
+                    ):
+                        equivalents.add(str(connection.connection_id))
+            except Exception as exc:
+                logger.debug(
+                    "Failed to resolve equivalent connection IDs for datapoint scoping: %s",
+                    exc,
+                )
+            finally:
+                try:
+                    await manager.close()
+                except Exception:
+                    pass
+
+        if cache_key and equivalents:
+            self._connection_scope_cache[cache_key] = (time.time(), equivalents)
+
+        return resolved | equivalents
+
+    @staticmethod
+    def _database_identity(database_url: str | None) -> str | None:
+        if not database_url:
+            return None
+        normalized = database_url.replace("postgresql+asyncpg://", "postgresql://").strip()
+        if not normalized:
+            return None
+        parsed = urlparse(normalized)
+        if not parsed.scheme or not parsed.hostname:
+            return normalized.lower()
+        scheme = parsed.scheme.split("+", 1)[0].lower()
+        host = (parsed.hostname or "").lower()
+        default_ports = {"postgresql": 5432, "postgres": 5432, "mysql": 3306, "clickhouse": 8123}
+        port = parsed.port or default_ports.get(scheme)
+        username = parsed.username or ""
+        database = parsed.path.lstrip("/")
+        return f"{scheme}://{username}@{host}:{port}/{database}"
+
+    def _same_database_url(self, left: str | None, right: str | None) -> bool:
+        return self._database_identity(left) == self._database_identity(right)
 
     async def _run_context_answer(self, state: PipelineState) -> PipelineState:
         """Run ContextAnswerAgent."""
@@ -875,6 +975,7 @@ class DataChatPipeline:
             state["validated_sql"] = None
             state["query_result"] = None
             state["visualization_hint"] = None
+            state["visualization_note"] = None
             if output.context_answer.needs_sql:
                 state["context_preface"] = output.context_answer.answer
                 state["context_evidence"] = [
@@ -1094,6 +1195,65 @@ class DataChatPipeline:
             return state
 
         try:
+            preplanned_sql = state.get("preplanned_sql")
+            if isinstance(preplanned_sql, dict):
+                preplanned_text = str(preplanned_sql.get("sql", "") or "").strip()
+                preplanned_questions = preplanned_sql.get("clarifying_questions", [])
+                if isinstance(preplanned_questions, str):
+                    preplanned_questions = [preplanned_questions]
+                if (
+                    isinstance(preplanned_questions, list)
+                    and preplanned_questions
+                    and not preplanned_text
+                ):
+                    questions = [
+                        str(question).strip()
+                        for question in preplanned_questions
+                        if str(question).strip()
+                    ]
+                    self._apply_clarification_response(state, questions)
+                    elapsed = (time.time() - start_time) * 1000
+                    state["agent_timings"]["sql"] = elapsed
+                    state["total_latency_ms"] += elapsed
+                    return state
+
+                if preplanned_text:
+                    planned_confidence = preplanned_sql.get("confidence", 0.78)
+                    try:
+                        confidence = float(planned_confidence)
+                    except (TypeError, ValueError):
+                        confidence = 0.78
+                    confidence = max(0.0, min(1.0, confidence))
+                    planned_sql = GeneratedSQL(
+                        sql=preplanned_text,
+                        explanation=str(
+                            preplanned_sql.get("explanation")
+                            or "Multi-question SQL planner output."
+                        ),
+                        used_datapoints=[],
+                        confidence=confidence,
+                        assumptions=[],
+                        clarifying_questions=[],
+                    )
+                    planned_sql = self.sql._apply_row_limit_policy(planned_sql, state["query"])
+
+                    state["clarification_needed"] = False
+                    state["clarifying_questions"] = []
+                    state["generated_sql"] = planned_sql.sql
+                    state["sql_explanation"] = planned_sql.explanation
+                    state["sql_confidence"] = planned_sql.confidence
+                    state["used_datapoints"] = planned_sql.used_datapoints
+                    state["assumptions"] = planned_sql.assumptions
+
+                    elapsed = (time.time() - start_time) * 1000
+                    state["agent_timings"]["sql"] = elapsed
+                    state["total_latency_ms"] += elapsed
+                    logger.info(
+                        "SQLAgent complete from multi planner: "
+                        f"confidence={state['sql_confidence']:.2f}"
+                    )
+                    return state
+
             # Reconstruct InvestigationMemory from state
             from backend.models import InvestigationMemory, RetrievedDataPoint
 
@@ -1141,6 +1301,17 @@ class DataChatPipeline:
 
             output = await self.sql.execute(input_data)
 
+            elapsed = (time.time() - start_time) * 1000
+            state["agent_timings"]["sql"] = elapsed
+            state["total_latency_ms"] += elapsed
+            state["llm_calls"] += output.metadata.llm_calls
+            state["sql_formatter_fallback_calls"] = int(
+                (output.data or {}).get("formatter_fallback_calls", 0)
+            )
+            state["sql_formatter_fallback_successes"] = int(
+                (output.data or {}).get("formatter_fallback_successes", 0)
+            )
+
             if output.needs_clarification:
                 questions = output.generated_sql.clarifying_questions or []
                 if not questions:
@@ -1181,18 +1352,6 @@ class DataChatPipeline:
                 getattr(output.generated_sql, "used_datapoint_ids", []),
             )
             state["assumptions"] = output.generated_sql.assumptions
-            state["sql_formatter_fallback_calls"] = int(
-                (output.data or {}).get("formatter_fallback_calls", 0)
-            )
-            state["sql_formatter_fallback_successes"] = int(
-                (output.data or {}).get("formatter_fallback_successes", 0)
-            )
-
-            # Update metadata
-            elapsed = (time.time() - start_time) * 1000
-            state["agent_timings"]["sql"] = elapsed
-            state["total_latency_ms"] += elapsed
-            state["llm_calls"] += output.metadata.llm_calls
 
             retry_info = (
                 f" (retry {state.get('retry_count', 0)})" if state.get("retry_count", 0) > 0 else ""
@@ -1351,6 +1510,7 @@ class DataChatPipeline:
             }
             state["natural_language_answer"] = output.executed_query.natural_language_answer
             state["visualization_hint"] = output.executed_query.visualization_hint
+            state["visualization_note"] = output.executed_query.visualization_note
             state["key_insights"] = output.executed_query.key_insights
             state["answer_source"] = "sql"
             state["answer_confidence"] = state.get("sql_confidence", 0.7)
@@ -1846,6 +2006,8 @@ class DataChatPipeline:
                 state["query_result"] = payload.get("data")
             if payload.get("visualization_hint"):
                 state["visualization_hint"] = payload.get("visualization_hint")
+            if payload.get("visualization_note"):
+                state["visualization_note"] = payload.get("visualization_note")
             if payload.get("retrieved_datapoints"):
                 state["retrieved_datapoints"] = payload.get("retrieved_datapoints")
             if payload.get("used_datapoints"):
@@ -2837,6 +2999,7 @@ class DataChatPipeline:
         target_connection_id: str | None,
         synthesize_simple_sql: bool | None,
         correlation_prefix: str,
+        preplanned_sql: dict[str, Any] | None = None,
     ) -> PipelineState:
         return {
             "query": query,
@@ -2873,6 +3036,7 @@ class DataChatPipeline:
             "validation_errors": [],
             "validation_warnings": [],
             "key_insights": [],
+            "visualization_note": None,
             "used_datapoints": [],
             "assumptions": [],
             "sql_formatter_fallback_calls": 0,
@@ -2895,6 +3059,7 @@ class DataChatPipeline:
             "tool_approval_message": None,
             "tool_approval_calls": [],
             "sub_answers": [],
+            "preplanned_sql": preplanned_sql,
         }
 
     def _split_multi_query(self, query: str) -> list[str]:
@@ -2953,6 +3118,7 @@ class DataChatPipeline:
         database_url: str | None = None,
         target_connection_id: str | None = None,
         synthesize_simple_sql: bool | None = None,
+        preplanned_sql: dict[str, Any] | None = None,
     ) -> PipelineState:
         initial_state = self._build_initial_state(
             query=query,
@@ -2964,6 +3130,7 @@ class DataChatPipeline:
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
             correlation_prefix="local",
+            preplanned_sql=preplanned_sql,
         )
 
         logger.info(f"Starting pipeline for query: {query[:100]}...")
@@ -2995,6 +3162,145 @@ class DataChatPipeline:
             "error": result.get("error"),
         }
 
+    def _build_multi_sql_planner_prompt(self, parts: list[str], schema_context: str) -> str:
+        questions = "\n".join(f"{idx}. {part}" for idx, part in enumerate(parts, start=1))
+        return (
+            "Generate SQL plans for each question.\n"
+            "Return STRICT JSON (no markdown) with shape:\n"
+            "{\n"
+            '  "plans": [\n'
+            "    {\n"
+            '      "index": 1,\n'
+            '      "sql": "SELECT ...",\n'
+            '      "explanation": "short reason",\n'
+            '      "confidence": 0.0,\n'
+            '      "clarifying_questions": []\n'
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            "Rules:\n"
+            "- One plan per question index.\n"
+            "- Use only tables/columns from SCHEMA_CONTEXT.\n"
+            "- Use a single SELECT query per question (no DDL/DML).\n"
+            "- If answer is unclear, set sql to empty string and add clarifying_questions.\n"
+            "- Add LIMIT for detail/list queries unless aggregation already bounds output.\n\n"
+            f"QUESTIONS:\n{questions}\n\n"
+            f"SCHEMA_CONTEXT:\n{schema_context}"
+        )
+
+    def _parse_multi_sql_planner_response(
+        self, content: str, part_count: int
+    ) -> dict[int, dict[str, Any]]:
+        json_text: str | None = None
+        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+        if fenced:
+            json_text = fenced.group(1)
+        else:
+            candidate = re.search(r"\{.*\}", content, re.DOTALL)
+            if candidate:
+                json_text = candidate.group(0)
+        if not json_text:
+            return {}
+
+        try:
+            payload = json.loads(json_text)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+
+        plans = payload.get("plans")
+        if not isinstance(plans, list):
+            return {}
+
+        parsed: dict[int, dict[str, Any]] = {}
+        for item in plans:
+            if not isinstance(item, dict):
+                continue
+            raw_index = item.get("index")
+            try:
+                index = int(raw_index)
+            except (TypeError, ValueError):
+                continue
+            if index < 1 or index > part_count:
+                continue
+
+            sql_text = item.get("sql")
+            sql_value = sql_text.strip() if isinstance(sql_text, str) else ""
+            explanation = item.get("explanation")
+            explanation_value = explanation.strip() if isinstance(explanation, str) else ""
+            raw_confidence = item.get("confidence", 0.6)
+            try:
+                confidence_value = float(raw_confidence)
+            except (TypeError, ValueError):
+                confidence_value = 0.6
+            confidence_value = max(0.0, min(1.0, confidence_value))
+
+            questions = item.get("clarifying_questions", [])
+            clarifying_questions: list[str] = []
+            if isinstance(questions, str):
+                questions = [questions]
+            if isinstance(questions, list):
+                for question in questions:
+                    if isinstance(question, str) and question.strip():
+                        clarifying_questions.append(question.strip())
+
+            parsed[index] = {
+                "sql": sql_value,
+                "explanation": explanation_value,
+                "confidence": confidence_value,
+                "clarifying_questions": clarifying_questions,
+            }
+        return parsed
+
+    async def _plan_multi_sql_for_parts(
+        self,
+        *,
+        parts: list[str],
+        database_type: str,
+        database_url: str | None,
+    ) -> tuple[dict[int, dict[str, Any]], int, float]:
+        if not parts:
+            return {}, 0, 0.0
+
+        start = time.time()
+        try:
+            schema_context = await self.sql._get_live_schema_context(
+                query=" ; ".join(parts),
+                database_type=database_type,
+                database_url=database_url,
+                include_profile=False,
+            )
+            schema_context = schema_context or "No schema context available."
+            request = LLMRequest(
+                messages=[
+                    LLMMessage(
+                        role="system",
+                        content=(
+                            "You are a SQL planner for multiple analytics questions. "
+                            "Return strict JSON only."
+                        ),
+                    ),
+                    LLMMessage(
+                        role="user",
+                        content=self._build_multi_sql_planner_prompt(parts, schema_context),
+                    ),
+                ],
+                temperature=0.0,
+                max_tokens=2200,
+            )
+            provider = getattr(self.sql, "fast_llm", None) or getattr(self.sql, "llm", None)
+            if provider is None:
+                return {}, 0, (time.time() - start) * 1000
+            response = await provider.generate(request)
+            plans = self._parse_multi_sql_planner_response(response.content or "", len(parts))
+            if not plans:
+                return {}, 1, (time.time() - start) * 1000
+            return plans, 1, (time.time() - start) * 1000
+        except Exception as exc:
+            logger.debug(f"Multi SQL planner fallback skipped due to error: {exc}")
+            return {}, 0, (time.time() - start) * 1000
+
     def _aggregate_multi_results(
         self,
         *,
@@ -3008,6 +3314,8 @@ class DataChatPipeline:
         database_url: str | None,
         target_connection_id: str | None,
         synthesize_simple_sql: bool | None,
+        extra_llm_calls: int = 0,
+        extra_agent_timings: dict[str, float] | None = None,
     ) -> PipelineState:
         merged = self._build_initial_state(
             query=original_query,
@@ -3037,6 +3345,21 @@ class DataChatPipeline:
 
         merged["answer_source"] = "multi"
 
+        primary_index, primary_result = self._select_primary_sub_result(sub_results)
+        if primary_result is not None:
+            merged["generated_sql"] = primary_result.get("generated_sql")
+            merged["validated_sql"] = primary_result.get("validated_sql")
+            merged["query_result"] = primary_result.get("query_result")
+            merged["visualization_hint"] = primary_result.get("visualization_hint")
+            merged["visualization_note"] = primary_result.get("visualization_note")
+            merged["key_insights"] = primary_result.get("key_insights", [])
+            if primary_index is not None and 0 <= primary_index < len(sub_answers):
+                merged["natural_language_answer"] = (
+                    f"{merged['natural_language_answer']}\n\n"
+                    f"Primary SQL/table/visualization shown for question {primary_index + 1}: "
+                    f"{sub_answers[primary_index]['query']}"
+                )
+
         confidence_values = [
             float(item.get("answer_confidence"))
             for item in sub_answers
@@ -3045,7 +3368,9 @@ class DataChatPipeline:
         if confidence_values:
             merged["answer_confidence"] = max(0.0, min(1.0, sum(confidence_values) / len(confidence_values)))
 
-        merged["llm_calls"] = sum(int(result.get("llm_calls", 0) or 0) for result in sub_results)
+        merged["llm_calls"] = (
+            sum(int(result.get("llm_calls", 0) or 0) for result in sub_results) + extra_llm_calls
+        )
         merged["retry_count"] = sum(int(result.get("retry_count", 0) or 0) for result in sub_results)
         merged["total_latency_ms"] = sum(
             float(result.get("total_latency_ms", 0.0) or 0.0) for result in sub_results
@@ -3073,6 +3398,8 @@ class DataChatPipeline:
         for result in sub_results:
             for agent, duration in (result.get("agent_timings") or {}).items():
                 merged_agent_timings[agent] = merged_agent_timings.get(agent, 0.0) + float(duration or 0.0)
+        for agent, duration in (extra_agent_timings or {}).items():
+            merged_agent_timings[agent] = merged_agent_timings.get(agent, 0.0) + float(duration or 0.0)
         merged["agent_timings"] = merged_agent_timings
 
         all_sources: list[dict[str, Any]] = []
@@ -3111,6 +3438,185 @@ class DataChatPipeline:
             merged["session_state"] = sub_results[-1].get("session_state")
         self._finalize_session_memory(merged)
         return merged
+
+    def _select_primary_sub_result(
+        self, sub_results: list[PipelineState]
+    ) -> tuple[int | None, PipelineState | None]:
+        """
+        Select the sub-result whose SQL/data artifacts should back the rich UI tabs.
+
+        Priority:
+        1. Query results with at least one row
+        2. Query results with zero rows (still a concrete SQL outcome)
+        3. Validated/generated SQL without execution payload
+        4. First non-error/non-clarification answer
+        5. First sub-result (fallback)
+        """
+        if not sub_results:
+            return None, None
+
+        def _priority(result: PipelineState) -> tuple[int, int]:
+            query_result = result.get("query_result")
+            has_query_result = isinstance(query_result, dict)
+            row_count = 0
+            if has_query_result:
+                raw_row_count = query_result.get("row_count", 0)
+                try:
+                    row_count = int(raw_row_count or 0)
+                except (TypeError, ValueError):
+                    row_count = 0
+                if row_count > 0:
+                    return (4, row_count)
+                return (3, 0)
+
+            has_sql = bool(result.get("validated_sql") or result.get("generated_sql"))
+            if has_sql:
+                return (2, 0)
+
+            source = str(result.get("answer_source") or "").lower()
+            is_error = bool(result.get("error"))
+            if source not in {"clarification", "error"} and not is_error:
+                return (1, 0)
+
+            return (0, 0)
+
+        best_index = 0
+        best_priority = _priority(sub_results[0])
+        for idx, result in enumerate(sub_results[1:], start=1):
+            candidate_priority = _priority(result)
+            if candidate_priority > best_priority:
+                best_priority = candidate_priority
+                best_index = idx
+
+        return best_index, sub_results[best_index]
+
+    async def _run_single_query_with_streaming_callback(
+        self,
+        *,
+        query: str,
+        conversation_history: list[Message] | None,
+        session_summary: str | None,
+        session_state: dict[str, Any] | None,
+        database_type: str,
+        database_url: str | None,
+        target_connection_id: str | None,
+        synthesize_simple_sql: bool | None,
+        event_callback: Any = None,
+        correlation_prefix: str = "stream",
+        preplanned_sql: dict[str, Any] | None = None,
+    ) -> PipelineState:
+        """Execute one query while emitting per-agent callback events."""
+        from datetime import datetime
+
+        initial_state = self._build_initial_state(
+            query=query,
+            conversation_history=conversation_history,
+            session_summary=session_summary,
+            session_state=session_state,
+            database_type=database_type,
+            database_url=database_url,
+            target_connection_id=target_connection_id,
+            synthesize_simple_sql=synthesize_simple_sql,
+            correlation_prefix=correlation_prefix,
+            preplanned_sql=preplanned_sql,
+        )
+
+        logger.info(f"Starting streaming pipeline for query: {query[:100]}...")
+        pipeline_start = time.time()
+
+        agent_start_times: dict[str, float] = {}
+        final_state: PipelineState | None = None
+
+        async for update in self.graph.astream(initial_state):
+            for _node_name, state_update in update.items():
+                current_agent = state_update.get("current_agent")
+
+                if current_agent and current_agent not in agent_start_times:
+                    agent_start_times[current_agent] = time.time()
+                    if event_callback:
+                        await event_callback(
+                            "agent_start",
+                            {
+                                "agent": current_agent,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            },
+                        )
+
+                if current_agent and current_agent in agent_start_times:
+                    duration_ms = (time.time() - agent_start_times[current_agent]) * 1000
+                    if event_callback:
+                        agent_data: dict[str, Any] = {}
+                        if current_agent == "ClassifierAgent":
+                            agent_data = {
+                                "intent": state_update.get("intent"),
+                                "entities": state_update.get("entities", []),
+                                "complexity": state_update.get("complexity"),
+                            }
+                        elif current_agent == "ContextAgent":
+                            agent_data = {
+                                "datapoints_found": len(
+                                    state_update.get("retrieved_datapoints", [])
+                                ),
+                            }
+                        elif current_agent == "SQLAgent":
+                            agent_data = {
+                                "sql_generated": bool(state_update.get("generated_sql")),
+                                "confidence": state_update.get("sql_confidence"),
+                            }
+                        elif current_agent == "ValidatorAgent":
+                            agent_data = {
+                                "validation_passed": state_update.get("validation_passed", False),
+                                "issues_found": len(state_update.get("validation_errors", [])),
+                            }
+                        elif current_agent == "ExecutorAgent":
+                            query_result = state_update.get("query_result")
+                            agent_data = {
+                                "rows_returned": (
+                                    query_result.get("row_count", 0) if query_result else 0
+                                ),
+                                "visualization_hint": state_update.get("visualization_hint"),
+                                "visualization_note": state_update.get("visualization_note"),
+                            }
+                        elif current_agent == "ContextAnswerAgent":
+                            agent_data = {
+                                "answer_source": state_update.get("answer_source"),
+                                "confidence": state_update.get("answer_confidence"),
+                                "evidence_count": len(state_update.get("evidence", [])),
+                            }
+                        elif current_agent == "ToolPlannerAgent":
+                            agent_data = {
+                                "tool_calls": len(state_update.get("tool_calls", [])),
+                            }
+                        elif current_agent == "ToolExecutor":
+                            agent_data = {
+                                "tool_results": len(state_update.get("tool_results", [])),
+                                "tool_error": state_update.get("tool_error"),
+                            }
+
+                        await event_callback(
+                            "agent_complete",
+                            {
+                                "agent": current_agent,
+                                "data": agent_data,
+                                "duration_ms": duration_ms,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            },
+                        )
+
+                final_state = state_update
+
+        total_latency_ms = (time.time() - pipeline_start) * 1000
+        if final_state:
+            final_state["total_latency_ms"] = total_latency_ms
+            self._normalize_answer_metadata(final_state)
+            self._finalize_session_memory(final_state)
+
+        logger.info(
+            f"Pipeline streaming complete in {total_latency_ms:.1f}ms "
+            f"({final_state.get('llm_calls', 0) if final_state else 0} LLM calls)"
+        )
+
+        return final_state or initial_state
 
     # ========================================================================
     # Public API
@@ -3156,6 +3662,11 @@ class DataChatPipeline:
 
         sub_results: list[PipelineState] = []
         sub_answers: list[dict[str, Any]] = []
+        planned_sql_map, planner_llm_calls, planner_duration_ms = await self._plan_multi_sql_for_parts(
+            parts=parts,
+            database_type=database_type,
+            database_url=database_url,
+        )
         for index, part in enumerate(parts, start=1):
             result = await self._run_single_query(
                 query=part,
@@ -3166,6 +3677,7 @@ class DataChatPipeline:
                 database_url=database_url,
                 target_connection_id=target_connection_id,
                 synthesize_simple_sql=synthesize_simple_sql,
+                preplanned_sql=planned_sql_map.get(index),
             )
             sub_results.append(result)
             sub_answers.append(self._build_sub_answer(index, part, result))
@@ -3181,6 +3693,8 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            extra_llm_calls=planner_llm_calls,
+            extra_agent_timings={"multi_sql_planner": planner_duration_ms},
         )
 
     async def stream(
@@ -3290,10 +3804,10 @@ class DataChatPipeline:
             - agent_complete: Agent finishes execution
             - data_chunk: Intermediate data from agent (optional)
         """
-        from datetime import datetime
-
         parts = self._split_multi_query(query)
         if len(parts) > 1:
+            from datetime import datetime
+
             if event_callback:
                 await event_callback(
                     "decompose_complete",
@@ -3302,8 +3816,67 @@ class DataChatPipeline:
                         "part_count": len(parts),
                     },
                 )
-            return await self.run(
-                query=query,
+
+            planner_llm_calls = 0
+            planner_duration_ms = 0.0
+            planned_sql_map: dict[int, dict[str, Any]] = {}
+            if event_callback:
+                await event_callback(
+                    "agent_start",
+                    {
+                        "agent": "MultiSQLPlanner",
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    },
+                )
+            planned_sql_map, planner_llm_calls, planner_duration_ms = await self._plan_multi_sql_for_parts(
+                parts=parts,
+                database_type=database_type,
+                database_url=database_url,
+            )
+            if event_callback:
+                await event_callback(
+                    "agent_complete",
+                    {
+                        "agent": "MultiSQLPlanner",
+                        "data": {
+                            "planned_questions": len(planned_sql_map),
+                            "part_count": len(parts),
+                        },
+                        "duration_ms": planner_duration_ms,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    },
+                )
+
+            sub_results: list[PipelineState] = []
+            sub_answers: list[dict[str, Any]] = []
+            for index, part in enumerate(parts, start=1):
+                if event_callback:
+                    await event_callback(
+                        "thinking",
+                        {
+                            "note": f"Showing live agent flow for question: {part}",
+                        },
+                    )
+                result = await self._run_single_query_with_streaming_callback(
+                    query=part,
+                    conversation_history=conversation_history,
+                    session_summary=session_summary,
+                    session_state=session_state,
+                    database_type=database_type,
+                    database_url=database_url,
+                    target_connection_id=target_connection_id,
+                    synthesize_simple_sql=synthesize_simple_sql,
+                    event_callback=event_callback,
+                    correlation_prefix=f"stream-q{index}",
+                    preplanned_sql=planned_sql_map.get(index),
+                )
+                sub_results.append(result)
+                sub_answers.append(self._build_sub_answer(index, part, result))
+
+            return self._aggregate_multi_results(
+                original_query=query,
+                sub_results=sub_results,
+                sub_answers=sub_answers,
                 conversation_history=conversation_history,
                 session_summary=session_summary,
                 session_state=session_state,
@@ -3311,9 +3884,11 @@ class DataChatPipeline:
                 database_url=database_url,
                 target_connection_id=target_connection_id,
                 synthesize_simple_sql=synthesize_simple_sql,
+                extra_llm_calls=planner_llm_calls,
+                extra_agent_timings={"multi_sql_planner": planner_duration_ms},
             )
 
-        initial_state = self._build_initial_state(
+        return await self._run_single_query_with_streaming_callback(
             query=query,
             conversation_history=conversation_history,
             session_summary=session_summary,
@@ -3322,109 +3897,9 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            event_callback=event_callback,
             correlation_prefix="stream",
         )
-
-        logger.info(f"Starting streaming pipeline for query: {query[:100]}...")
-        pipeline_start = time.time()
-
-        # Stream graph execution and emit events
-        agent_start_times: dict[str, float] = {}
-        final_state: PipelineState | None = None
-
-        async for update in self.graph.astream(initial_state):
-            for _node_name, state_update in update.items():
-                current_agent = state_update.get("current_agent")
-
-                # Agent start event
-                if current_agent and current_agent not in agent_start_times:
-                    agent_start_times[current_agent] = time.time()
-                    if event_callback:
-                        await event_callback(
-                            "agent_start",
-                            {
-                                "agent": current_agent,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            },
-                        )
-
-                # Agent complete event
-                if current_agent and current_agent in agent_start_times:
-                    duration_ms = (time.time() - agent_start_times[current_agent]) * 1000
-                    if event_callback:
-                        # Extract relevant data for this agent
-                        agent_data = {}
-                        if current_agent == "ClassifierAgent":
-                            agent_data = {
-                                "intent": state_update.get("intent"),
-                                "entities": state_update.get("entities", []),
-                                "complexity": state_update.get("complexity"),
-                            }
-                        elif current_agent == "ContextAgent":
-                            agent_data = {
-                                "datapoints_found": len(
-                                    state_update.get("retrieved_datapoints", [])
-                                ),
-                            }
-                        elif current_agent == "SQLAgent":
-                            agent_data = {
-                                "sql_generated": bool(state_update.get("generated_sql")),
-                                "confidence": state_update.get("sql_confidence"),
-                            }
-                        elif current_agent == "ValidatorAgent":
-                            agent_data = {
-                                "validation_passed": state_update.get("validation_passed", False),
-                                "issues_found": len(state_update.get("validation_errors", [])),
-                            }
-                        elif current_agent == "ExecutorAgent":
-                            query_result = state_update.get("query_result")
-                            agent_data = {
-                                "rows_returned": (
-                                    query_result.get("row_count", 0) if query_result else 0
-                                ),
-                                "visualization_hint": state_update.get("visualization_hint"),
-                            }
-                        elif current_agent == "ContextAnswerAgent":
-                            agent_data = {
-                                "answer_source": state_update.get("answer_source"),
-                                "confidence": state_update.get("answer_confidence"),
-                                "evidence_count": len(state_update.get("evidence", [])),
-                            }
-                        elif current_agent == "ToolPlannerAgent":
-                            agent_data = {
-                                "tool_calls": len(state_update.get("tool_calls", [])),
-                            }
-                        elif current_agent == "ToolExecutor":
-                            agent_data = {
-                                "tool_results": len(state_update.get("tool_results", [])),
-                                "tool_error": state_update.get("tool_error"),
-                            }
-
-                        await event_callback(
-                            "agent_complete",
-                            {
-                                "agent": current_agent,
-                                "data": agent_data,
-                                "duration_ms": duration_ms,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            },
-                        )
-
-                final_state = state_update
-
-        # Calculate total latency
-        total_latency_ms = (time.time() - pipeline_start) * 1000
-        if final_state:
-            final_state["total_latency_ms"] = total_latency_ms
-            self._normalize_answer_metadata(final_state)
-            self._finalize_session_memory(final_state)
-
-        logger.info(
-            f"Pipeline streaming complete in {total_latency_ms:.1f}ms "
-            f"({final_state.get('llm_calls', 0) if final_state else 0} LLM calls)"
-        )
-
-        return final_state or initial_state
 
     def _finalize_session_memory(self, state: PipelineState) -> None:
         """Persist compact memory fields for the next turn."""

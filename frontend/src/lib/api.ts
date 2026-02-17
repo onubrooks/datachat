@@ -65,6 +65,7 @@ export interface ChatResponse {
   sql: string | null;
   data: Record<string, unknown[]> | null;
   visualization_hint: string | null;
+  visualization_note?: string | null;
   sources: DataSource[];
   answer_source?: string | null;
   answer_confidence?: number | null;
@@ -129,6 +130,18 @@ export interface SystemInitializeResponse {
   has_system_database: boolean;
   has_datapoints: boolean;
   setup_required: SetupStep[];
+}
+
+export interface EntryEventRequest {
+  flow: string;
+  step: string;
+  status: "started" | "completed" | "failed" | "skipped";
+  source?: "ui" | "cli" | "api";
+  metadata?: Record<string, unknown>;
+}
+
+export interface EntryEventResponse {
+  ok: boolean;
 }
 
 export interface ToolInfo {
@@ -402,6 +415,25 @@ export class DataChatAPI {
   async systemReset(): Promise<SystemStatusResponse & { message: string }> {
     const response = await fetch(`${this.baseUrl}/api/v1/system/reset`, {
       method: "POST",
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      const message =
+        error.message || error.detail || response.statusText || `HTTP ${response.status}`;
+      throw new Error(message);
+    }
+
+    return response.json();
+  }
+
+  async emitEntryEvent(payload: EntryEventRequest): Promise<EntryEventResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/system/entry-event`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {

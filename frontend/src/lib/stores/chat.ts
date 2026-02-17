@@ -24,6 +24,7 @@ export interface Message extends ChatMessage {
   sql?: string | null;
   data?: Record<string, unknown[]> | null;
   visualization_hint?: string | null;
+  visualization_note?: string | null;
   clarifying_questions?: string[];
   sources?: Array<{
     datapoint_id: string;
@@ -257,6 +258,7 @@ export const useChatStore = create<ChatState>()(
         sql: response.sql,
         data: response.data,
         visualization_hint: response.visualization_hint,
+        visualization_note: response.visualization_note,
         sources: response.sources,
         answer_source: response.answer_source,
         answer_confidence: response.answer_confidence,

@@ -287,13 +287,16 @@ export function Message({
     if (!hasTable) {
       return "none";
     }
-    if (numericColumns.length >= 2 && rowCount <= 200) {
-      return "scatter";
-    }
     if (numericColumns.length >= 1 && columnNames.some((col) => isDateLikeColumn(col))) {
       return "line_chart";
     }
-    if (numericColumns.length >= 1 && rowCount <= 20) {
+    if (numericColumns.length >= 1 && nonNumericColumns.length >= 1) {
+      if (rowCount <= 30) {
+        return "bar_chart";
+      }
+      return "table";
+    }
+    if (numericColumns.length >= 1 && rowCount <= 25) {
       return "bar_chart";
     }
     return "table";
@@ -587,6 +590,9 @@ export function Message({
           </CardTitle>
         </CardHeader>
         <CardContent>
+          {message.visualization_note && (
+            <p className="mb-2 text-xs text-amber-700">{message.visualization_note}</p>
+          )}
           <p className="text-sm text-muted-foreground">{messageText}</p>
           <p className="mt-2 text-xs text-muted-foreground">
             Tip: switch to the Table tab for raw results.
@@ -628,6 +634,9 @@ export function Message({
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
+            {message.visualization_note && (
+              <p className="text-xs text-amber-700">{message.visualization_note}</p>
+            )}
             {points.map((point, index) => (
               <div key={`${point.label}-${index}`} className="flex items-center gap-2">
                 <div className="w-28 truncate text-xs">{point.label}</div>
@@ -692,6 +701,9 @@ export function Message({
             </CardTitle>
           </CardHeader>
           <CardContent>
+            {message.visualization_note && (
+              <p className="mb-2 text-xs text-amber-700">{message.visualization_note}</p>
+            )}
             <div className="overflow-x-auto">
               <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[320px] w-full h-[220px]">
                 <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="#94a3b8" />
@@ -756,6 +768,9 @@ export function Message({
             </CardTitle>
           </CardHeader>
           <CardContent>
+            {message.visualization_note && (
+              <p className="mb-2 text-xs text-amber-700">{message.visualization_note}</p>
+            )}
             <div className="overflow-x-auto">
               <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[320px] w-full h-[220px]">
                 <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="#94a3b8" />
@@ -813,6 +828,9 @@ export function Message({
             </CardTitle>
           </CardHeader>
           <CardContent>
+            {message.visualization_note && (
+              <p className="mb-2 text-xs text-amber-700">{message.visualization_note}</p>
+            )}
             <div className="flex flex-wrap items-start gap-4">
               <div
                 className="h-40 w-40 rounded-full border border-border"
@@ -955,6 +973,7 @@ export function Message({
       executor: "Executor",
       context_answer: "Context Answer",
       response_synthesis: "Response Synthesis",
+      multi_sql_planner: "Multi SQL Planner",
     };
     if (labels[agent]) {
       return labels[agent];
