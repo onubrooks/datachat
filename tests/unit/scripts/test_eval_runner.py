@@ -147,3 +147,41 @@ def test_run_route_thresholds(monkeypatch):
     )
 
     assert rc == 0
+
+
+def test_run_compiler_thresholds(monkeypatch):
+    dataset = [
+        {
+            "query": "list stores",
+            "expected_selected_tables": ["grocery_stores"],
+            "expected_compiler_path": "deterministic",
+            "expected_answer_source": "sql",
+        }
+    ]
+
+    def _mock_post_chat(api_base: str, message: str, **kwargs):
+        return {
+            "answer_source": "sql",
+            "decision_trace": [
+                {
+                    "stage": "query_compiler",
+                    "decision": "deterministic",
+                    "reason": "deterministic",
+                    "details": {
+                        "selected_tables": ["public.grocery_stores"],
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr(EVAL_RUNNER, "_post_chat", _mock_post_chat)
+
+    rc = EVAL_RUNNER.run_compiler(
+        "http://localhost:8000",
+        dataset,
+        min_compiler_table_match_rate=1.0,
+        min_compiler_path_match_rate=1.0,
+        min_source_match_rate=1.0,
+    )
+
+    assert rc == 0

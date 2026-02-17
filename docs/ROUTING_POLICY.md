@@ -24,6 +24,12 @@ All knobs are configured with `PIPELINE_` env vars:
 - `reason` (deterministic reason label)
 - `details` (optional structured values)
 
+When SQL generation runs, an additional `query_compiler` stage is emitted with:
+
+- compiler path (`deterministic` or `llm_refined`)
+- selected candidate tables
+- operator hints and confidence
+
 This enables:
 
 - route-level regression checks in eval runner
@@ -39,6 +45,13 @@ python scripts/eval_runner.py \
   --dataset eval/routes_credentials.json \
   --min-route-match-rate 0.8 \
   --min-source-match-rate 0.8
+
+python scripts/eval_runner.py \
+  --mode compiler \
+  --dataset eval/compiler/grocery_query_compiler.json \
+  --min-compiler-table-match-rate 0.8 \
+  --min-compiler-path-match-rate 0.8 \
+  --min-source-match-rate 0.5
 ```
 
 ## Manual Testing

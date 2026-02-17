@@ -488,6 +488,26 @@ class PipelineSettings(BaseSettings):
         le=20,
         description="Maximum operator templates to inject into a single SQL prompt.",
     )
+    query_compiler_enabled: bool = Field(
+        default=True,
+        description="Enable semantic query compiler stage before SQL generation.",
+    )
+    query_compiler_llm_enabled: bool = Field(
+        default=True,
+        description="Allow mini-LLM refinement for ambiguous query-compiler table choices.",
+    )
+    query_compiler_llm_max_candidates: int = Field(
+        default=10,
+        ge=2,
+        le=20,
+        description="Maximum table candidates passed to query-compiler LLM refinement.",
+    )
+    query_compiler_confidence_threshold: float = Field(
+        default=0.72,
+        ge=0.0,
+        le=1.0,
+        description="Minimum deterministic query-compiler confidence before skipping LLM refinement.",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="PIPELINE_",

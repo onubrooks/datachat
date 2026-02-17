@@ -107,6 +107,10 @@ class PipelineState(TypedDict, total=False):
     sql_confidence: float | None
     sql_formatter_fallback_calls: int
     sql_formatter_fallback_successes: int
+    query_compiler_llm_calls: int
+    query_compiler_llm_refinements: int
+    query_compiler_latency_ms: float
+    query_compiler: dict[str, Any] | None
     used_datapoints: list[str]
     assumptions: list[str]
 
@@ -1187,6 +1191,30 @@ class DataChatPipeline:
             state["sql_formatter_fallback_successes"] = int(
                 (output.data or {}).get("formatter_fallback_successes", 0)
             )
+            state["query_compiler_llm_calls"] = int(
+                (output.data or {}).get("query_compiler_llm_calls", 0)
+            )
+            state["query_compiler_llm_refinements"] = int(
+                (output.data or {}).get("query_compiler_llm_refinements", 0)
+            )
+            state["query_compiler_latency_ms"] = float(
+                (output.data or {}).get("query_compiler_latency_ms", 0.0)
+            )
+            query_compiler_summary = (output.data or {}).get("query_compiler")
+            if isinstance(query_compiler_summary, dict):
+                state["query_compiler"] = query_compiler_summary
+                self._record_decision(
+                    state,
+                    stage="query_compiler",
+                    decision=str(query_compiler_summary.get("path") or "unknown"),
+                    reason=str(query_compiler_summary.get("reason") or "n/a"),
+                    details={
+                        "confidence": query_compiler_summary.get("confidence"),
+                        "selected_tables": query_compiler_summary.get("selected_tables", []),
+                        "candidate_tables": query_compiler_summary.get("candidate_tables", []),
+                        "operators": query_compiler_summary.get("operators", []),
+                    },
+                )
 
             # Update metadata
             elapsed = (time.time() - start_time) * 1000
@@ -2877,6 +2905,10 @@ class DataChatPipeline:
             "assumptions": [],
             "sql_formatter_fallback_calls": 0,
             "sql_formatter_fallback_successes": 0,
+            "query_compiler_llm_calls": 0,
+            "query_compiler_llm_refinements": 0,
+            "query_compiler_latency_ms": 0.0,
+            "query_compiler": None,
             "investigation_memory": None,
             "retrieved_datapoints": [],
             "context_confidence": None,
@@ -3056,6 +3088,20 @@ class DataChatPipeline:
         merged["sql_formatter_fallback_successes"] = sum(
             int(result.get("sql_formatter_fallback_successes", 0) or 0) for result in sub_results
         )
+        merged["query_compiler_llm_calls"] = sum(
+            int(result.get("query_compiler_llm_calls", 0) or 0) for result in sub_results
+        )
+        merged["query_compiler_llm_refinements"] = sum(
+            int(result.get("query_compiler_llm_refinements", 0) or 0) for result in sub_results
+        )
+        merged["query_compiler_latency_ms"] = sum(
+            float(result.get("query_compiler_latency_ms", 0.0) or 0.0) for result in sub_results
+        )
+        for result in sub_results:
+            summary = result.get("query_compiler")
+            if isinstance(summary, dict):
+                merged["query_compiler"] = summary
+                break
         merged["decision_trace"] = [
             {
                 "stage": "subquery",

@@ -15,6 +15,8 @@ This section is the source of truth for shipped vs planned architecture scope.
 Implemented now:
 
 - Intent gate before the main pipeline, with clarification loops and max-turn limits
+- Query compiler stage before SQL generation (deterministic table/operator selection with bounded mini-LLM refinement)
+  - Runtime details: `docs/QUERY_COMPILER_RUNTIME.md`
 - Deterministic catalog flows for schema-shape intents (tables/columns/sample rows/row count)
 - Credentials-only live schema mode as a first-class path
 - Multi-database routing via `target_database` with strict override resolution
@@ -75,6 +77,10 @@ User Query (Natural Language)
     ↓
 ┌─────────────────────────────┐
 │ Agent Router                │ ← Route to DB, Investigation, or Tool pipeline
+└────────┬────────────────────┘
+         ↓
+┌─────────────────────────────┐
+│ Query Compiler              │ ← Select likely tables/joins/operators before SQL prompt build
 └────────┬────────────────────┘
          ↓
 ┌─────────────────────────────┐

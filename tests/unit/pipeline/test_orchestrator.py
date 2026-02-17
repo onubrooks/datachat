@@ -449,6 +449,50 @@ class TestPipelineExecution:
         assert sql_input.database_url == "clickhouse://user:pass@click.example.com:8123/analytics"
 
     @pytest.mark.asyncio
+    async def test_pipeline_surfaces_query_compiler_metrics_and_decision_trace(self, mock_agents):
+        mock_agents.sql.execute = AsyncMock(
+            return_value=SQLAgentOutput(
+                success=True,
+                generated_sql=GeneratedSQL(
+                    sql="SELECT * FROM test_table",
+                    explanation="Simple select query",
+                    confidence=0.95,
+                    used_datapoints=["table_001"],
+                    assumptions=[],
+                    clarifying_questions=[],
+                ),
+                metadata=AgentMetadata(agent_name="SQLAgent", llm_calls=1),
+                data={
+                    "formatter_fallback_calls": 0,
+                    "formatter_fallback_successes": 0,
+                    "query_compiler_llm_calls": 1,
+                    "query_compiler_llm_refinements": 1,
+                    "query_compiler_latency_ms": 123.4,
+                    "query_compiler": {
+                        "path": "llm_refined",
+                        "reason": "llm_refined_ambiguous_candidates",
+                        "confidence": 0.9,
+                        "selected_tables": ["public.test_table"],
+                        "candidate_tables": ["public.test_table"],
+                        "operators": ["reconciliation"],
+                    },
+                },
+            )
+        )
+
+        result = await mock_agents.run("test query")
+
+        assert result["query_compiler_llm_calls"] == 1
+        assert result["query_compiler_llm_refinements"] == 1
+        assert result["query_compiler_latency_ms"] == pytest.approx(123.4)
+        assert result["query_compiler"]["path"] == "llm_refined"
+        assert any(
+            entry.get("stage") == "query_compiler"
+            and entry.get("decision") == "llm_refined"
+            for entry in result.get("decision_trace", [])
+        )
+
+    @pytest.mark.asyncio
     async def test_live_table_catalog_uses_database_url_connector(self, pipeline):
         mock_catalog = AsyncMock()
         mock_catalog.is_connected = False

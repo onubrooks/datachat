@@ -52,6 +52,9 @@ export interface Message extends ChatMessage {
     retry_count: number;
     sql_formatter_fallback_calls?: number;
     sql_formatter_fallback_successes?: number;
+    query_compiler_llm_calls?: number;
+    query_compiler_llm_refinements?: number;
+    query_compiler_latency_ms?: number;
   };
 }
 

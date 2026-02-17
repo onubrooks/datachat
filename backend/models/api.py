@@ -85,6 +85,18 @@ class ChatMetrics(BaseModel):
         default=0,
         description="Number of successful SQL formatter fallback recoveries.",
     )
+    query_compiler_llm_calls: int = Field(
+        default=0,
+        description="Number of query-compiler mini-LLM refinement calls.",
+    )
+    query_compiler_llm_refinements: int = Field(
+        default=0,
+        description="Number of query-compiler plans refined by mini-LLM.",
+    )
+    query_compiler_latency_ms: float = Field(
+        default=0.0,
+        description="Total time spent in query compiler stage (ms).",
+    )
 
 
 class SubAnswer(BaseModel):

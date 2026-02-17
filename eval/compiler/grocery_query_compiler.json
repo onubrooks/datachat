@@ -1,0 +1,36 @@
+[
+  {
+    "query": "List all grocery stores",
+    "expected_selected_tables": [
+      "grocery_stores"
+    ],
+    "expected_compiler_path": "deterministic",
+    "expected_answer_source": "sql"
+  },
+  {
+    "query": "What is total revenue by store for the last 30 days?",
+    "expected_selected_tables": [
+      "grocery_sales_transactions"
+    ],
+    "expected_answer_source": "sql"
+  },
+  {
+    "query": "Which 5 SKUs have the highest stockout risk this week based on on-hand, reserved, and reorder level?",
+    "expected_selected_tables": [
+      "grocery_inventory_snapshots"
+    ]
+  },
+  {
+    "query": "Compare weekend vs weekday sales lift by category and store.",
+    "expected_selected_tables": [
+      "grocery_sales_transactions"
+    ]
+  },
+  {
+    "query": "Which stores have the largest gap between inventory movement and recorded sales?",
+    "expected_selected_tables": [
+      "grocery_inventory_snapshots",
+      "grocery_sales_transactions"
+    ]
+  }
+]

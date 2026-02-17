@@ -65,6 +65,18 @@
           "min_route_match_rate": 0.8,
           "min_source_match_rate": 0.8
         }
+      },
+      {
+        "name": "compiler-grocery",
+        "mode": "compiler",
+        "dataset": "eval/compiler/grocery_query_compiler.json",
+        "required_database_type": "postgresql",
+        "on_missing": "skip",
+        "thresholds": {
+          "min_compiler_table_match_rate": 0.8,
+          "min_compiler_path_match_rate": 0.8,
+          "min_source_match_rate": 0.5
+        }
       }
     ]
   }

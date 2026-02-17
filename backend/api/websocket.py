@@ -313,6 +313,11 @@ async def websocket_chat(websocket: WebSocket) -> None:
             "agent_timings": result.get("agent_timings", {}),
             "llm_calls": result.get("llm_calls", 0),
             "retry_count": result.get("retry_count", 0),
+            "sql_formatter_fallback_calls": result.get("sql_formatter_fallback_calls", 0),
+            "sql_formatter_fallback_successes": result.get("sql_formatter_fallback_successes", 0),
+            "query_compiler_llm_calls": result.get("query_compiler_llm_calls", 0),
+            "query_compiler_llm_refinements": result.get("query_compiler_llm_refinements", 0),
+            "query_compiler_latency_ms": result.get("query_compiler_latency_ms", 0.0),
         }
 
         # Send final complete event

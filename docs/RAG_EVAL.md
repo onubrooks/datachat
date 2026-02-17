@@ -86,6 +86,9 @@ python scripts/eval_runner.py --mode catalog --dataset eval/catalog/mysql_creden
 
 # Deterministic routing checks (intent gate + path selection)
 python scripts/eval_runner.py --mode route --dataset eval/routes_credentials.json
+
+# Query-compiler quality checks (table/path decisions via decision_trace)
+python scripts/eval_runner.py --mode compiler --dataset eval/compiler/grocery_query_compiler.json
 ```
 
 Notes:
@@ -97,6 +100,8 @@ Notes:
 - Catalog mode focuses on deterministic metadata intents
   (`list tables`, `show columns`, `sample rows`, `row count`) and validates SQL/source/clarification behavior.
 - Route mode validates orchestration path choices via response `decision_trace`.
+- Compiler mode validates query-compiler selections (`selected_tables`) and plan path
+  (`deterministic` or `llm_refined`) via response `decision_trace`.
 
 Optional thresholds (non-zero exit on failure):
 
@@ -112,6 +117,9 @@ python scripts/eval_runner.py --mode catalog --dataset eval/catalog/mysql_creden
 
 python scripts/eval_runner.py --mode route --dataset eval/routes_credentials.json \
   --min-route-match-rate 0.8 --min-source-match-rate 0.8
+
+python scripts/eval_runner.py --mode compiler --dataset eval/compiler/grocery_query_compiler.json \
+  --min-compiler-table-match-rate 0.8 --min-compiler-path-match-rate 0.8 --min-source-match-rate 0.5
 ```
 
 ---
@@ -145,3 +153,4 @@ Keep a tiny set (5-10 queries) for quick regression checks before demos.
 - `eval/grocery/qa.json` - grocery end-to-end SQL/answer checks.
 - `eval/catalog/mysql_credentials.json` - deterministic catalog intent checks for MySQL credentials-only mode.
 - `eval/routes_credentials.json` - deterministic routing-path checks using `decision_trace`.
+- `eval/compiler/grocery_query_compiler.json` - query-compiler table/path decision checks.

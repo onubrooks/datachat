@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from backend.agents.base import BaseAgent
@@ -29,7 +30,7 @@ from backend.database.catalog_templates import (
     get_catalog_schemas,
     get_list_tables_query,
 )
-from backend.database.operator_templates import build_operator_guidance
+from backend.database.operator_templates import build_operator_guidance, match_operator_templates
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
 from backend.models.agent import (
@@ -54,6 +55,33 @@ class SQLClarificationNeeded(Exception):
     def __init__(self, questions: list[str]) -> None:
         super().__init__("SQL generation needs clarification")
         self.questions = questions
+
+
+@dataclass(frozen=True)
+class QueryCompilerPlan:
+    """Compiled semantic query plan used to prime SQL generation."""
+
+    query: str
+    operators: list[str]
+    candidate_tables: list[str]
+    selected_tables: list[str]
+    join_hypotheses: list[str]
+    column_hints: list[str]
+    confidence: float
+    path: str
+    reason: str
+
+    def to_summary(self) -> dict[str, Any]:
+        return {
+            "operators": self.operators,
+            "candidate_tables": self.candidate_tables,
+            "selected_tables": self.selected_tables,
+            "join_hypotheses": self.join_hypotheses,
+            "column_hints": self.column_hints,
+            "confidence": round(self.confidence, 3),
+            "path": self.path,
+            "reason": self.reason,
+        }
 
 
 class SQLAgent(BaseAgent):
@@ -220,6 +248,10 @@ class SQLAgent(BaseAgent):
         runtime_stats = {
             "formatter_fallback_calls": 0,
             "formatter_fallback_successes": 0,
+            "query_compiler_llm_calls": 0,
+            "query_compiler_llm_refinements": 0,
+            "query_compiler_latency_ms": 0.0,
+            "query_compiler": None,
         }
 
         try:
@@ -370,8 +402,14 @@ class SQLAgent(BaseAgent):
             )
             return self._apply_row_limit_policy(generated, input.query)
 
-        # Build prompt with context
-        prompt = await self._build_generation_prompt(input)
+        # Build prompt with context + compiled semantic plan
+        prompt, compiler_plan = await self._build_generation_prompt(
+            input,
+            runtime_stats=runtime_stats,
+            return_plan=True,
+        )
+        if compiler_plan is not None:
+            runtime_stats["query_compiler"] = compiler_plan.to_summary()
 
         # Create LLM request
         llm_request = LLMRequest(
@@ -1047,7 +1085,13 @@ class SQLAgent(BaseAgent):
             "Keep explanation concise (max 2 sentences). Do not include sql_components or metadata."
         )
 
-    async def _build_generation_prompt(self, input: SQLAgentInput) -> str:
+    async def _build_generation_prompt(
+        self,
+        input: SQLAgentInput,
+        *,
+        runtime_stats: dict[str, Any] | None = None,
+        return_plan: bool = False,
+    ) -> str | tuple[str, QueryCompilerPlan | None]:
         """
         Build prompt for SQL generation.
 
@@ -1089,6 +1133,22 @@ class SQLAgent(BaseAgent):
                     f"{live_context}"
                 )
 
+        compiler_plan: QueryCompilerPlan | None = None
+        if self._pipeline_flag("query_compiler_enabled", True):
+            compiler_plan = await self._compile_query_plan(
+                query=resolved_query,
+                investigation_memory=input.investigation_memory,
+                db_type=db_type,
+                db_url=db_url,
+                runtime_stats=runtime_stats,
+            )
+            if compiler_plan:
+                compiled_context = self._format_query_compiler_context(compiler_plan)
+                if schema_context == "No schema context available":
+                    schema_context = compiled_context
+                else:
+                    schema_context = f"{schema_context}\n\n{compiled_context}"
+
         if self._pipeline_flag("sql_operator_templates_enabled", True):
             operator_guidance = self._build_operator_guidance_context(
                 query=resolved_query,
@@ -1109,7 +1169,7 @@ class SQLAgent(BaseAgent):
         conversation_context = self._format_conversation_context(
             input.conversation_history
         )
-        return self.prompts.render(
+        prompt = self.prompts.render(
             "agents/sql_generator.md",
             user_query=resolved_query,
             schema_context=schema_context,
@@ -1118,6 +1178,9 @@ class SQLAgent(BaseAgent):
             backend=db_type,
             user_preferences={"default_limit": 10},
         )
+        if return_plan:
+            return prompt, compiler_plan
+        return prompt
 
     def _truncate_context(self, text: str, max_chars: int) -> str:
         if len(text) <= max_chars:
@@ -1166,6 +1229,344 @@ class SQLAgent(BaseAgent):
             max_templates=max(2, min(max_templates, 12)),
             max_table_hints=3,
         )
+
+    async def _compile_query_plan(
+        self,
+        *,
+        query: str,
+        investigation_memory,
+        db_type: str,
+        db_url: str | None,
+        runtime_stats: dict[str, Any] | None,
+    ) -> QueryCompilerPlan | None:
+        started = time.perf_counter()
+        table_columns = self._collect_table_columns_from_investigation(investigation_memory)
+        schema_key = f"{db_type}::{db_url}" if db_url else None
+        if schema_key:
+            cached_snapshot = self._live_schema_snapshot_cache.get(schema_key, {})
+            cached_columns = cached_snapshot.get("columns")
+            if isinstance(cached_columns, dict):
+                for table, columns in cached_columns.items():
+                    if not isinstance(table, str):
+                        continue
+                    values = table_columns.setdefault(table, [])
+                    if not isinstance(columns, list):
+                        continue
+                    for col in columns:
+                        col_name = str(col[0] if isinstance(col, tuple) and col else col)
+                        if col_name and col_name not in values:
+                            values.append(col_name)
+        if not table_columns:
+            if runtime_stats is not None:
+                runtime_stats["query_compiler_latency_ms"] = (
+                    runtime_stats.get("query_compiler_latency_ms", 0.0)
+                    + ((time.perf_counter() - started) * 1000.0)
+                )
+            return None
+
+        operator_matches = match_operator_templates(
+            query,
+            limit=max(2, min(self._pipeline_int("sql_operator_templates_max", 8), 12)),
+        )
+        operator_keys = [item.template.key for item in operator_matches]
+        signal_tokens: set[str] = set()
+        for item in operator_matches:
+            signal_tokens.update(token.lower() for token in item.template.signal_tokens)
+
+        scores = self._score_table_candidates(query, table_columns, signal_tokens)
+        ranked_tables = sorted(
+            table_columns.keys(),
+            key=lambda table: (scores.get(table, 0), table),
+            reverse=True,
+        )
+        candidate_tables = ranked_tables[:8]
+        selected_tables = self._pick_selected_tables(query, candidate_tables, scores)
+        join_hypotheses = self._infer_join_hypotheses(table_columns, selected_tables)
+        column_hints = self._suggest_column_hints(query, table_columns, selected_tables, signal_tokens)
+        confidence = self._estimate_compiler_confidence(scores, candidate_tables, selected_tables)
+
+        reason = "deterministic"
+        path = "deterministic"
+        if self._should_refine_compiler_with_llm(
+            confidence=confidence,
+            candidate_tables=candidate_tables,
+            selected_tables=selected_tables,
+            query=query,
+        ):
+            refined = await self._refine_compiler_with_llm(
+                query=query,
+                candidate_tables=candidate_tables,
+                table_columns=table_columns,
+                runtime_stats=runtime_stats,
+            )
+            if refined:
+                selected_tables = refined.get("selected_tables", selected_tables) or selected_tables
+                candidate_tables = refined.get("candidate_tables", candidate_tables) or candidate_tables
+                join_hypotheses = refined.get("join_hypotheses", join_hypotheses) or join_hypotheses
+                column_hints = refined.get("column_hints", column_hints) or column_hints
+                confidence = max(confidence, float(refined.get("confidence", confidence)))
+                reason = "llm_refined_ambiguous_candidates"
+                path = "llm_refined"
+                if runtime_stats is not None:
+                    runtime_stats["query_compiler_llm_refinements"] = int(
+                        runtime_stats.get("query_compiler_llm_refinements", 0)
+                    ) + 1
+
+        if runtime_stats is not None:
+            runtime_stats["query_compiler_latency_ms"] = (
+                runtime_stats.get("query_compiler_latency_ms", 0.0)
+                + ((time.perf_counter() - started) * 1000.0)
+            )
+        return QueryCompilerPlan(
+            query=query,
+            operators=operator_keys,
+            candidate_tables=candidate_tables,
+            selected_tables=selected_tables,
+            join_hypotheses=join_hypotheses,
+            column_hints=column_hints,
+            confidence=max(0.0, min(1.0, confidence)),
+            path=path,
+            reason=reason,
+        )
+
+    def _score_table_candidates(
+        self,
+        query: str,
+        table_columns: dict[str, list[str]],
+        signal_tokens: set[str],
+    ) -> dict[str, int]:
+        query_tokens = set(self._tokenize_query(query))
+        scores: dict[str, int] = {}
+        for table, columns in table_columns.items():
+            table_tokens = set(table.lower().replace(".", "_").split("_"))
+            score = 0
+            for token in query_tokens:
+                if token in table_tokens:
+                    score += 4
+                if any(token in col.lower() for col in columns):
+                    score += 3
+            for token in signal_tokens:
+                if any(token in col.lower() for col in columns):
+                    score += 2
+                if token in table_tokens:
+                    score += 1
+            if table.lower().startswith("information_schema.") or table.lower().startswith("pg_catalog."):
+                score -= 3
+            scores[table] = score
+        return scores
+
+    def _pick_selected_tables(
+        self,
+        query: str,
+        candidate_tables: list[str],
+        scores: dict[str, int],
+    ) -> list[str]:
+        if not candidate_tables:
+            return []
+        first = candidate_tables[0]
+        first_score = scores.get(first, 0)
+        selected = [first] if first_score > 0 else []
+        multi_hint = bool(
+            re.search(
+                r"\b(compare|between|versus|vs|and|gap|difference|reconcile|join)\b",
+                query.lower(),
+            )
+        )
+        for table in candidate_tables[1:4]:
+            table_score = scores.get(table, 0)
+            if table_score <= 0:
+                continue
+            if table_score >= first_score - 1 and (multi_hint or table_score >= 4):
+                selected.append(table)
+        # Keep stable ordering and uniqueness.
+        deduped: list[str] = []
+        for name in selected:
+            if name not in deduped:
+                deduped.append(name)
+        return deduped[:3]
+
+    def _infer_join_hypotheses(
+        self,
+        table_columns: dict[str, list[str]],
+        selected_tables: list[str],
+    ) -> list[str]:
+        if len(selected_tables) < 2:
+            return []
+        normalized = {
+            table: [col.lower() for col in table_columns.get(table, [])]
+            for table in selected_tables
+        }
+        hints: list[str] = []
+        for source in selected_tables:
+            source_cols = normalized.get(source, [])
+            for target in selected_tables:
+                if source == target:
+                    continue
+                target_cols = normalized.get(target, [])
+                for col in source_cols:
+                    if not col.endswith("_id"):
+                        continue
+                    key = col[:-3]
+                    target_base = target.split(".")[-1].lower()
+                    target_aliases = {target_base, target_base.rstrip("s")}
+                    target_key = "id" if "id" in target_cols else f"{key}_id"
+                    if key in target_aliases and target_key in target_cols:
+                        hint = f"{source}.{col} = {target}.{target_key}"
+                        if hint not in hints:
+                            hints.append(hint)
+                    elif col in target_cols:
+                        hint = f"{source}.{col} = {target}.{col}"
+                        if hint not in hints:
+                            hints.append(hint)
+                shared = {"store_id", "product_id", "customer_id", "account_id"} & set(source_cols) & set(
+                    target_cols
+                )
+                for col in sorted(shared):
+                    hint = f"{source}.{col} = {target}.{col}"
+                    if hint not in hints:
+                        hints.append(hint)
+                if len(hints) >= 8:
+                    return hints
+        return hints[:8]
+
+    def _suggest_column_hints(
+        self,
+        query: str,
+        table_columns: dict[str, list[str]],
+        selected_tables: list[str],
+        signal_tokens: set[str],
+    ) -> list[str]:
+        tokens = set(self._tokenize_query(query)) | set(signal_tokens)
+        hints: list[str] = []
+        for table in selected_tables:
+            for col in table_columns.get(table, []):
+                col_lower = col.lower()
+                if any(token and token in col_lower for token in tokens):
+                    candidate = f"{table}.{col}"
+                    if candidate not in hints:
+                        hints.append(candidate)
+                if len(hints) >= 10:
+                    return hints
+        return hints
+
+    def _estimate_compiler_confidence(
+        self,
+        scores: dict[str, int],
+        candidate_tables: list[str],
+        selected_tables: list[str],
+    ) -> float:
+        if not candidate_tables or not selected_tables:
+            return 0.2
+        top = scores.get(candidate_tables[0], 0)
+        second = scores.get(candidate_tables[1], 0) if len(candidate_tables) > 1 else 0
+        gap = top - second
+        if top >= 12 and gap >= 4:
+            return 0.9
+        if top >= 8 and gap >= 2:
+            return 0.8
+        if top >= 4:
+            return 0.68
+        return 0.45
+
+    def _should_refine_compiler_with_llm(
+        self,
+        *,
+        confidence: float,
+        candidate_tables: list[str],
+        selected_tables: list[str],
+        query: str,
+    ) -> bool:
+        if not self._pipeline_flag("query_compiler_llm_enabled", True):
+            return False
+        if self._providers_are_equivalent(self.fast_llm, self.llm):
+            return False
+        if len(candidate_tables) < 2:
+            return False
+        if len(candidate_tables) > max(2, self._pipeline_int("query_compiler_llm_max_candidates", 10)):
+            return False
+        if self.catalog.is_list_tables_query(query.lower()) or self.catalog.is_list_columns_query(query.lower()):
+            return False
+        threshold = self._pipeline_float("query_compiler_confidence_threshold", 0.72)
+        if confidence >= threshold and selected_tables:
+            return False
+        return True
+
+    async def _refine_compiler_with_llm(
+        self,
+        *,
+        query: str,
+        candidate_tables: list[str],
+        table_columns: dict[str, list[str]],
+        runtime_stats: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        rows = []
+        for index, table in enumerate(candidate_tables, start=1):
+            columns = ", ".join(table_columns.get(table, [])[:12])
+            rows.append(f"{index}. {table} | columns: {columns}")
+        prompt = (
+            "You are refining a SQL table-selection plan.\n"
+            "Pick likely tables and join keys for the question. Return strict JSON with keys:\n"
+            "candidate_tables (array), selected_tables (array), join_hypotheses (array), "
+            "column_hints (array), confidence (0..1), reason (string).\n"
+            "Use table names exactly as given.\n\n"
+            f"QUESTION:\n{query}\n\n"
+            f"CANDIDATE_TABLES:\n{chr(10).join(rows)}\n"
+        )
+        request = LLMRequest(
+            messages=[
+                LLMMessage(role="system", content="Return only valid JSON."),
+                LLMMessage(role="user", content=prompt),
+            ],
+            temperature=0.0,
+            max_tokens=500,
+        )
+        try:
+            response = await self.fast_llm.generate(request)
+            self._track_llm_call(tokens=self._safe_total_tokens(response))
+            if runtime_stats is not None:
+                runtime_stats["query_compiler_llm_calls"] = int(
+                    runtime_stats.get("query_compiler_llm_calls", 0)
+                ) + 1
+            content = self._coerce_response_content(response.content)
+            json_match = re.search(r"\{[\s\S]*\}", content)
+            if not json_match:
+                return None
+            payload = json.loads(json_match.group(0))
+            selected_tables = [
+                str(item) for item in payload.get("selected_tables", []) if str(item) in candidate_tables
+            ]
+            candidate = [
+                str(item) for item in payload.get("candidate_tables", []) if str(item) in candidate_tables
+            ]
+            joins = [str(item) for item in payload.get("join_hypotheses", []) if str(item).strip()]
+            columns = [str(item) for item in payload.get("column_hints", []) if str(item).strip()]
+            confidence = float(payload.get("confidence", 0.0) or 0.0)
+            return {
+                "selected_tables": selected_tables[:4],
+                "candidate_tables": candidate[:8] or candidate_tables,
+                "join_hypotheses": joins[:8],
+                "column_hints": columns[:10],
+                "confidence": max(0.0, min(1.0, confidence)),
+                "reason": str(payload.get("reason", "")),
+            }
+        except Exception:
+            return None
+
+    def _format_query_compiler_context(self, plan: QueryCompilerPlan) -> str:
+        lines = ["**Query compiler plan:**"]
+        if plan.operators:
+            lines.append(f"- Operators: {', '.join(plan.operators[:6])}")
+        if plan.selected_tables:
+            lines.append(f"- Selected tables: {', '.join(plan.selected_tables[:4])}")
+        if plan.candidate_tables:
+            lines.append(f"- Candidate tables: {', '.join(plan.candidate_tables[:6])}")
+        if plan.join_hypotheses:
+            lines.append("- Join hypotheses:")
+            lines.extend(f"  - {hint}" for hint in plan.join_hypotheses[:6])
+        if plan.column_hints:
+            lines.append(f"- Column hints: {', '.join(plan.column_hints[:8])}")
+        lines.append(f"- Confidence: {plan.confidence:.2f} ({plan.path})")
+        return "\n".join(lines)
 
     def _collect_table_columns_from_investigation(
         self, investigation_memory
