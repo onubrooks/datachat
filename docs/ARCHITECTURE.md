@@ -80,27 +80,27 @@ User Query (Natural Language)
 └────────┬────────────────────┘
          ↓
 ┌─────────────────────────────┐
+│ Tool Planner                │ ← Decide whether to use tools or continue core pipeline
+└────────┬────────────────────┘
+         ↓
+┌─────────────────────────────┐
+│ Context Retrieval           │ ← Pull live schema + DataPoint evidence
+└────────┬────────────────────┘
+         ↓
+┌─────────────────────────────┐
 │ Query Compiler              │ ← Select likely tables/joins/operators before SQL prompt build
 └────────┬────────────────────┘
          ↓
 ┌─────────────────────────────┐
-│ Tool Planner + Executor     │ ← Structured tool calls w/ policy checks
+│ SQL + Validation + Execution│ ← Generate SQL, safety-check, execute
 └────────┬────────────────────┘
          ↓
 ┌─────────────────────────────┐
-│ Knowledge System (Levels 1-5)│
-│ • Managed DataPoints         │ ← Auto-profiled (Level 1)
-│ • User DataPoints            │ ← Context (Level 2)
-│ • Executable DataPoints      │ ← SQL templates (Level 3)
-│ • Materialized DataPoints    │ ← Pre-aggregations (Level 4)
-│ • Graph DataPoints           │ ← Intelligence (Level 5)
+│ Response Synthesis          │ ← Natural-language answer shaping (configurable)
 └────────┬────────────────────┘
          ↓
 ┌─────────────────────────────┐
-│ Data Sources                │
-│ • Databases                 │
-│ • Filesystem                │
-│ • External Tools            │
+│ Answer + Metrics            │ ← Includes decision_trace and timing telemetry
 └─────────────────────────────┘
 ```
 
