@@ -63,6 +63,30 @@ DataChat provides a natural-language interface for operational and analytics dat
    - Track clarification churn, wrong-table selections, fallback rates, and low-confidence hotspots.
    - Use telemetry to prioritize metadata improvements over prompt tweaks.
 
+### Phase Sequencing Decision: Simplicity Package vs Foundation
+
+Decision:
+
+- Ship the full "Vanna-style simplicity package" in **Phase 1.6**, after MetadataOps foundation KPIs are green.
+- Allow only a thin, low-risk onboarding wrapper in **Phase 1.4**.
+
+Phase 1.4 (allowed scope):
+
+- simple entry UX/wrappers (for example, quickstart or train-style helper commands)
+- no new retrieval/routing semantics
+- no bypass of metadata/eval/trace controls
+
+Phase 1.6 (full package scope):
+
+- deterministic template/function execution lane for repeated business questions
+- embed-ready SDK/surface for app integration
+- operational safety checks and route/eval coverage for deterministic-first execution
+
+Rationale:
+
+- preserve correctness and governance while improving onboarding
+- avoid introducing convenience paths that drift from metadata truth
+
 ### Priority 1: Platform expansion after foundation KPIs are green
 
 1. Connector expansion beyond current runtime engines.

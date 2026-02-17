@@ -6,6 +6,8 @@ Command-line interface for interacting with DataChat.
 Usage:
     datachat chat                          # Interactive REPL mode
     datachat ask "What's the revenue?"     # Single query mode
+    datachat quickstart                    # Guided one-command bootstrap
+    datachat train                         # Thin wrapper for sync/profile flows
     datachat connect "connection_string"   # Set database connection
     datachat dp list                       # List DataPoints
     datachat dp add schema file.json       # Add DataPoint
@@ -34,8 +36,10 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import click
 import httpx
@@ -242,12 +246,33 @@ def _apply_datapoint_scope(
 
 def _default_connection_name(connection_string: str) -> str:
     """Build a stable default registry name from connection URL."""
-    from urllib.parse import urlparse
-
     parsed = urlparse(connection_string)
     host = parsed.hostname or "localhost"
     database = parsed.path.lstrip("/") if parsed.path else "datachat"
     return f"{host}/{database}"
+
+
+def _database_identity(database_url: str | None) -> str | None:
+    """Normalize a DB URL to a stable identity string for matching."""
+    if not database_url:
+        return None
+    normalized = database_url.replace("postgresql+asyncpg://", "postgresql://").strip()
+    if not normalized:
+        return None
+    parsed = urlparse(normalized)
+    if not parsed.scheme or not parsed.hostname:
+        return normalized.lower()
+    scheme = parsed.scheme.split("+", 1)[0].lower()
+    host = (parsed.hostname or "").lower()
+    default_ports = {"postgresql": 5432, "postgres": 5432, "mysql": 3306, "clickhouse": 8123}
+    port = parsed.port or default_ports.get(scheme)
+    username = parsed.username or ""
+    database = parsed.path.lstrip("/")
+    return f"{scheme}://{username}@{host}:{port}/{database}"
+
+
+def _same_database_url(left: str | None, right: str | None) -> bool:
+    return _database_identity(left) == _database_identity(right)
 
 
 async def _register_cli_connection(
@@ -312,6 +337,63 @@ async def _register_cli_connection(
         return (False, f"Registry skipped: {exc}")
     finally:
         await manager.close()
+
+
+async def _resolve_registry_connection_id_for_url(connection_string: str) -> str | None:
+    """Find a registry connection id matching the provided URL."""
+    settings = get_settings()
+    system_db_url, _ = _resolve_system_database_url(settings)
+    if not system_db_url:
+        return None
+
+    manager = DatabaseConnectionManager(system_database_url=system_db_url)
+    try:
+        await manager.initialize()
+        matches = [
+            connection
+            for connection in await manager.list_connections()
+            if _same_database_url(connection.database_url.get_secret_value(), connection_string)
+        ]
+        if not matches:
+            return None
+        default_match = next((item for item in matches if item.is_default), None)
+        selected = default_match or matches[0]
+        return str(selected.connection_id)
+    except Exception:
+        return None
+    finally:
+        try:
+            await manager.close()
+        except Exception:
+            pass
+    return None
+
+
+def _emit_entry_event_cli(
+    *,
+    flow: str,
+    step: str,
+    status: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Persist lightweight entry-flow telemetry for CLI wrappers."""
+    event = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "flow": flow,
+        "step": step,
+        "status": status,
+        "source": "cli",
+        "metadata": metadata or {},
+    }
+    try:
+        state.ensure_paths()
+        events_path = state.config_dir / "entry_events.jsonl"
+        with open(events_path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, sort_keys=True))
+            handle.write("\n")
+    except Exception:
+        # Telemetry should never block command execution.
+        return
 
 
 def _split_sql_statements(sql_text: str) -> list[str]:
@@ -453,7 +535,12 @@ async def create_pipeline_from_config() -> DataChatPipeline:
     return pipeline
 
 
-def format_answer(answer: str, sql: str | None = None, data: dict | None = None) -> None:
+def format_answer(
+    answer: str,
+    sql: str | None = None,
+    data: dict | None = None,
+    visualization_note: str | None = None,
+) -> None:
     """Format and display answer."""
     # Display answer
     console.print(Panel(Markdown(answer), title="[bold green]Answer[/bold green]"))
@@ -487,6 +574,9 @@ def format_answer(answer: str, sql: str | None = None, data: dict | None = None)
                 table.add_row(*row)
 
         console.print(table)
+
+    if visualization_note:
+        console.print(f"\n[bold yellow]Visualization note:[/bold yellow] {visualization_note}")
 
 
 def _build_columnar_data(query_result: dict[str, Any] | None) -> dict[str, list] | None:
@@ -541,7 +631,7 @@ def _emit_query_output(
     show_metrics: bool,
 ) -> None:
     console.print()
-    format_answer(answer, sql, data)
+    format_answer(answer, sql, data, result.get("visualization_note"))
     console.print()
 
     footer = _format_source_footer(result)
@@ -1374,6 +1464,296 @@ def setup(
 
 
 @cli.command()
+@click.pass_context
+@click.option("--database-url", help="Target database URL.")
+@click.option(
+    "--system-db",
+    "system_database_url",
+    help="System database URL for registry/profiling/demo flows.",
+)
+@click.option(
+    "--auto-profile/--no-auto-profile",
+    default=False,
+    show_default=True,
+    help="Run setup with auto-profiling enabled.",
+)
+@click.option(
+    "--max-tables",
+    default=10,
+    show_default=True,
+    type=int,
+    help="When auto-profiling, maximum tables to include (0 = all).",
+)
+@click.option(
+    "--dataset",
+    type=click.Choice(["none", "core", "grocery", "fintech"], case_sensitive=False),
+    default="none",
+    show_default=True,
+    help="Optional demo dataset to load after setup.",
+)
+@click.option(
+    "--persona",
+    type=click.Choice(["base", "analyst", "engineer", "platform", "executive"], case_sensitive=False),
+    default="base",
+    show_default=True,
+    help="Persona profile used when --dataset=core.",
+)
+@click.option(
+    "--demo-reset",
+    is_flag=True,
+    help="When loading a demo dataset, reset tables before seeding.",
+)
+@click.option(
+    "--question",
+    default=None,
+    help="Optional first question to run after setup/demo.",
+)
+@click.option(
+    "--max-clarifications",
+    default=3,
+    show_default=True,
+    type=int,
+    help="Clarification cap for --question follow-ups.",
+)
+@click.option(
+    "--non-interactive",
+    is_flag=True,
+    help="Fail instead of prompting for missing values.",
+)
+def quickstart(
+    ctx: click.Context,
+    database_url: str | None,
+    system_database_url: str | None,
+    auto_profile: bool,
+    max_tables: int,
+    dataset: str,
+    persona: str,
+    demo_reset: bool,
+    question: str | None,
+    max_clarifications: int,
+    non_interactive: bool,
+):
+    """Run a thin guided bootstrap flow using existing commands."""
+    apply_config_defaults()
+    settings = get_settings()
+    resolved_database_url = database_url or _resolve_target_database_url(settings)[0]
+
+    if not resolved_database_url:
+        if non_interactive:
+            raise click.ClickException(
+                "Missing target database URL. Pass --database-url or configure DATABASE_URL."
+            )
+        resolved_database_url = click.prompt(
+            "Target Database URL",
+            default="",
+            show_default=False,
+        )
+
+    resolved_max_tables = max_tables if max_tables > 0 else None
+    _emit_entry_event_cli(
+        flow="phase1_4_quickstart",
+        step="start",
+        status="started",
+        metadata={
+            "dataset": dataset,
+            "auto_profile": auto_profile,
+            "question_supplied": bool(question),
+        },
+    )
+    try:
+        ctx.invoke(
+            connect,
+            connection_string=resolved_database_url,
+            name=None,
+            register=True,
+            set_default=True,
+        )
+        ctx.invoke(
+            setup,
+            database_url=resolved_database_url,
+            system_database_url=system_database_url,
+            auto_profile=auto_profile,
+            max_tables=resolved_max_tables,
+            non_interactive=non_interactive,
+        )
+
+        if dataset.lower() != "none":
+            _emit_entry_event_cli(
+                flow="phase1_4_quickstart",
+                step="demo_load",
+                status="started",
+                metadata={"dataset": dataset, "persona": persona, "reset": demo_reset},
+            )
+            ctx.invoke(
+                demo,
+                dataset=dataset,
+                persona=persona,
+                reset=demo_reset,
+                no_workspace=True,
+            )
+            _emit_entry_event_cli(
+                flow="phase1_4_quickstart",
+                step="demo_load",
+                status="completed",
+                metadata={"dataset": dataset},
+            )
+
+        if question and question.strip():
+            ctx.invoke(
+                ask,
+                query=question.strip(),
+                evidence=False,
+                pager=False,
+                max_clarifications=max_clarifications,
+                synthesize_simple_sql=None,
+            )
+
+        _emit_entry_event_cli(
+            flow="phase1_4_quickstart",
+            step="complete",
+            status="completed",
+            metadata={"dataset": dataset},
+        )
+        console.print("[green]✓ Quickstart complete.[/green]")
+        console.print(
+            "[dim]Next: run 'datachat chat' or open the UI at /databases to continue onboarding.[/dim]"
+        )
+    except Exception as exc:
+        _emit_entry_event_cli(
+            flow="phase1_4_quickstart",
+            step="complete",
+            status="failed",
+            metadata={"error": str(exc)},
+        )
+        raise
+
+
+@cli.command()
+@click.pass_context
+@click.option(
+    "--mode",
+    type=click.Choice(["sync", "profile"], case_sensitive=False),
+    default="sync",
+    show_default=True,
+    help="Training helper mode.",
+)
+@click.option(
+    "--datapoints-dir",
+    default="datapoints",
+    show_default=True,
+    help="DataPoint directory for mode=sync.",
+)
+@click.option("--connection-id", default=None, help="Database scope connection ID for sync mode.")
+@click.option("--global-scope", is_flag=True, help="Mark synced DataPoints as global scope.")
+@click.option(
+    "--strict-contracts/--no-strict-contracts",
+    default=True,
+    show_default=True,
+    help="Validate DataPoint contracts during sync mode.",
+)
+@click.option(
+    "--fail-on-contract-warnings",
+    is_flag=True,
+    help="Treat contract warnings as errors during sync mode.",
+)
+@click.option(
+    "--profile-connection-id",
+    default=None,
+    help="Connection ID for mode=profile.",
+)
+@click.option("--sample-size", default=100, show_default=True, type=int)
+@click.option("--tables", multiple=True, help="Optional profile/generation table filters.")
+@click.option(
+    "--generate-after-profile/--no-generate-after-profile",
+    default=False,
+    show_default=True,
+    help="Start DataPoint generation from the latest profile in mode=profile.",
+)
+@click.option(
+    "--depth",
+    type=click.Choice(["schema_only", "metrics_basic", "metrics_full"]),
+    default="metrics_basic",
+    show_default=True,
+    help="Generation depth for --generate-after-profile.",
+)
+@click.option("--batch-size", default=10, show_default=True, type=int)
+@click.option("--max-tables", default=None, type=int)
+@click.option("--max-metrics-per-table", default=3, show_default=True, type=int)
+def train(
+    ctx: click.Context,
+    mode: str,
+    datapoints_dir: str,
+    connection_id: str | None,
+    global_scope: bool,
+    strict_contracts: bool,
+    fail_on_contract_warnings: bool,
+    profile_connection_id: str | None,
+    sample_size: int,
+    tables: tuple[str, ...],
+    generate_after_profile: bool,
+    depth: str,
+    batch_size: int,
+    max_tables: int | None,
+    max_metrics_per_table: int,
+):
+    """Thin wrapper over existing sync/profile generation flows."""
+    normalized_mode = mode.lower()
+    _emit_entry_event_cli(
+        flow="phase1_4_train",
+        step="start",
+        status="started",
+        metadata={"mode": normalized_mode},
+    )
+    try:
+        if normalized_mode == "sync":
+            ctx.invoke(
+                sync_datapoints,
+                datapoints_dir=datapoints_dir,
+                connection_id=connection_id,
+                global_scope=global_scope,
+                strict_contracts=strict_contracts,
+                fail_on_contract_warnings=fail_on_contract_warnings,
+            )
+        else:
+            if not profile_connection_id:
+                raise click.ClickException(
+                    "mode=profile requires --profile-connection-id."
+                )
+            ctx.invoke(
+                start_profile,
+                connection_id=profile_connection_id,
+                sample_size=sample_size,
+                tables=tables,
+            )
+            if generate_after_profile:
+                ctx.invoke(
+                    generate_datapoints_cli,
+                    profile_id=None,
+                    connection_id=profile_connection_id,
+                    depth=depth,
+                    tables=tables,
+                    batch_size=batch_size,
+                    max_tables=max_tables,
+                    max_metrics_per_table=max_metrics_per_table,
+                )
+
+        _emit_entry_event_cli(
+            flow="phase1_4_train",
+            step="complete",
+            status="completed",
+            metadata={"mode": normalized_mode},
+        )
+    except Exception as exc:
+        _emit_entry_event_cli(
+            flow="phase1_4_train",
+            step="complete",
+            status="failed",
+            metadata={"mode": normalized_mode, "error": str(exc)},
+        )
+        raise
+
+
+@cli.command()
 @click.option("--include-target", is_flag=True, help="Also clear target database tables.")
 @click.option(
     "--drop-all-target",
@@ -1695,7 +2075,10 @@ def demo(dataset: str, persona: str, reset: bool, no_workspace: bool):
             raise click.ClickException("No demo DataPoints loaded.")
         _apply_datapoint_scope(
             datapoints,
-            connection_id=ENV_DATABASE_CONNECTION_ID,
+            connection_id=(
+                await _resolve_registry_connection_id_for_url(target_database_url)
+                or ENV_DATABASE_CONNECTION_ID
+            ),
             global_scope=False,
         )
 

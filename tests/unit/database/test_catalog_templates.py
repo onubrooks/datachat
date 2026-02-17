@@ -21,6 +21,24 @@ def test_list_tables_query_exists_for_supported_databases():
         assert "table" in query.lower()
 
 
+def test_list_tables_query_excludes_internal_service_tables_for_postgres_and_mysql():
+    postgres_query = get_list_tables_query("postgresql")
+    mysql_query = get_list_tables_query("mysql")
+
+    assert postgres_query is not None
+    assert mysql_query is not None
+
+    for table_name in (
+        "database_connections",
+        "profiling_jobs",
+        "profiling_profiles",
+        "pending_datapoints",
+        "datapoint_generation_jobs",
+    ):
+        assert table_name in postgres_query
+        assert table_name in mysql_query
+
+
 def test_catalog_schemas_include_common_system_namespaces():
     assert "information_schema" in get_catalog_schemas("postgresql")
     assert "system" in get_catalog_schemas("clickhouse")

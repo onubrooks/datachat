@@ -153,12 +153,14 @@ class ExecutorAgent(BaseAgent):
                 sql=sql_to_execute,
             )
             llm_calls += viz_llm_calls
+            viz_note = self._build_visualization_note(viz_metadata)
 
             # Build executed query
             executed_query = ExecutedQuery(
                 query_result=query_result,
                 natural_language_answer=nl_answer,
                 visualization_hint=viz_hint,
+                visualization_note=viz_note,
                 visualization_metadata=viz_metadata,
                 key_insights=insights,
                 source_citations=input.source_datapoints,
@@ -764,6 +766,8 @@ class ExecutorAgent(BaseAgent):
             shape=shape,
         )
         allowed_hints = sorted(self._compatible_visualizations(shape))
+        allowed_hint_set = set(allowed_hints)
+        requested_valid = bool(requested_hint and requested_hint in allowed_hint_set)
 
         llm_suggested: str | None = None
         llm_reason: str | None = None
@@ -771,6 +775,7 @@ class ExecutorAgent(BaseAgent):
         if self._should_use_visualization_llm(
             shape=shape,
             requested_hint=requested_hint,
+            requested_valid=requested_valid,
             deterministic_hint=deterministic_hint,
         ):
             llm_suggested, llm_reason, attempted = await self._suggest_visualization_with_llm(
@@ -787,7 +792,7 @@ class ExecutorAgent(BaseAgent):
             requested_hint=requested_hint,
             deterministic_hint=deterministic_hint,
             llm_suggested=llm_suggested,
-            allowed_hints=set(allowed_hints),
+            allowed_hints=allowed_hint_set,
         )
         metadata = {
             "requested": requested_hint,
@@ -816,6 +821,11 @@ class ExecutorAgent(BaseAgent):
             for col in query_result.columns
             if any(self._is_numeric_value(row.get(col)) for row in sample_rows)
         )
+        has_negative_numeric = any(
+            isinstance(value, (int, float, Decimal)) and value < 0
+            for row in sample_rows
+            for value in row.values()
+        )
         has_time_dimension = any(
             self._is_temporal_column(col, sample_rows) for col in query_result.columns
         )
@@ -823,6 +833,7 @@ class ExecutorAgent(BaseAgent):
             "num_rows": query_result.row_count,
             "num_cols": len(query_result.columns),
             "numeric_col_count": numeric_col_count,
+            "has_negative_numeric": has_negative_numeric,
             "has_time_dimension": has_time_dimension,
             "columns": list(query_result.columns),
         }
@@ -842,6 +853,7 @@ class ExecutorAgent(BaseAgent):
         num_cols = int(shape.get("num_cols", 0))
         num_rows = int(shape.get("num_rows", 0))
         numeric_col_count = int(shape.get("numeric_col_count", 0))
+        has_negative_numeric = bool(shape.get("has_negative_numeric", False))
         has_time_dimension = bool(shape.get("has_time_dimension", False))
 
         # Single value
@@ -863,6 +875,7 @@ class ExecutorAgent(BaseAgent):
             and num_rows >= 2
             and num_rows <= 12
             and numeric_col_count >= 1
+            and not has_negative_numeric
         ):
             return "pie_chart"
         if requested_hint == "scatter" and num_cols >= 2 and num_rows >= 2 and numeric_col_count >= 2:
@@ -884,8 +897,14 @@ class ExecutorAgent(BaseAgent):
 
         # Multiple columns - scatter or table
         if num_cols >= 3:
-            if num_rows <= 100 and numeric_col_count >= 2:
+            if (
+                (requested_hint == "scatter" or self._looks_like_scatter_intent(original_query))
+                and num_rows <= 100
+                and numeric_col_count >= 2
+            ):
                 return "scatter"
+            if num_rows <= 25 and numeric_col_count >= 1:
+                return "bar_chart"
             return "table"
 
         return "table"
@@ -894,6 +913,7 @@ class ExecutorAgent(BaseAgent):
         num_rows = int(shape.get("num_rows", 0))
         num_cols = int(shape.get("num_cols", 0))
         numeric_col_count = int(shape.get("numeric_col_count", 0))
+        has_negative_numeric = bool(shape.get("has_negative_numeric", False))
         has_time_dimension = bool(shape.get("has_time_dimension", False))
 
         if num_rows == 0:
@@ -906,7 +926,13 @@ class ExecutorAgent(BaseAgent):
             allowed.add("bar_chart")
         if has_time_dimension and num_cols >= 2 and num_rows >= 2 and numeric_col_count >= 1:
             allowed.add("line_chart")
-        if num_cols >= 2 and num_rows >= 2 and num_rows <= 12 and numeric_col_count >= 1:
+        if (
+            num_cols >= 2
+            and num_rows >= 2
+            and num_rows <= 12
+            and numeric_col_count >= 1
+            and not has_negative_numeric
+        ):
             allowed.add("pie_chart")
         if num_cols >= 2 and num_rows >= 2 and numeric_col_count >= 2:
             allowed.add("scatter")
@@ -917,6 +943,7 @@ class ExecutorAgent(BaseAgent):
         *,
         shape: dict[str, Any],
         requested_hint: str | None,
+        requested_valid: bool,
         deterministic_hint: str,
     ) -> bool:
         if not bool(getattr(self.config.pipeline, "visualization_llm_enabled", True)):
@@ -928,7 +955,7 @@ class ExecutorAgent(BaseAgent):
         if num_rows == 0 or (num_rows == 1 and num_cols == 1):
             return False
         if requested_hint is not None:
-            return True
+            return not requested_valid
         if has_time_dimension and deterministic_hint == "line_chart":
             return False
         if num_cols == 2 and numeric_col_count >= 1 and 2 <= num_rows <= 12:
@@ -1008,6 +1035,45 @@ class ExecutorAgent(BaseAgent):
         if deterministic_hint in allowed_hints:
             return deterministic_hint, "deterministic_default"
         return "table", "safe_table_fallback"
+
+    def _build_visualization_note(self, metadata: dict[str, Any]) -> str | None:
+        if not metadata:
+            return None
+        reason = str(metadata.get("resolution_reason") or "")
+        if not reason.startswith("user_request_incompatible"):
+            return None
+
+        requested = self._format_visualization_label(metadata.get("requested"))
+        final = self._format_visualization_label(metadata.get("final"))
+        detail = str(metadata.get("llm_reason") or "").strip()
+        if not detail:
+            detail = "the data shape does not support it"
+        return f"Requested {requested} was overridden to {final} because {detail}."
+
+    @staticmethod
+    def _format_visualization_label(hint: Any) -> str:
+        mapping = {
+            "bar_chart": "bar chart",
+            "line_chart": "line chart",
+            "pie_chart": "pie chart",
+            "scatter": "scatter plot",
+            "table": "table",
+            "none": "no visualization",
+        }
+        key = str(hint or "").strip().lower()
+        return mapping.get(key, key or "chart")
+
+    @staticmethod
+    def _looks_like_scatter_intent(query: str | None) -> bool:
+        text = str(query or "").lower()
+        if not text:
+            return False
+        return bool(
+            re.search(
+                r"\b(scatter|correlation|correlate|relationship|vs\.?|versus)\b",
+                text,
+            )
+        )
 
     def _requested_visualization_hint(self, query: str | None) -> str | None:
         """Infer user visualization preference from query text."""

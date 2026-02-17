@@ -141,3 +141,24 @@ class TestSystemEndpoints:
                 response = client.post("/api/v1/chat", json={"message": "test query"})
                 assert response.status_code == 200
                 assert "Live schema mode" in response.json()["answer"]
+
+    def test_system_entry_event_accepts_valid_payload(self, client):
+        response = client.post(
+            "/api/v1/system/entry-event",
+            json={
+                "flow": "phase1_4_quickstart_ui",
+                "step": "connect_database",
+                "status": "started",
+                "source": "ui",
+                "metadata": {"connection_count": 1},
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+
+    def test_system_entry_event_requires_flow_and_step(self, client):
+        response = client.post(
+            "/api/v1/system/entry-event",
+            json={"status": "started"},
+        )
+        assert response.status_code == 422

@@ -39,6 +39,8 @@ const inferDatabaseTypeFromUrl = (value: string): string | null => {
   return null;
 };
 
+type QuickstartStatus = "done" | "ready" | "blocked";
+
 export function DatabaseManager() {
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [pending, setPending] = useState<PendingDataPoint[]>([]);
@@ -83,6 +85,7 @@ export function DatabaseManager() {
   const [profileTables, setProfileTables] = useState<string[]>([]);
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [depth, setDepth] = useState("metrics_basic");
+  const addConnectionRef = useRef<HTMLDivElement | null>(null);
 
   const dedupeApproved = useCallback((items: DataPointSummary[]) => {
     const seen = new Map<string, DataPointSummary>();
@@ -117,6 +120,27 @@ export function DatabaseManager() {
       noticeTimerRef.current = null;
     }, 5000);
   };
+
+  const emitEntryEvent = useCallback(
+    async (
+      step: string,
+      status: "started" | "completed" | "failed" | "skipped",
+      metadata?: Record<string, unknown>
+    ) => {
+      try {
+        await api.emitEntryEvent({
+          flow: "phase1_4_quickstart_ui",
+          step,
+          status,
+          source: "ui",
+          metadata,
+        });
+      } catch {
+        // Telemetry is best-effort.
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     return () => {
@@ -426,6 +450,10 @@ export function DatabaseManager() {
   const handleCreate = async () => {
     setIsLoading(true);
     setError(null);
+    await emitEntryEvent("create_connection", "started", {
+      database_type: databaseType,
+      has_description: Boolean(description.trim()),
+    });
     try {
       await api.createDatabase({
         name,
@@ -441,20 +469,27 @@ export function DatabaseManager() {
       setDescription("");
       setIsDefault(false);
       await refresh();
+      await emitEntryEvent("create_connection", "completed", {
+        database_type: databaseType,
+      });
     } catch (err) {
       setError((err as Error).message);
+      await emitEntryEvent("create_connection", "failed", {
+        database_type: databaseType,
+        error: (err as Error).message,
+      });
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleProfile = async (connectionId: string) => {
+  const handleProfile = async (connectionId: string): Promise<boolean> => {
     setError(null);
     if (connectionId === ENV_CONNECTION_ID) {
       setError(
         "Environment Database uses DATABASE_URL and cannot be profiled from Database Manager."
       );
-      return;
+      return false;
     }
     try {
       setSelectedConnectionId(connectionId);
@@ -462,8 +497,10 @@ export function DatabaseManager() {
         sample_size: 100,
       });
       setJob(started);
+      return true;
     } catch (err) {
       setError((err as Error).message);
+      return false;
     }
   };
 
@@ -524,15 +561,15 @@ export function DatabaseManager() {
     }
   };
 
-  const handleGenerate = async () => {
-    if (!job?.profile_id) return;
+  const handleGenerate = async (): Promise<boolean> => {
+    if (!job?.profile_id) return false;
     setError(null);
     if (generationJob?.status === "completed") {
       const confirmReplace = confirm(
         "Regenerate DataPoints and replace pending drafts for this profile?"
       );
       if (!confirmReplace) {
-        return;
+        return false;
       }
     }
     setIsGenerating(true);
@@ -547,8 +584,10 @@ export function DatabaseManager() {
         replace_existing: true,
       });
       setGenerationJob(generation);
+      return true;
     } catch (err) {
       setError((err as Error).message);
+      return false;
     } finally {
       setIsGenerating(false);
     }
@@ -628,7 +667,7 @@ export function DatabaseManager() {
     }
   };
 
-  const handleBulkApprove = async () => {
+  const handleBulkApprove = async (): Promise<boolean> => {
     setError(null);
     setIsBulkApproving(true);
     const snapshot = pending;
@@ -657,6 +696,7 @@ export function DatabaseManager() {
         );
       }
       await refresh();
+      return true;
     } catch (err) {
       setPending(() => {
         const merged = [...snapshot];
@@ -670,12 +710,13 @@ export function DatabaseManager() {
         });
       });
       setError((err as Error).message);
+      return false;
     } finally {
       setIsBulkApproving(false);
     }
   };
 
-  const handleSync = async () => {
+  const handleSync = async (): Promise<boolean> => {
     setSyncError(null);
     setIsSyncing(true);
     try {
@@ -688,8 +729,10 @@ export function DatabaseManager() {
       });
       const status = await api.getSyncStatus();
       setSyncStatus(status);
+      return true;
     } catch (err) {
       setSyncError((err as Error).message);
+      return false;
     } finally {
       setIsSyncing(false);
     }
@@ -737,6 +780,135 @@ export function DatabaseManager() {
   const selectedConnection = connections.find(
     (connection) => connection.connection_id === selectedConnectionId
   );
+  const managedConnections = connections.filter((connection) => !isEnvironmentConnection(connection));
+  const quickstartConnection =
+    (selectedConnection && !isEnvironmentConnection(selectedConnection)
+      ? selectedConnection
+      : managedConnections[0]) || null;
+  const hasAnyConnection = connections.length > 0;
+  const hasProfileCompleted = Boolean(job?.status === "completed" && job.profile_id);
+  const hasPendingDatapoints = pending.length > 0;
+  const hasApprovedDatapoints = approved.length > 0;
+  const hasSynced = syncStatus?.status === "completed";
+
+  const stepStatusIcon = (status: QuickstartStatus): string => {
+    if (status === "done") return "✓";
+    if (status === "ready") return "•";
+    return "○";
+  };
+
+  const runQuickstartConnect = async () => {
+    await emitEntryEvent("connect_database", "started", { has_connections: hasAnyConnection });
+    if (!hasAnyConnection) {
+      addConnectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      await emitEntryEvent("connect_database", "completed", { action: "scrolled_to_form" });
+      return;
+    }
+    await emitEntryEvent("connect_database", "completed", { action: "already_connected" });
+  };
+
+  const runQuickstartProfile = async () => {
+    await emitEntryEvent("profile_database", "started", {
+      connection_id: quickstartConnection?.connection_id || null,
+    });
+    if (!quickstartConnection) {
+      setError("Add a managed connection before profiling.");
+      await emitEntryEvent("profile_database", "failed", { reason: "no_managed_connection" });
+      return;
+    }
+    const ok = await handleProfile(quickstartConnection.connection_id);
+    await emitEntryEvent("profile_database", ok ? "completed" : "failed", {
+      connection_id: quickstartConnection.connection_id,
+    });
+  };
+
+  const runQuickstartGenerate = async () => {
+    await emitEntryEvent("generate_datapoints", "started", {
+      profile_id: job?.profile_id || null,
+    });
+    const ok = await handleGenerate();
+    await emitEntryEvent("generate_datapoints", ok ? "completed" : "failed", {
+      profile_id: job?.profile_id || null,
+    });
+  };
+
+  const runQuickstartApprove = async () => {
+    await emitEntryEvent("approve_pending", "started", { pending_count: pending.length });
+    const ok = await handleBulkApprove();
+    await emitEntryEvent("approve_pending", ok ? "completed" : "failed", {
+      pending_count: pending.length,
+    });
+  };
+
+  const runQuickstartSync = async () => {
+    await emitEntryEvent("sync_datapoints", "started", {
+      scope_mode: syncScopeMode,
+      scope_connection_id: syncScopeConnectionId,
+    });
+    const ok = await handleSync();
+    await emitEntryEvent("sync_datapoints", ok ? "completed" : "failed", {
+      scope_mode: syncScopeMode,
+      scope_connection_id: syncScopeConnectionId,
+    });
+  };
+
+  const quickstartSteps: Array<{
+    key: string;
+    title: string;
+    description: string;
+    status: QuickstartStatus;
+  }> = [
+    {
+      key: "connect",
+      title: "Connect a database",
+      description: hasAnyConnection
+        ? "Connection available."
+        : "Add a target connection from the form below.",
+      status: hasAnyConnection ? "done" : "ready",
+    },
+    {
+      key: "profile",
+      title: "Run profiling",
+      description: hasProfileCompleted
+        ? "Latest profiling job completed."
+        : quickstartConnection
+          ? `Use ${quickstartConnection.name} for profiling.`
+          : "Requires a managed (non-env) connection.",
+      status: hasProfileCompleted
+        ? "done"
+        : quickstartConnection
+          ? "ready"
+          : "blocked",
+    },
+    {
+      key: "generate",
+      title: "Generate DataPoints",
+      description: hasPendingDatapoints
+        ? "Pending DataPoints ready for review."
+        : hasProfileCompleted
+          ? "Generate pending DataPoints from the latest profile."
+          : "Requires completed profiling first.",
+      status: hasPendingDatapoints ? "done" : hasProfileCompleted ? "ready" : "blocked",
+    },
+    {
+      key: "approve",
+      title: "Approve pending DataPoints",
+      description: hasApprovedDatapoints
+        ? "Approved DataPoints available for this source."
+        : hasPendingDatapoints
+          ? "Bulk approve or review individual drafts."
+          : "No pending DataPoints yet.",
+      status: hasApprovedDatapoints ? "done" : hasPendingDatapoints ? "ready" : "blocked",
+    },
+    {
+      key: "sync",
+      title: "Sync retrieval index",
+      description: hasSynced
+        ? "Last sync completed."
+        : "Sync updates vector and graph retrieval stores.",
+      status: hasSynced ? "done" : hasApprovedDatapoints ? "ready" : "blocked",
+    },
+  ];
 
   return (
     <div className="space-y-6 p-6">
@@ -768,6 +940,77 @@ export function DatabaseManager() {
       {error && <div className="text-sm text-destructive">{error}</div>}
 
       <Card className="p-4 space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold">Quick Start (Phase 1.4)</h2>
+            <p className="text-xs text-muted-foreground">
+              Guided onboarding over existing setup/profile/sync actions.
+            </p>
+          </div>
+          <Button asChild variant="secondary" size="sm">
+            <Link href="/">Open Chat</Link>
+          </Button>
+        </div>
+
+        <div className="space-y-2 text-xs">
+          {quickstartSteps.map((step) => (
+            <div
+              key={step.key}
+              className="flex items-start gap-2 rounded-md border border-border px-3 py-2"
+            >
+              <span className="mt-0.5 text-muted-foreground">{stepStatusIcon(step.status)}</span>
+              <div>
+                <div className="font-medium text-foreground">{step.title}</div>
+                <div className="text-muted-foreground">{step.description}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" size="sm" onClick={runQuickstartConnect}>
+            1) Connect
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={runQuickstartProfile}
+            disabled={!quickstartConnection || hasProfileCompleted}
+          >
+            2) Profile
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={runQuickstartGenerate}
+            disabled={!hasProfileCompleted || hasPendingDatapoints || isGenerating}
+          >
+            3) Generate
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={runQuickstartApprove}
+            disabled={!hasPendingDatapoints || isBulkApproving}
+          >
+            4) Approve
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={runQuickstartSync}
+            disabled={(!hasApprovedDatapoints && !hasPendingDatapoints) || isSyncing}
+          >
+            5) Sync
+          </Button>
+        </div>
+        <div className="text-xs text-muted-foreground">
+          Starter questions: &quot;list all available tables&quot;, &quot;what is total deposits?&quot;,
+          &quot;show failed transaction rate by day&quot;.
+        </div>
+      </Card>
+
+      <Card className="p-4 space-y-4" ref={addConnectionRef}>
         <h2 className="text-sm font-semibold">Add Connection</h2>
         <div className="grid gap-2 md:grid-cols-2">
           <Input

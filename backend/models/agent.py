@@ -842,6 +842,10 @@ class ExecutedQuery(BaseModel):
     visualization_hint: (
         Literal["table", "bar_chart", "line_chart", "pie_chart", "scatter", "none"] | None
     ) = Field(None, description="Suggested visualization type")
+    visualization_note: str | None = Field(
+        default=None,
+        description="Optional note explaining visualization choice/override.",
+    )
     visualization_metadata: dict[str, Any] | None = Field(
         default=None,
         description=(
@@ -865,6 +869,7 @@ class ExecutedQuery(BaseModel):
                 },
                 "natural_language_answer": "Customer 123 had total sales of $5,000",
                 "visualization_hint": "table",
+                "visualization_note": None,
                 "visualization_metadata": {
                     "requested": None,
                     "deterministic": "bar_chart",
