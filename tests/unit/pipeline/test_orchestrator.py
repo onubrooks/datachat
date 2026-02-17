@@ -226,6 +226,9 @@ class TestPipelineExecution:
         assert len(result.get("sub_answers", [])) == 2
         assert "multiple questions" in result["natural_language_answer"].lower()
         assert result["answer_source"] == "multi"
+        assert result["sub_answers"][0]["sql"] == "SELECT * FROM test_table"
+        assert result["sub_answers"][0]["data"]["id"] == [1]
+        assert result.get("generated_sql") == "SELECT * FROM test_table"
         assert mock_agents.classifier.execute.await_count == 2
         assert mock_agents.sql.execute.await_count == 2
 
@@ -957,6 +960,14 @@ class TestIntentGate:
         assert not pipeline.classifier.execute.called
 
     @pytest.mark.asyncio
+    async def test_intent_gate_datapoint_help_short_circuits(self, pipeline):
+        result = await pipeline.run("show datapoints")
+        assert result.get("intent_gate") == "datapoint_help"
+        assert result.get("answer_source") == "system"
+        assert "datachat dp list" in result.get("natural_language_answer", "")
+        assert not pipeline.classifier.execute.called
+
+    @pytest.mark.asyncio
     async def test_intent_gate_fast_path_list_tables_handles_empty_investigation_memory(
         self, pipeline
     ):
@@ -1191,6 +1202,9 @@ class TestIntentGate:
 
     def test_query_requires_sql_ignores_datapoint_keyword(self, pipeline):
         assert pipeline._query_requires_sql("what datapoint explains loan default rate?") is False
+
+    def test_datapoint_help_intent_does_not_trigger_for_metric_explanation_query(self, pipeline):
+        assert pipeline._classify_intent_gate("what datapoint explains loan default rate?") == "data_query"
 
     def test_definition_query_with_rate_routes_to_context(self, pipeline):
         state = {

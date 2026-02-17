@@ -110,6 +110,17 @@ class SubAnswer(BaseModel):
         default=None, description="Confidence score for this sub-answer"
     )
     sql: str | None = Field(default=None, description="SQL generated for this sub-answer")
+    data: dict[str, list] | None = Field(
+        default=None,
+        description="Columnar query result data for this sub-answer when available.",
+    )
+    visualization_hint: str | None = Field(
+        default=None, description="Suggested visualization type for this sub-answer"
+    )
+    visualization_metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Visualization decision metadata for this sub-answer.",
+    )
     clarifying_questions: list[str] = Field(
         default_factory=list,
         description="Clarifying questions for this sub-answer",

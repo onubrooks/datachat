@@ -452,6 +452,19 @@ class SQLAgent(BaseAgent):
                     runtime_stats=runtime_stats,
                 )
 
+            if self._should_force_best_effort_retry(
+                generated_sql=generated_sql,
+                query=input.query,
+                compiler_plan=compiler_plan,
+            ):
+                forced_sql = await self._retry_best_effort_sql_generation(
+                    input=input,
+                    compiler_plan=compiler_plan,
+                    runtime_stats=runtime_stats,
+                )
+                if forced_sql is not None and forced_sql.sql.strip():
+                    generated_sql = forced_sql
+
             logger.debug(
                 f"Generated SQL: {generated_sql.sql[:200]}...",
                 extra={"confidence": generated_sql.confidence},
@@ -529,6 +542,84 @@ class SQLAgent(BaseAgent):
             return False
         issues = self._validate_sql(generated_sql, input)
         return len(issues) == 0
+
+    def _should_force_best_effort_retry(
+        self,
+        *,
+        generated_sql: GeneratedSQL,
+        query: str,
+        compiler_plan: QueryCompilerPlan | None,
+    ) -> bool:
+        if not self._pipeline_flag("sql_force_best_effort_on_clarify", True):
+            return False
+        if generated_sql.sql.strip():
+            return False
+        if not generated_sql.clarifying_questions:
+            return False
+        lowered_query = (query or "").lower()
+        if self._extract_explicit_table_name(lowered_query):
+            return False
+        plan = compiler_plan
+        if not plan:
+            return False
+        has_tables = bool(plan.selected_tables or plan.candidate_tables)
+        if not has_tables:
+            return False
+        # Avoid forcing for truly generic/noise prompts.
+        if len((query or "").split()) < 4:
+            return False
+        return True
+
+    async def _retry_best_effort_sql_generation(
+        self,
+        *,
+        input: SQLAgentInput,
+        compiler_plan: QueryCompilerPlan | None,
+        runtime_stats: dict[str, int],
+    ) -> GeneratedSQL | None:
+        plan = compiler_plan
+        if not plan:
+            return None
+        preferred_tables = plan.selected_tables or plan.candidate_tables[:3]
+        if not preferred_tables:
+            return None
+        join_hints = plan.join_hypotheses[:6] if plan.join_hypotheses else []
+        column_hints = plan.column_hints[:10] if plan.column_hints else []
+        prompt = (
+            "Generate best-effort executable SQL for the question now.\n"
+            "Do not ask clarifying questions. Use likely assumptions and return SQL.\n"
+            "Return ONLY one JSON object with keys: sql, explanation, confidence, "
+            "used_datapoints, assumptions, clarifying_questions.\n"
+            "Set clarifying_questions to [] unless SQL is impossible.\n\n"
+            f"QUESTION: {input.query}\n"
+            f"DATABASE: {input.database_type}\n"
+            f"PREFERRED_TABLES: {', '.join(preferred_tables)}\n"
+            f"JOIN_HINTS: {', '.join(join_hints) if join_hints else 'None'}\n"
+            f"COLUMN_HINTS: {', '.join(column_hints) if column_hints else 'None'}\n"
+            "DEFAULT_LIMIT: 10 rows for list outputs."
+        )
+        llm_request = LLMRequest(
+            messages=[
+                LLMMessage(role="system", content=self._get_system_prompt()),
+                LLMMessage(role="system", content=self._sql_output_contract_message()),
+                LLMMessage(role="user", content=prompt),
+            ],
+            temperature=0.0,
+            max_tokens=1200,
+        )
+        provider = self.fast_llm if not self._providers_are_equivalent(self.fast_llm, self.llm) else self.llm
+        try:
+            generated = await self._request_sql_from_llm(
+                provider=provider,
+                llm_request=llm_request,
+                input=input,
+                runtime_stats=runtime_stats,
+            )
+            if not generated.sql.strip():
+                return None
+            return generated
+        except Exception:
+            return None
 
     async def _correct_sql(
         self,
@@ -1080,6 +1171,9 @@ class SQLAgent(BaseAgent):
             "Allowed keys: sql, explanation, confidence, used_datapoints, assumptions, "
             "clarifying_questions.\n"
             "If SQL is available, set sql to executable SQL text.\n"
+            "When schema/table context is present, prefer a best-effort SQL with assumptions "
+            "instead of asking for table/column clarification.\n"
+            "Only ask clarifying questions when SQL is truly impossible from available schema.\n"
             "If SQL is not possible, set sql to an empty string and provide at most 2 "
             "clarifying_questions.\n"
             "Keep explanation concise (max 2 sentences). Do not include sql_components or metadata."

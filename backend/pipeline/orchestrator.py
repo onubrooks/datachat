@@ -530,7 +530,13 @@ class DataChatPipeline:
             reason="rule_or_llm_classification",
         )
 
-        if intent_gate in {"exit", "out_of_scope", "small_talk", "setup_help"}:
+        if intent_gate in {
+            "exit",
+            "out_of_scope",
+            "small_talk",
+            "setup_help",
+            "datapoint_help",
+        }:
             state["intent"] = intent_gate
             state["answer_source"] = "system"
             state["answer_confidence"] = 0.8
@@ -1546,7 +1552,14 @@ class DataChatPipeline:
 
     def _should_continue_after_intent_gate(self, state: PipelineState) -> str:
         intent_gate = state.get("intent_gate")
-        if intent_gate in {"exit", "out_of_scope", "small_talk", "setup_help", "clarify"}:
+        if intent_gate in {
+            "exit",
+            "out_of_scope",
+            "small_talk",
+            "setup_help",
+            "datapoint_help",
+            "clarify",
+        }:
             self._record_decision(
                 state,
                 stage="continue_after_intent_gate",
@@ -2408,6 +2421,8 @@ class DataChatPipeline:
             return "data_query"
         if self._is_exit_intent(text):
             return "exit"
+        if self._is_datapoint_help_intent(text):
+            return "datapoint_help"
         if self._is_setup_help_intent(text):
             return "setup_help"
         if self._is_small_talk(text):
@@ -2427,6 +2442,13 @@ class DataChatPipeline:
                 "or run `datachat setup` / `datachat connect` in the CLI. "
                 "Then ask questions like: list tables, show first 5 rows of a table, "
                 "or total sales last month."
+            )
+        if intent == "datapoint_help":
+            return (
+                "You can manage and inspect DataPoints without writing SQL. "
+                "In the UI, open Database Manager and review Pending/Approved DataPoints. "
+                "In the CLI, use `datachat dp list` for indexed DataPoints and "
+                "`datachat pending list` for approval queue."
             )
         if intent == "small_talk":
             return (
@@ -2512,6 +2534,18 @@ class DataChatPipeline:
             r"\bdatabase url\b",
             r"\bhow do i\b.*\bconnect\b",
             r"\bwhat can you do\b",
+        ]
+        return any(re.search(pattern, text) for pattern in patterns)
+
+    def _is_datapoint_help_intent(self, text: str) -> bool:
+        if re.search(r"\b(explain|definition|meaning|calculate|metric|sql|query)\b", text):
+            return False
+        patterns = [
+            r"^\s*(show|list|view)\s+(all\s+)?data\s*points?\b",
+            r"^\s*(show|list|view)\s+(approved|pending|managed)\s+data\s*points?\b",
+            r"^\s*available\s+data\s*points?\b",
+            r"^\s*what\s+data\s*points?\s+(are\s+available|do\s+i\s+have)\b",
+            r"^\s*data\s*points?\s+(list|overview)\b",
         ]
         return any(re.search(pattern, text) for pattern in patterns)
 
@@ -2711,7 +2745,7 @@ class DataChatPipeline:
         system_prompt = (
             "You are a fast intent router for a data assistant. "
             "Classify the user's message into one of: "
-            "data_query, exit, out_of_scope, small_talk, setup_help, clarify. "
+            "data_query, exit, out_of_scope, small_talk, setup_help, datapoint_help, clarify. "
             "Return JSON with keys: intent, confidence (0-1), "
             "clarifying_question (optional, only if intent=clarify)."
         )
@@ -2744,7 +2778,15 @@ class DataChatPipeline:
         except json.JSONDecodeError:
             return None
         intent = str(data.get("intent", "")).strip()
-        allowed = {"data_query", "exit", "out_of_scope", "small_talk", "setup_help", "clarify"}
+        allowed = {
+            "data_query",
+            "exit",
+            "out_of_scope",
+            "small_talk",
+            "setup_help",
+            "datapoint_help",
+            "clarify",
+        }
         if intent not in allowed:
             return None
         return {
@@ -3019,13 +3061,28 @@ class DataChatPipeline:
                 answer = f"I encountered an error: {result.get('error')}"
             else:
                 answer = "No answer generated"
+        sql_text = result.get("validated_sql") or result.get("generated_sql")
+        query_result = result.get("query_result")
+        data: dict[str, list[Any]] | None = None
+        if isinstance(query_result, dict):
+            candidate = query_result.get("data")
+            if isinstance(candidate, dict):
+                data = candidate
+            else:
+                rows = query_result.get("rows")
+                columns = query_result.get("columns")
+                if isinstance(rows, list) and isinstance(columns, list):
+                    data = {str(col): [row.get(col) for row in rows] for col in columns}
         return {
             "index": index,
             "query": query,
             "answer": answer,
             "answer_source": result.get("answer_source"),
             "answer_confidence": result.get("answer_confidence"),
-            "sql": result.get("validated_sql") or result.get("generated_sql"),
+            "sql": sql_text,
+            "data": data,
+            "visualization_hint": result.get("visualization_hint"),
+            "visualization_metadata": result.get("visualization_metadata"),
             "clarifying_questions": result.get("clarifying_questions", []),
             "error": result.get("error"),
         }
@@ -3056,6 +3113,13 @@ class DataChatPipeline:
             correlation_prefix="local",
         )
         merged["sub_answers"] = sub_answers
+        primary_sub_answer = None
+        for item in sub_answers:
+            if item.get("sql") or item.get("data"):
+                primary_sub_answer = item
+                break
+        if primary_sub_answer is None and sub_answers:
+            primary_sub_answer = sub_answers[0]
 
         section_lines = ["I handled your request as multiple questions:"]
         for item in sub_answers:
@@ -3071,6 +3135,22 @@ class DataChatPipeline:
         merged["clarification_needed"] = bool(clarifications)
 
         merged["answer_source"] = "multi"
+        if primary_sub_answer:
+            merged["generated_sql"] = primary_sub_answer.get("sql")
+            merged["visualization_hint"] = primary_sub_answer.get("visualization_hint")
+            merged["visualization_metadata"] = primary_sub_answer.get("visualization_metadata")
+            sub_data = primary_sub_answer.get("data")
+            if isinstance(sub_data, dict):
+                merged["query_result"] = {
+                    "data": sub_data,
+                    "rows": [],
+                    "columns": list(sub_data.keys()),
+                    "row_count": (
+                        max((len(values) for values in sub_data.values()), default=0)
+                        if sub_data
+                        else 0
+                    ),
+                }
 
         confidence_values = [
             float(item.get("answer_confidence"))

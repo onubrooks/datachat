@@ -92,6 +92,11 @@ export function ChatInterface() {
   const [toolApprovalError, setToolApprovalError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const restoreInputFocus = () => {
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+  };
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -232,6 +237,7 @@ export function ChatInterface() {
             setConnected(false);
             setLoading(false);
             setThinkingNotes([]);
+            restoreInputFocus();
           },
           onAgentUpdate: (update) => {
             setAgentUpdate(update);
@@ -280,12 +286,14 @@ export function ChatInterface() {
             setLoading(false);
             setThinkingNotes([]);
             resetAgentStatus();
+            restoreInputFocus();
           },
           onError: (message) => {
             setError(message);
             setLoading(false);
             setThinkingNotes([]);
             resetAgentStatus();
+            restoreInputFocus();
           },
           onSystemNotInitialized: (steps, message) => {
             setIsInitialized(false);
@@ -294,6 +302,7 @@ export function ChatInterface() {
             setLoading(false);
             setThinkingNotes([]);
             resetAgentStatus();
+            restoreInputFocus();
           },
         }
       );
@@ -304,6 +313,7 @@ export function ChatInterface() {
       );
       setLoading(false);
       resetAgentStatus();
+      restoreInputFocus();
     }
   };
 

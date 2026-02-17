@@ -61,6 +61,31 @@ describe("Message", () => {
     expect(screen.getByText("Bar Chart")).toBeInTheDocument();
   });
 
+  it("renders axis and legend metadata for line visualization", () => {
+    render(
+      <Message
+        displayMode="tabbed"
+        message={{
+          id: "msg-2b",
+          role: "assistant",
+          content: "Revenue trend",
+          data: {
+            business_date: ["2026-01-01", "2026-01-02", "2026-01-03"],
+            revenue: [100, 130, 120],
+          },
+          visualization_hint: "line_chart",
+          timestamp: new Date(),
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Visualization" }));
+    expect(screen.getByText("Line Chart")).toBeInTheDocument();
+    expect(screen.getByText(/X axis:/)).toBeInTheDocument();
+    expect(screen.getByText(/Y axis:/)).toBeInTheDocument();
+    expect(screen.getByText(/Legend:/)).toBeInTheDocument();
+  });
+
   it("collapses results and evidence sections by default in stacked mode", () => {
     const { container } = render(
       <Message
@@ -157,5 +182,54 @@ describe("Message", () => {
     expect(rows[0]).toHaveTextContent("2.1s");
     expect(rows[1]).toHaveTextContent("1s");
     expect(rows[2]).toHaveTextContent("0.15s");
+  });
+
+  it("supports toggling between multi-question sub-answers for SQL and table views", () => {
+    render(
+      <Message
+        displayMode="tabbed"
+        message={{
+          id: "msg-6",
+          role: "assistant",
+          content: "I handled your request as multiple questions.",
+          answer_source: "multi",
+          sub_answers: [
+            {
+              index: 1,
+              query: "Which suppliers have highest late-delivery rate?",
+              answer: "Supplier A leads.",
+              sql: "SELECT supplier_id, late_rate FROM supplier_late_rates LIMIT 10",
+              data: {
+                supplier_id: ["SUP1"],
+                late_rate: [0.31],
+              },
+              visualization_hint: "bar_chart",
+            },
+            {
+              index: 2,
+              query: "What is the average delay in days?",
+              answer: "Average delay is 2.4 days.",
+              sql: "SELECT AVG(delay_days) AS avg_delay_days FROM supplier_delays",
+              data: {
+                avg_delay_days: [2.4],
+              },
+              visualization_hint: "none",
+            },
+          ],
+          timestamp: new Date(),
+        }}
+      />
+    );
+
+    expect(screen.getByText("Sub-questions")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Q1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Q2" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "SQL" }));
+    expect(screen.getByText(/supplier_late_rates/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Q2" }));
+    expect(screen.getByText(/average delay in days/i)).toBeInTheDocument();
+    expect(screen.getByText(/avg_delay_days/)).toBeInTheDocument();
   });
 });

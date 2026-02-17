@@ -62,6 +62,9 @@ export interface ChatResponse {
     answer_source?: string | null;
     answer_confidence?: number | null;
     sql?: string | null;
+    data?: Record<string, unknown[]> | null;
+    visualization_hint?: string | null;
+    visualization_metadata?: Record<string, unknown> | null;
     clarifying_questions?: string[];
     error?: string | null;
   }[];
