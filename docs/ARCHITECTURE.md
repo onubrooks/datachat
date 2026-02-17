@@ -15,6 +15,8 @@ This section is the source of truth for shipped vs planned architecture scope.
 Implemented now:
 
 - Intent gate before the main pipeline, with clarification loops and max-turn limits
+- Query compiler stage before SQL generation (deterministic table/operator selection with bounded mini-LLM refinement)
+  - Runtime details: `docs/QUERY_COMPILER_RUNTIME.md`
 - Deterministic catalog flows for schema-shape intents (tables/columns/sample rows/row count)
 - Credentials-only live schema mode as a first-class path
 - Multi-database routing via `target_database` with strict override resolution
@@ -84,23 +86,27 @@ User Query (Natural Language)
 └────────┬────────────────────┘
          ↓
 ┌─────────────────────────────┐
-│ Tool Planner + Executor     │ ← Structured tool calls w/ policy checks
+│ Tool Planner                │ ← Decide whether to use tools or continue core pipeline
 └────────┬────────────────────┘
          ↓
 ┌─────────────────────────────┐
-│ Knowledge System (Levels 1-5)│
-│ • Managed DataPoints         │ ← Auto-profiled (Level 1)
-│ • User DataPoints            │ ← Context (Level 2)
-│ • Executable DataPoints      │ ← SQL templates (Level 3)
-│ • Materialized DataPoints    │ ← Pre-aggregations (Level 4)
-│ • Graph DataPoints           │ ← Intelligence (Level 5)
+│ Context Retrieval           │ ← Pull live schema + DataPoint evidence
 └────────┬────────────────────┘
          ↓
 ┌─────────────────────────────┐
-│ Data Sources                │
-│ • Databases                 │
-│ • Filesystem                │
-│ • External Tools            │
+│ Query Compiler              │ ← Select likely tables/joins/operators before SQL prompt build
+└────────┬────────────────────┘
+         ↓
+┌─────────────────────────────┐
+│ SQL + Validation + Execution│ ← Generate SQL, safety-check, execute
+└────────┬────────────────────┘
+         ↓
+┌─────────────────────────────┐
+│ Response Synthesis          │ ← Natural-language answer shaping (configurable)
+└────────┬────────────────────┘
+         ↓
+┌─────────────────────────────┐
+│ Answer + Metrics            │ ← Includes decision_trace and timing telemetry
 └─────────────────────────────┘
 ```
 

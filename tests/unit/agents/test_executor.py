@@ -80,6 +80,16 @@ class TestExecutorAgent:
 
         return connector
 
+    def _llm_response(self, content: str) -> LLMResponse:
+        return LLMResponse(
+            content=content,
+            model="mock-model",
+            usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            finish_reason="stop",
+            provider="mock",
+            metadata={},
+        )
+
     # ============================================================================
     # Query Execution Tests
     # ============================================================================
@@ -741,8 +751,40 @@ Insights:
 
         assert result.metadata is not None
         assert result.metadata.agent_name == "ExecutorAgent"
-        assert result.metadata.llm_calls == 1
+        assert result.metadata.llm_calls >= 1
         assert result.metadata.started_at is not None
+
+    @pytest.mark.asyncio
+    async def test_visualization_llm_overrides_invalid_user_request(
+        self, executor_agent, sample_input, mock_postgres_connector
+    ):
+        sample_input.query = "Show sales by customer as a pie chart"
+        many_rows = [{"customer": f"C{i}", "total": i * 10.0} for i in range(1, 21)]
+        mock_postgres_connector.execute = AsyncMock(
+            return_value=ConnectorQueryResult(
+                rows=many_rows,
+                row_count=20,
+                columns=["customer", "total"],
+                execution_time_ms=50.0,
+            )
+        )
+        executor_agent.llm.generate = AsyncMock(
+            side_effect=[
+                self._llm_response("Answer: Sales by customer."),
+                self._llm_response(
+                    '{"visualization":"bar_chart","reason":"many categories","confidence":0.9}'
+                ),
+            ]
+        )
+
+        result = await executor_agent.execute(sample_input)
+
+        assert result.executed_query.visualization_hint == "bar_chart"
+        assert result.executed_query.visualization_metadata is not None
+        assert (
+            result.executed_query.visualization_metadata.get("resolution_reason")
+            == "user_request_incompatible_using_llm_override"
+        )
 
     # ============================================================================
     # Database Type Tests

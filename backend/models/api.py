@@ -85,6 +85,18 @@ class ChatMetrics(BaseModel):
         default=0,
         description="Number of successful SQL formatter fallback recoveries.",
     )
+    query_compiler_llm_calls: int = Field(
+        default=0,
+        description="Number of query-compiler mini-LLM refinement calls.",
+    )
+    query_compiler_llm_refinements: int = Field(
+        default=0,
+        description="Number of query-compiler plans refined by mini-LLM.",
+    )
+    query_compiler_latency_ms: float = Field(
+        default=0.0,
+        description="Total time spent in query compiler stage (ms).",
+    )
 
 
 class SubAnswer(BaseModel):
@@ -98,6 +110,17 @@ class SubAnswer(BaseModel):
         default=None, description="Confidence score for this sub-answer"
     )
     sql: str | None = Field(default=None, description="SQL generated for this sub-answer")
+    data: dict[str, list] | None = Field(
+        default=None,
+        description="Columnar query result data for this sub-answer when available.",
+    )
+    visualization_hint: str | None = Field(
+        default=None, description="Suggested visualization type for this sub-answer"
+    )
+    visualization_metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Visualization decision metadata for this sub-answer.",
+    )
     clarifying_questions: list[str] = Field(
         default_factory=list,
         description="Clarifying questions for this sub-answer",
@@ -116,9 +139,9 @@ class ChatResponse(BaseModel):
     sql: str | None = Field(None, description="Generated SQL query (if applicable)")
     data: dict[str, list] | None = Field(None, description="Query results in columnar format")
     visualization_hint: str | None = Field(None, description="Suggested visualization type")
-    visualization_note: str | None = Field(
+    visualization_metadata: dict[str, Any] | None = Field(
         default=None,
-        description="Optional note explaining chart selection or override decisions.",
+        description="Optional visualization decision metadata and resolution reason.",
     )
     sources: list[DataSource] = Field(
         default_factory=list, description="Data sources used to answer"
@@ -173,7 +196,13 @@ class ChatResponse(BaseModel):
                 "sql": "SELECT SUM(amount) as total_revenue FROM analytics.fact_sales WHERE status = 'completed'",
                 "data": {"total_revenue": [1234567.89]},
                 "visualization_hint": "none",
-                "visualization_note": None,
+                "visualization_metadata": {
+                    "requested": None,
+                    "deterministic": "none",
+                    "llm_suggested": None,
+                    "final": "none",
+                    "resolution_reason": "deterministic_default",
+                },
                 "sources": [
                     {
                         "datapoint_id": "table_fact_sales_001",

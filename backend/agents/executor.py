@@ -146,13 +146,14 @@ class ExecutorAgent(BaseAgent):
                 )
                 llm_calls += 1
 
-            # Suggest visualization (user hint -> LLM planner -> rule fallback).
-            viz_hint, viz_note, planner_called = await self._choose_visualization(
-                query_result,
-                input.query,
+            # Suggest visualization (LLM-assisted with deterministic guardrails)
+            viz_hint, viz_metadata, viz_llm_calls = await self._recommend_visualization(
+                query_result=query_result,
+                original_query=input.query,
+                sql=sql_to_execute,
             )
-            if planner_called:
-                llm_calls += 1
+            llm_calls += viz_llm_calls
+            viz_note = self._build_visualization_note(viz_metadata)
 
             # Build executed query
             executed_query = ExecutedQuery(
@@ -160,6 +161,7 @@ class ExecutorAgent(BaseAgent):
                 natural_language_answer=nl_answer,
                 visualization_hint=viz_hint,
                 visualization_note=viz_note,
+                visualization_metadata=viz_metadata,
                 key_insights=insights,
                 source_citations=input.source_datapoints,
             )
@@ -749,87 +751,110 @@ class ExecutorAgent(BaseAgent):
 
         return f"Found {query_result.row_count} results."
 
-    async def _choose_visualization(
-        self, query_result: QueryResult, original_query: str | None = None
-    ) -> tuple[str, str | None, bool]:
+    async def _recommend_visualization(
+        self,
+        *,
+        query_result: QueryResult,
+        original_query: str | None,
+        sql: str,
+    ) -> tuple[str, dict[str, Any], int]:
+        shape = self._analyze_result_shape(query_result)
         requested_hint = self._requested_visualization_hint(original_query)
-        if requested_hint in {"none", "table"}:
-            return requested_hint, None, False
-
-        requested_valid = (
-            self._is_visualization_valid(requested_hint, query_result, original_query)
-            if requested_hint
-            else False
+        deterministic_hint = self._suggest_visualization_deterministic(
+            query_result=query_result,
+            original_query=original_query,
+            shape=shape,
         )
-        if requested_hint and requested_valid:
-            return requested_hint, None, False
+        allowed_hints = sorted(self._compatible_visualizations(shape))
+        allowed_hint_set = set(allowed_hints)
+        requested_valid = bool(requested_hint and requested_hint in allowed_hint_set)
 
-        fallback_hint = self._suggest_visualization(query_result, original_query)
-        planner_called = False
-        planner_hint = None
-        planner_reason = None
-
-        if self._should_use_visualization_planner(query_result, original_query, requested_hint):
-            planner_called = True
-            planner_hint, planner_reason = await self._plan_visualization_with_llm(
-                query_result,
-                original_query,
-                requested_hint=requested_hint,
-                fallback_hint=fallback_hint,
+        llm_suggested: str | None = None
+        llm_reason: str | None = None
+        llm_calls = 0
+        if self._should_use_visualization_llm(
+            shape=shape,
+            requested_hint=requested_hint,
+            requested_valid=requested_valid,
+            deterministic_hint=deterministic_hint,
+        ):
+            llm_suggested, llm_reason, attempted = await self._suggest_visualization_with_llm(
+                query_result=query_result,
+                original_query=original_query,
+                sql=sql,
+                allowed_hints=allowed_hints,
+                deterministic_hint=deterministic_hint,
             )
+            if attempted:
+                llm_calls = 1
 
-        if planner_hint and self._is_visualization_valid(planner_hint, query_result, original_query):
-            if requested_hint and not requested_valid and planner_hint != requested_hint:
-                reason = self._clean_visualization_reason(planner_reason)
-                note = (
-                    f"Requested {self._format_viz_label(requested_hint)} was overridden to "
-                    f"{self._format_viz_label(planner_hint)} because {reason}."
-                )
-                return planner_hint, note, planner_called
-            return planner_hint, None, planner_called
-
-        if requested_hint and not requested_valid and fallback_hint != requested_hint:
-            note = (
-                f"Requested {self._format_viz_label(requested_hint)} was overridden to "
-                f"{self._format_viz_label(fallback_hint)} because the data shape does not support it."
-            )
-            return fallback_hint, note, planner_called
-
-        return fallback_hint, None, planner_called
+        final_hint, resolution_reason = self._resolve_visualization_choice(
+            requested_hint=requested_hint,
+            deterministic_hint=deterministic_hint,
+            llm_suggested=llm_suggested,
+            allowed_hints=allowed_hint_set,
+        )
+        metadata = {
+            "requested": requested_hint,
+            "deterministic": deterministic_hint,
+            "llm_suggested": llm_suggested,
+            "llm_reason": llm_reason,
+            "final": final_hint,
+            "resolution_reason": resolution_reason,
+            "allowed": allowed_hints,
+            "shape": shape,
+        }
+        return final_hint, metadata, llm_calls
 
     def _suggest_visualization(
         self, query_result: QueryResult, original_query: str | None = None
     ) -> str:
-        """
-        Suggest visualization type based on query results.
+        return self._suggest_visualization_deterministic(
+            query_result=query_result,
+            original_query=original_query,
+        )
 
-        Args:
-            query_result: Query results
-            original_query: Original user query (used for chart preference hints)
+    def _analyze_result_shape(self, query_result: QueryResult) -> dict[str, Any]:
+        sample_rows = query_result.rows[: min(len(query_result.rows), 50)]
+        numeric_col_count = sum(
+            1
+            for col in query_result.columns
+            if any(self._is_numeric_value(row.get(col)) for row in sample_rows)
+        )
+        has_negative_numeric = any(
+            isinstance(value, (int, float, Decimal)) and value < 0
+            for row in sample_rows
+            for value in row.values()
+        )
+        has_time_dimension = any(
+            self._is_temporal_column(col, sample_rows) for col in query_result.columns
+        )
+        return {
+            "num_rows": query_result.row_count,
+            "num_cols": len(query_result.columns),
+            "numeric_col_count": numeric_col_count,
+            "has_negative_numeric": has_negative_numeric,
+            "has_time_dimension": has_time_dimension,
+            "columns": list(query_result.columns),
+        }
 
-        Returns:
-            Visualization hint
-        """
+    def _suggest_visualization_deterministic(
+        self,
+        *,
+        query_result: QueryResult,
+        original_query: str | None = None,
+        shape: dict[str, Any] | None = None,
+    ) -> str:
         if query_result.row_count == 0:
             return "none"
 
-        num_cols = len(query_result.columns)
-        num_rows = query_result.row_count
-        sample_rows = query_result.rows[: min(len(query_result.rows), 50)]
-        column_names = list(query_result.columns)
-        numeric_col_count = sum(
-            1
-            for col in column_names
-            if any(self._is_numeric_value(row.get(col)) for row in sample_rows)
-        )
-        temporal_columns = [
-            col for col in column_names if self._is_temporal_column(col, sample_rows)
-        ]
-        temporal_col_count = len(temporal_columns)
-        categorical_col_count = max(0, num_cols - numeric_col_count - temporal_col_count)
-        has_time_dimension = any(
-            self._is_temporal_column(col, sample_rows) for col in column_names
-        )
+        if shape is None:
+            shape = self._analyze_result_shape(query_result)
+        num_cols = int(shape.get("num_cols", 0))
+        num_rows = int(shape.get("num_rows", 0))
+        numeric_col_count = int(shape.get("numeric_col_count", 0))
+        has_negative_numeric = bool(shape.get("has_negative_numeric", False))
+        has_time_dimension = bool(shape.get("has_time_dimension", False))
 
         # Single value
         if num_rows == 1 and num_cols == 1:
@@ -850,7 +875,7 @@ class ExecutorAgent(BaseAgent):
             and num_rows >= 2
             and num_rows <= 12
             and numeric_col_count >= 1
-            and self._all_numeric_values_positive(query_result, sample_rows)
+            and not has_negative_numeric
         ):
             return "pie_chart"
         if requested_hint == "scatter" and num_cols >= 2 and num_rows >= 2 and numeric_col_count >= 2:
@@ -858,280 +883,197 @@ class ExecutorAgent(BaseAgent):
         if requested_hint == "line_chart" and num_cols >= 2 and num_rows >= 2 and numeric_col_count >= 1:
             return "bar_chart"
 
-        # Time series detection (prioritize over generic category logic)
-        if has_time_dimension and numeric_col_count >= 1 and num_rows >= 2:
+        # Time series detection (prioritize over other 2-column logic)
+        if has_time_dimension and num_cols >= 2 and numeric_col_count >= 1:
             return "line_chart"
 
-        # Category + metric distributions
-        if categorical_col_count >= 1 and numeric_col_count >= 1:
+        # Two columns - likely category + value
+        if num_cols == 2:
+            if num_rows <= 10:
+                return "bar_chart"
+            if num_rows <= 20:
+                return "line_chart"
+            return "table"
+
+        # Multiple columns - scatter or table
+        if num_cols >= 3:
             if (
-                self._looks_like_share_distribution_query(original_query)
-                and num_rows <= 8
-                and self._all_numeric_values_positive(query_result, sample_rows)
+                (requested_hint == "scatter" or self._looks_like_scatter_intent(original_query))
+                and num_rows <= 100
+                and numeric_col_count >= 2
             ):
-                return "pie_chart"
-            if num_rows <= 30:
-                return "bar_chart"
-            return "table"
-
-        # Numeric pair analysis only when explicitly requested.
-        if numeric_col_count >= 2 and num_rows <= 120:
-            if requested_hint == "scatter" or self._looks_like_scatter_query(original_query):
                 return "scatter"
-            if num_rows <= 25:
+            if num_rows <= 25 and numeric_col_count >= 1:
                 return "bar_chart"
             return "table"
 
-        if numeric_col_count >= 1:
-            if num_rows <= 25:
-                return "bar_chart"
-            return "table"
-
-        # Default
         return "table"
 
-    def _is_visualization_valid(
+    def _compatible_visualizations(self, shape: dict[str, Any]) -> set[str]:
+        num_rows = int(shape.get("num_rows", 0))
+        num_cols = int(shape.get("num_cols", 0))
+        numeric_col_count = int(shape.get("numeric_col_count", 0))
+        has_negative_numeric = bool(shape.get("has_negative_numeric", False))
+        has_time_dimension = bool(shape.get("has_time_dimension", False))
+
+        if num_rows == 0:
+            return {"none"}
+        if num_rows == 1 and num_cols == 1:
+            return {"none", "table"}
+
+        allowed = {"table", "none"}
+        if num_cols >= 2 and num_rows >= 2 and numeric_col_count >= 1:
+            allowed.add("bar_chart")
+        if has_time_dimension and num_cols >= 2 and num_rows >= 2 and numeric_col_count >= 1:
+            allowed.add("line_chart")
+        if (
+            num_cols >= 2
+            and num_rows >= 2
+            and num_rows <= 12
+            and numeric_col_count >= 1
+            and not has_negative_numeric
+        ):
+            allowed.add("pie_chart")
+        if num_cols >= 2 and num_rows >= 2 and numeric_col_count >= 2:
+            allowed.add("scatter")
+        return allowed
+
+    def _should_use_visualization_llm(
         self,
-        hint: str | None,
-        query_result: QueryResult,
-        original_query: str | None = None,
+        *,
+        shape: dict[str, Any],
+        requested_hint: str | None,
+        requested_valid: bool,
+        deterministic_hint: str,
     ) -> bool:
-        if not hint:
+        if not bool(getattr(self.config.pipeline, "visualization_llm_enabled", True)):
             return False
-        normalized = hint.lower()
-        if normalized in {"none", "table"}:
+        num_rows = int(shape.get("num_rows", 0))
+        num_cols = int(shape.get("num_cols", 0))
+        numeric_col_count = int(shape.get("numeric_col_count", 0))
+        has_time_dimension = bool(shape.get("has_time_dimension", False))
+        if num_rows == 0 or (num_rows == 1 and num_cols == 1):
+            return False
+        if requested_hint is not None:
+            return not requested_valid
+        if has_time_dimension and deterministic_hint == "line_chart":
+            return False
+        if num_cols == 2 and numeric_col_count >= 1 and 2 <= num_rows <= 12:
             return True
-        if query_result.row_count < 2 or len(query_result.columns) < 2:
-            return False
-
-        sample_rows = query_result.rows[: min(len(query_result.rows), 50)]
-        num_rows = query_result.row_count
-        num_cols = len(query_result.columns)
-        numeric_col_count = sum(
-            1
-            for col in query_result.columns
-            if any(self._is_numeric_value(row.get(col)) for row in sample_rows)
-        )
-        has_time_dimension = any(
-            self._is_temporal_column(col, sample_rows) for col in query_result.columns
-        )
-
-        if normalized == "line_chart":
-            return has_time_dimension and numeric_col_count >= 1
-        if normalized == "bar_chart":
-            return numeric_col_count >= 1
-        if normalized == "pie_chart":
-            return (
-                numeric_col_count >= 1
-                and num_rows <= 12
-                and self._all_numeric_values_positive(query_result, sample_rows)
-            )
-        if normalized == "scatter":
-            if numeric_col_count < 2:
-                return False
-            if self._looks_like_scatter_query(original_query):
-                return True
-            return num_cols == 2 and num_rows <= 60
+        if num_cols >= 3 and numeric_col_count >= 2 and num_rows <= 100:
+            return True
         return False
 
-    def _should_use_visualization_planner(
+    async def _suggest_visualization_with_llm(
         self,
-        query_result: QueryResult,
-        original_query: str | None,
-        requested_hint: str | None,
-    ) -> bool:
-        pipeline_cfg = getattr(self.config, "pipeline", None)
-        if not pipeline_cfg:
-            return False
-        if not bool(getattr(pipeline_cfg, "visualization_planner_enabled", False)):
-            return False
-        if query_result.row_count < 2:
-            return False
-        if len(query_result.columns) < 2:
-            return False
-        if query_result.row_count > 300:
-            return False
-        if len(query_result.columns) > 20:
-            return False
-        if requested_hint:
-            return True
-        return bool(
-            re.search(
-                r"\b(chart|graph|visual|trend|over time|breakdown|distribution|compare|composition|share)\b",
-                (original_query or "").lower(),
-            )
-        )
-
-    async def _plan_visualization_with_llm(
-        self,
-        query_result: QueryResult,
-        original_query: str | None,
         *,
-        requested_hint: str | None,
-        fallback_hint: str,
-    ) -> tuple[str | None, str | None]:
-        pipeline_cfg = getattr(self.config, "pipeline", None)
-        max_rows = int(getattr(pipeline_cfg, "visualization_planner_max_rows_sample", 10))
-        max_cols = int(getattr(pipeline_cfg, "visualization_planner_max_columns_sample", 12))
-        timeout_ms = int(getattr(pipeline_cfg, "visualization_planner_timeout_ms", 1500))
-        confidence_threshold = float(
-            getattr(pipeline_cfg, "visualization_planner_confidence_threshold", 0.55)
-        )
-
-        sample_columns = list(query_result.columns)[:max_cols]
-        sample_rows = query_result.rows[:max_rows]
-        compact_rows = []
-        for row in sample_rows:
-            if not isinstance(row, dict):
-                continue
-            compact_rows.append({col: row.get(col) for col in sample_columns})
-
-        column_profiles = []
-        for col in sample_columns:
-            is_numeric = any(self._is_numeric_value(r.get(col)) for r in compact_rows)
-            is_temporal = self._is_temporal_column(col, compact_rows)
-            column_profiles.append(
-                {
-                    "name": col,
-                    "numeric": bool(is_numeric),
-                    "temporal": bool(is_temporal),
-                }
-            )
-
+        query_result: QueryResult,
+        original_query: str | None,
+        sql: str,
+        allowed_hints: list[str],
+        deterministic_hint: str,
+    ) -> tuple[str | None, str | None, bool]:
+        row_sample_limit = int(getattr(self.config.pipeline, "visualization_llm_row_sample", 8))
+        row_sample = query_result.rows[: max(2, min(row_sample_limit, len(query_result.rows)))]
         prompt = (
-            "Pick the best visualization for this SQL result.\n"
-            "Return strict JSON only with keys: visualization_hint, confidence, reason.\n"
-            "Allowed visualization_hint: table, bar_chart, line_chart, pie_chart, scatter, none.\n"
-            f"User query: {original_query or ''}\n"
-            f"User requested hint: {requested_hint or 'none'}\n"
-            f"Rule fallback hint: {fallback_hint}\n"
-            f"Row count: {query_result.row_count}\n"
-            f"Columns: {json.dumps(column_profiles)}\n"
-            f"Sample rows: {json.dumps(compact_rows, default=str)}\n"
+            "You are selecting the best chart type for SQL results.\n"
+            "Return ONLY JSON with keys: visualization, reason, confidence.\n"
+            "visualization must be one of the allowed types.\n\n"
+            f"USER_QUERY: {original_query or ''}\n"
+            f"SQL: {sql}\n"
+            f"ALLOWED: {', '.join(allowed_hints)}\n"
+            f"DETERMINISTIC_DEFAULT: {deterministic_hint}\n"
+            f"ROW_COUNT: {query_result.row_count}\n"
+            f"COLUMNS: {', '.join(query_result.columns)}\n"
+            f"ROW_SAMPLE: {json.dumps(row_sample, default=str)}\n"
         )
         request = LLMRequest(
             messages=[
-                LLMMessage(
-                    role="system",
-                    content=(
-                        "You are a visualization planner. "
-                        "Prefer line for temporal trends, bar for category comparisons, "
-                        "pie only for small positive share distributions, scatter only for "
-                        "explicit correlation/relationship analysis."
-                    ),
-                ),
+                LLMMessage(role="system", content="Return strict JSON only."),
                 LLMMessage(role="user", content=prompt),
             ],
             temperature=0.0,
             max_tokens=180,
         )
-
         try:
-            response = await asyncio.wait_for(
-                self.llm.generate(request),
-                timeout=max(0.2, timeout_ms / 1000),
-            )
+            response = await self.llm.generate(request)
+            content = response.content if isinstance(response.content, str) else str(response.content)
+            match = re.search(r"\{[\s\S]*\}", content)
+            if not match:
+                return None, None, True
+            payload = json.loads(match.group(0))
+            suggested = str(payload.get("visualization", "")).strip().lower()
+            reason = str(payload.get("reason", "")).strip() or None
+            if suggested in set(allowed_hints):
+                return suggested, reason, True
+            return None, reason, True
         except Exception:
-            return None, None
+            return None, None, True
 
-        payload = self._parse_visualization_plan_response(response.content)
-        if not payload:
-            return None, None
-        confidence = payload.get("confidence", 0.0)
-        try:
-            confidence_value = float(confidence)
-        except (TypeError, ValueError):
-            confidence_value = 0.0
-        if confidence_value < confidence_threshold:
-            return None, payload.get("reason")
-        hint = str(payload.get("visualization_hint", "")).strip().lower()
-        if hint not in {"table", "bar_chart", "line_chart", "pie_chart", "scatter", "none"}:
-            return None, payload.get("reason")
-        return hint, payload.get("reason")
+    def _resolve_visualization_choice(
+        self,
+        *,
+        requested_hint: str | None,
+        deterministic_hint: str,
+        llm_suggested: str | None,
+        allowed_hints: set[str],
+    ) -> tuple[str, str]:
+        if requested_hint == "none":
+            return "none", "user_requested_none"
+        if requested_hint == "table":
+            return "table", "user_requested_table"
+        if requested_hint and requested_hint in allowed_hints:
+            return requested_hint, "user_requested_valid"
+        if requested_hint and requested_hint not in allowed_hints:
+            if llm_suggested and llm_suggested in allowed_hints:
+                return llm_suggested, "user_request_incompatible_using_llm_override"
+            if deterministic_hint in allowed_hints:
+                return deterministic_hint, "user_request_incompatible_using_deterministic_fallback"
+            return "table", "user_request_incompatible_default_table"
+        if llm_suggested and llm_suggested in allowed_hints:
+            return llm_suggested, "llm_recommended"
+        if deterministic_hint in allowed_hints:
+            return deterministic_hint, "deterministic_default"
+        return "table", "safe_table_fallback"
 
-    def _parse_visualization_plan_response(self, content: str) -> dict[str, Any] | None:
-        json_text = None
-        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
-        if fenced:
-            json_text = fenced.group(1)
-        else:
-            obj = re.search(r"\{.*\}", content, re.DOTALL)
-            if obj:
-                json_text = obj.group(0)
-        if not json_text:
+    def _build_visualization_note(self, metadata: dict[str, Any]) -> str | None:
+        if not metadata:
             return None
-        try:
-            payload = json.loads(json_text)
-        except json.JSONDecodeError:
+        reason = str(metadata.get("resolution_reason") or "")
+        if not reason.startswith("user_request_incompatible"):
             return None
-        if not isinstance(payload, dict):
-            return None
-        return payload
 
-    def _format_viz_label(self, hint: str) -> str:
+        requested = self._format_visualization_label(metadata.get("requested"))
+        final = self._format_visualization_label(metadata.get("final"))
+        detail = str(metadata.get("llm_reason") or "").strip()
+        if not detail:
+            detail = "the data shape does not support it"
+        return f"Requested {requested} was overridden to {final} because {detail}."
+
+    @staticmethod
+    def _format_visualization_label(hint: Any) -> str:
         mapping = {
-            "table": "table",
             "bar_chart": "bar chart",
             "line_chart": "line chart",
             "pie_chart": "pie chart",
             "scatter": "scatter plot",
+            "table": "table",
             "none": "no visualization",
         }
-        return mapping.get(hint, hint)
+        key = str(hint or "").strip().lower()
+        return mapping.get(key, key or "chart")
 
-    def _clean_visualization_reason(self, reason: str | None) -> str:
-        if not reason:
-            return "the returned data shape does not support it"
-        cleaned = re.sub(r"\s+", " ", reason).strip()
-        cleaned = re.sub(
-            r"\b(system(?:'s)?|rule fallback|planner)\b",
-            "",
-            cleaned,
-            flags=re.IGNORECASE,
-        )
-        cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
-        first_sentence = cleaned.split(".")[0].strip()
-        if len(first_sentence) >= 20:
-            cleaned = first_sentence
-        if len(cleaned) > 160:
-            cleaned = cleaned[:157].rstrip() + "..."
-        if not cleaned:
-            return "the returned data shape does not support it"
-        return cleaned
-
-    def _all_numeric_values_positive(
-        self, query_result: QueryResult, sample_rows: list[dict[str, Any]]
-    ) -> bool:
-        numeric_columns = [
-            col
-            for col in query_result.columns
-            if any(self._is_numeric_value(row.get(col)) for row in sample_rows)
-        ]
-        if not numeric_columns:
-            return False
-        for row in sample_rows:
-            for col in numeric_columns:
-                value = row.get(col)
-                if self._is_numeric_value(value) and float(value) < 0:
-                    return False
-        return True
-
-    def _looks_like_share_distribution_query(self, query: str | None) -> bool:
-        text = (query or "").lower()
+    @staticmethod
+    def _looks_like_scatter_intent(query: str | None) -> bool:
+        text = str(query or "").lower()
         if not text:
             return False
         return bool(
             re.search(
-                r"\b(share|distribution|breakdown|composition|contribution|percent|percentage|proportion)\b",
+                r"\b(scatter|correlation|correlate|relationship|vs\.?|versus)\b",
                 text,
             )
         )
-
-    def _looks_like_scatter_query(self, query: str | None) -> bool:
-        text = (query or "").lower()
-        if not text:
-            return False
-        return bool(re.search(r"\b(scatter|correlation|relationship|regression)\b", text))
 
     def _requested_visualization_hint(self, query: str | None) -> str | None:
         """Infer user visualization preference from query text."""

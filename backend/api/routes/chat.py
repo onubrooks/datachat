@@ -142,7 +142,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
 
         # Extract visualization hint
         visualization_hint = result.get("visualization_hint")
-        visualization_note = result.get("visualization_note")
+        visualization_metadata = result.get("visualization_metadata")
 
         # Build sources from retrieved datapoints
         sources = _build_sources(result)
@@ -159,7 +159,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             sql=sql_query,
             data=data,
             visualization_hint=visualization_hint,
-            visualization_note=visualization_note,
+            visualization_metadata=visualization_metadata,
             sources=sources,
             answer_source=answer_source,
             answer_confidence=answer_confidence,
@@ -244,6 +244,9 @@ def _build_metrics(result: dict[str, Any]) -> ChatMetrics | None:
             retry_count=result.get("retry_count", 0),
             sql_formatter_fallback_calls=result.get("sql_formatter_fallback_calls", 0),
             sql_formatter_fallback_successes=result.get("sql_formatter_fallback_successes", 0),
+            query_compiler_llm_calls=result.get("query_compiler_llm_calls", 0),
+            query_compiler_llm_refinements=result.get("query_compiler_llm_refinements", 0),
+            query_compiler_latency_ms=result.get("query_compiler_latency_ms", 0.0),
         )
     except Exception as e:
         logger.warning(f"Failed to build metrics: {e}")

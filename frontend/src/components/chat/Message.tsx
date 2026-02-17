@@ -146,6 +146,17 @@ const formatMetricNumber = (value: number): string => {
   }).format(value);
 };
 
+const formatAxisTick = (value: number): string => {
+  if (!Number.isFinite(value)) {
+    return "0";
+  }
+  const abs = Math.abs(value);
+  const maxFractionDigits = abs >= 1000 ? 0 : abs >= 100 ? 1 : 2;
+  return new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: maxFractionDigits,
+  }).format(value);
+};
+
 const formatDurationSeconds = (milliseconds: number): string => {
   if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
     return "0s";
@@ -173,13 +184,20 @@ const toNumber = (value: unknown): number | null => {
 
 const isDateLikeColumn = (columnName: string): boolean => {
   const lowered = columnName.toLowerCase();
-  return (
-    lowered.includes("date") ||
-    lowered.includes("time") ||
-    lowered.includes("month") ||
-    lowered.includes("year") ||
-    lowered.includes("day")
-  );
+  const tokens = lowered.split(/[^a-z0-9]+/).filter(Boolean);
+  const directMarkers = new Set(["date", "time", "timestamp", "datetime"]);
+  const periodMarkers = new Set(["day", "week", "month", "quarter", "year"]);
+  const periodDisqualifiers = new Set(["type", "category", "name", "code"]);
+  if (tokens.some((token) => directMarkers.has(token))) {
+    return true;
+  }
+  if (
+    tokens.some((token) => periodMarkers.has(token)) &&
+    !tokens.some((token) => periodDisqualifiers.has(token))
+  ) {
+    return true;
+  }
+  return false;
 };
 
 function clampPercent(value: number): number {
@@ -195,22 +213,46 @@ export function Message({
   const isUser = message.role === "user";
   const [activeTab, setActiveTab] = useState<TabId>("answer");
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [selectedSubAnswerIndex, setSelectedSubAnswerIndex] = useState<number>(0);
+
+  const subAnswers = message.sub_answers || [];
+  const activeSubAnswer =
+    subAnswers.length > 0
+      ? subAnswers[Math.min(selectedSubAnswerIndex, subAnswers.length - 1)]
+      : null;
+  const activeContent = activeSubAnswer?.answer || message.content;
+  const activeSql = activeSubAnswer?.sql ?? message.sql;
+  const activeData = activeSubAnswer?.data ?? message.data;
+  const activeVisualizationHint =
+    activeSubAnswer?.visualization_hint ?? message.visualization_hint;
+  const activeClarifyingQuestions =
+    activeSubAnswer?.clarifying_questions || message.clarifying_questions;
+
+  useEffect(() => {
+    if (subAnswers.length === 0) {
+      setSelectedSubAnswerIndex(0);
+      return;
+    }
+    if (selectedSubAnswerIndex > subAnswers.length - 1) {
+      setSelectedSubAnswerIndex(0);
+    }
+  }, [selectedSubAnswerIndex, subAnswers.length]);
 
   const columnNames = useMemo(
-    () => (message.data ? Object.keys(message.data) : []),
-    [message.data]
+    () => (activeData ? Object.keys(activeData) : []),
+    [activeData]
   );
   const rowCount =
     columnNames.length > 0
-      ? Math.max(...columnNames.map((column) => message.data?.[column]?.length ?? 0))
+      ? Math.max(...columnNames.map((column) => activeData?.[column]?.length ?? 0))
       : 0;
 
   const rows = useMemo(
     () =>
       Array.from({ length: rowCount }, (_, rowIndex) =>
-        columnNames.map((column) => message.data?.[column]?.[rowIndex])
+        columnNames.map((column) => activeData?.[column]?.[rowIndex])
       ),
-    [columnNames, message.data, rowCount]
+    [activeData, columnNames, rowCount]
   );
 
   const rowObjects = useMemo(
@@ -218,11 +260,11 @@ export function Message({
       Array.from({ length: rowCount }, (_, rowIndex) => {
         const record: Record<string, unknown> = {};
         for (const column of columnNames) {
-          record[column] = message.data?.[column]?.[rowIndex];
+          record[column] = activeData?.[column]?.[rowIndex];
         }
         return record;
       }),
-    [columnNames, message.data, rowCount]
+    [activeData, columnNames, rowCount]
   );
 
   const numericColumns = useMemo(
@@ -265,7 +307,7 @@ export function Message({
   const hasSources =
     Boolean(message.sources?.length) && message.answer_source !== "context";
   const hasEvidence = Boolean(message.evidence?.length);
-  const hasTable = Boolean(message.data) && rowCount > 0;
+  const hasTable = Boolean(activeData) && rowCount > 0;
   const hasAgentTimings = Boolean(
     message.metrics?.agent_timings &&
       Object.keys(message.metrics.agent_timings).length > 0 &&
@@ -273,7 +315,7 @@ export function Message({
   );
 
   const inferVisualizationType = (): VizHint => {
-    const hint = (message.visualization_hint || "").toLowerCase();
+    const hint = (activeVisualizationHint || "").toLowerCase();
     if (
       hint === "bar_chart" ||
       hint === "line_chart" ||
@@ -287,16 +329,13 @@ export function Message({
     if (!hasTable) {
       return "none";
     }
+    if (numericColumns.length >= 2 && rowCount <= 200) {
+      return "scatter";
+    }
     if (numericColumns.length >= 1 && columnNames.some((col) => isDateLikeColumn(col))) {
       return "line_chart";
     }
-    if (numericColumns.length >= 1 && nonNumericColumns.length >= 1) {
-      if (rowCount <= 30) {
-        return "bar_chart";
-      }
-      return "table";
-    }
-    if (numericColumns.length >= 1 && rowCount <= 25) {
+    if (numericColumns.length >= 1 && rowCount <= 20) {
       return "bar_chart";
     }
     return "table";
@@ -305,11 +344,11 @@ export function Message({
   const resolvedVizHint = inferVisualizationType();
 
   const copySql = async () => {
-    if (!message.sql) {
+    if (!activeSql) {
       return;
     }
     try {
-      await navigator.clipboard.writeText(message.sql);
+      await navigator.clipboard.writeText(activeSql);
       setActionNotice("SQL copied");
     } catch {
       setActionNotice("Unable to copy SQL");
@@ -349,7 +388,7 @@ export function Message({
   };
 
   const renderClarifyingQuestions = () => {
-    if (!message.clarifying_questions || message.clarifying_questions.length === 0) {
+    if (!activeClarifyingQuestions || activeClarifyingQuestions.length === 0) {
       return null;
     }
     return (
@@ -359,7 +398,7 @@ export function Message({
         </CardHeader>
         <CardContent>
           <ul className="space-y-2 text-sm">
-            {message.clarifying_questions.map((question, index) => (
+            {activeClarifyingQuestions.map((question, index) => (
               <li key={`${question}-${index}`} className="flex items-start gap-2">
                 <span className="mt-0.5 flex-1">• {question}</span>
                 {onClarifyingAnswer && (
@@ -380,7 +419,7 @@ export function Message({
   };
 
   const renderSqlSection = () => {
-    if (!message.sql) {
+    if (!activeSql) {
       return (
         <Card className="mt-4">
           <CardContent className="pt-6 text-sm text-muted-foreground">
@@ -399,8 +438,52 @@ export function Message({
         </CardHeader>
         <CardContent>
           <pre className="bg-secondary p-3 rounded text-sm overflow-x-auto">
-            <code>{message.sql}</code>
+            <code>{activeSql}</code>
           </pre>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  const renderSubAnswerSelector = () => {
+    if (!subAnswers.length) {
+      return null;
+    }
+    return (
+      <Card className="mt-4">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">Sub-questions</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {subAnswers.map((item, idx) => (
+              <button
+                key={`sub-answer-${item.index}`}
+                type="button"
+                className={cn(
+                  "rounded px-2.5 py-1 text-xs transition",
+                  idx === selectedSubAnswerIndex
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-secondary text-foreground hover:bg-secondary/80"
+                )}
+                onClick={() => setSelectedSubAnswerIndex(idx)}
+              >
+                Q{item.index}
+              </button>
+            ))}
+          </div>
+          {activeSubAnswer && (
+            <div className="rounded border border-border/80 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+              <div className="font-medium text-foreground">{activeSubAnswer.query}</div>
+              {(activeSubAnswer.answer_source || activeSubAnswer.answer_confidence !== undefined) && (
+                <div className="mt-1">
+                  Source: {activeSubAnswer.answer_source || "unknown"}
+                  {typeof activeSubAnswer.answer_confidence === "number" &&
+                    ` · confidence ${activeSubAnswer.answer_confidence.toFixed(2)}`}
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
     );
@@ -534,11 +617,11 @@ export function Message({
                       .join(", ")}
                   </div>
                 )}
-                {message.sql && (
+                {activeSql && (
                   <div className="mb-3">
                     <div className="text-xs font-medium text-muted-foreground">Raw SQL</div>
                     <pre className="mt-1 rounded bg-secondary p-2 text-xs overflow-x-auto">
-                      <code>{message.sql}</code>
+                      <code>{activeSql}</code>
                     </pre>
                   </div>
                 )}
@@ -590,9 +673,6 @@ export function Message({
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {message.visualization_note && (
-            <p className="mb-2 text-xs text-amber-700">{message.visualization_note}</p>
-          )}
           <p className="text-sm text-muted-foreground">{messageText}</p>
           <p className="mt-2 text-xs text-muted-foreground">
             Tip: switch to the Table tab for raw results.
@@ -633,10 +713,7 @@ export function Message({
               Bar Chart
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2">
-            {message.visualization_note && (
-              <p className="text-xs text-amber-700">{message.visualization_note}</p>
-            )}
+          <CardContent className="space-y-3">
             {points.map((point, index) => (
               <div key={`${point.label}-${index}`} className="flex items-center gap-2">
                 <div className="w-28 truncate text-xs">{point.label}</div>
@@ -649,6 +726,23 @@ export function Message({
                 <div className="w-16 text-right text-xs">{formatMetricNumber(point.value)}</div>
               </div>
             ))}
+            <div className="rounded border border-border/80 bg-muted/30 px-2 py-2 text-xs text-muted-foreground">
+              <div>
+                <span className="font-medium text-foreground">X axis:</span> {labelCol}
+              </div>
+              <div>
+                <span className="font-medium text-foreground">Y axis:</span> {valueCol}
+              </div>
+              <div className="mt-1 flex items-center gap-2">
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-full"
+                  style={{ backgroundColor: CHART_COLORS[0] }}
+                />
+                <span>
+                  <span className="font-medium text-foreground">Legend:</span> {valueCol}
+                </span>
+              </div>
+            </div>
           </CardContent>
         </Card>
       );
@@ -676,18 +770,27 @@ export function Message({
         return renderFallback("Not enough points to draw a line chart.");
       }
 
-      const width = 520;
-      const height = 220;
-      const pad = 28;
+      const width = 640;
+      const height = 280;
+      const padLeft = 56;
+      const padRight = 24;
+      const padTop = 20;
+      const padBottom = 58;
+      const plotWidth = width - padLeft - padRight;
+      const plotHeight = height - padTop - padBottom;
       const ys = points.map((point) => point.y);
       const minY = Math.min(...ys);
       const maxY = Math.max(...ys);
       const yRange = maxY - minY || 1;
+      const yTicks = [minY, minY + yRange / 2, maxY];
+      const xTickIndexes = Array.from(
+        new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])
+      );
 
       const linePoints = points
         .map((point, index) => {
-          const x = pad + (index / (points.length - 1)) * (width - pad * 2);
-          const y = height - pad - ((point.y - minY) / yRange) * (height - pad * 2);
+          const x = padLeft + (index / (points.length - 1)) * plotWidth;
+          const y = padTop + (1 - (point.y - minY) / yRange) * plotHeight;
           return `${x},${y}`;
         })
         .join(" ");
@@ -701,13 +804,46 @@ export function Message({
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {message.visualization_note && (
-              <p className="mb-2 text-xs text-amber-700">{message.visualization_note}</p>
-            )}
             <div className="overflow-x-auto">
-              <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[320px] w-full h-[220px]">
-                <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="#94a3b8" />
-                <line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="#94a3b8" />
+              <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[360px] w-full h-[280px]">
+                {yTicks.map((tick, index) => {
+                  const y = padTop + (1 - (tick - minY) / yRange) * plotHeight;
+                  return (
+                    <g key={`line-y-tick-${index}`}>
+                      <line
+                        x1={padLeft}
+                        y1={y}
+                        x2={width - padRight}
+                        y2={y}
+                        stroke="#e2e8f0"
+                        strokeDasharray="3 3"
+                      />
+                      <text
+                        x={padLeft - 8}
+                        y={y + 4}
+                        textAnchor="end"
+                        fontSize="10"
+                        fill="#64748b"
+                      >
+                        {formatAxisTick(tick)}
+                      </text>
+                    </g>
+                  );
+                })}
+                <line
+                  x1={padLeft}
+                  y1={height - padBottom}
+                  x2={width - padRight}
+                  y2={height - padBottom}
+                  stroke="#94a3b8"
+                />
+                <line
+                  x1={padLeft}
+                  y1={padTop}
+                  x2={padLeft}
+                  y2={height - padBottom}
+                  stroke="#94a3b8"
+                />
                 <polyline
                   fill="none"
                   stroke="#2563eb"
@@ -715,14 +851,57 @@ export function Message({
                   points={linePoints}
                 />
                 {points.map((point, index) => {
-                  const x = pad + (index / (points.length - 1)) * (width - pad * 2);
-                  const y = height - pad - ((point.y - minY) / yRange) * (height - pad * 2);
+                  const x = padLeft + (index / (points.length - 1)) * plotWidth;
+                  const y = padTop + (1 - (point.y - minY) / yRange) * plotHeight;
                   return <circle key={`${point.xLabel}-${index}`} cx={x} cy={y} r="3" fill="#2563eb" />;
                 })}
+                {xTickIndexes.map((index) => {
+                  const x = padLeft + (index / Math.max(points.length - 1, 1)) * plotWidth;
+                  const raw = points[index]?.xLabel ?? "";
+                  const label = raw.length > 16 ? `${raw.slice(0, 15)}…` : raw;
+                  return (
+                    <text
+                      key={`line-x-tick-${index}`}
+                      x={x}
+                      y={height - padBottom + 16}
+                      textAnchor="middle"
+                      fontSize="10"
+                      fill="#64748b"
+                    >
+                      {label}
+                    </text>
+                  );
+                })}
+                <text
+                  x={padLeft + plotWidth / 2}
+                  y={height - 8}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fill="#334155"
+                >
+                  {xCol}
+                </text>
+                <text
+                  x={14}
+                  y={padTop + plotHeight / 2}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fill="#334155"
+                  transform={`rotate(-90 14 ${padTop + plotHeight / 2})`}
+                >
+                  {valueCol}
+                </text>
+                <g transform={`translate(${width - padRight - 140}, ${padTop + 6})`}>
+                  <rect x="0" y="0" width="134" height="24" fill="#f8fafc" stroke="#e2e8f0" rx="4" />
+                  <rect x="8" y="9" width="14" height="2.5" fill="#2563eb" />
+                  <text x="28" y="13" fontSize="10" fill="#334155">
+                    {valueCol}
+                  </text>
+                </g>
               </svg>
             </div>
             <p className="text-xs text-muted-foreground mt-2">
-              {xCol} vs {valueCol} ({points.length} points)
+              X axis: {xCol} · Y axis: {valueCol} · Legend: {valueCol} · {points.length} points
             </p>
           </CardContent>
         </Card>
@@ -747,9 +926,14 @@ export function Message({
         return renderFallback("Not enough numeric points for scatter plot.");
       }
 
-      const width = 520;
-      const height = 220;
-      const pad = 28;
+      const width = 640;
+      const height = 280;
+      const padLeft = 56;
+      const padRight = 24;
+      const padTop = 20;
+      const padBottom = 58;
+      const plotWidth = width - padLeft - padRight;
+      const plotHeight = height - padTop - padBottom;
       const xs = points.map((point) => point.x);
       const ys = points.map((point) => point.y);
       const minX = Math.min(...xs);
@@ -758,6 +942,8 @@ export function Message({
       const maxY = Math.max(...ys);
       const xRange = maxX - minX || 1;
       const yRange = maxY - minY || 1;
+      const xTicks = [minX, minX + xRange / 2, maxX];
+      const yTicks = [minY, minY + yRange / 2, maxY];
 
       return (
         <Card className="mt-4">
@@ -768,22 +954,105 @@ export function Message({
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {message.visualization_note && (
-              <p className="mb-2 text-xs text-amber-700">{message.visualization_note}</p>
-            )}
             <div className="overflow-x-auto">
-              <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[320px] w-full h-[220px]">
-                <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="#94a3b8" />
-                <line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="#94a3b8" />
+              <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[360px] w-full h-[280px]">
+                {yTicks.map((tick, index) => {
+                  const y = padTop + (1 - (tick - minY) / yRange) * plotHeight;
+                  return (
+                    <g key={`scatter-y-tick-${index}`}>
+                      <line
+                        x1={padLeft}
+                        y1={y}
+                        x2={width - padRight}
+                        y2={y}
+                        stroke="#e2e8f0"
+                        strokeDasharray="3 3"
+                      />
+                      <text
+                        x={padLeft - 8}
+                        y={y + 4}
+                        textAnchor="end"
+                        fontSize="10"
+                        fill="#64748b"
+                      >
+                        {formatAxisTick(tick)}
+                      </text>
+                    </g>
+                  );
+                })}
+                {xTicks.map((tick, index) => {
+                  const x = padLeft + ((tick - minX) / xRange) * plotWidth;
+                  return (
+                    <g key={`scatter-x-tick-${index}`}>
+                      <line
+                        x1={x}
+                        y1={padTop}
+                        x2={x}
+                        y2={height - padBottom}
+                        stroke="#e2e8f0"
+                        strokeDasharray="3 3"
+                      />
+                      <text
+                        x={x}
+                        y={height - padBottom + 16}
+                        textAnchor="middle"
+                        fontSize="10"
+                        fill="#64748b"
+                      >
+                        {formatAxisTick(tick)}
+                      </text>
+                    </g>
+                  );
+                })}
+                <line
+                  x1={padLeft}
+                  y1={height - padBottom}
+                  x2={width - padRight}
+                  y2={height - padBottom}
+                  stroke="#94a3b8"
+                />
+                <line
+                  x1={padLeft}
+                  y1={padTop}
+                  x2={padLeft}
+                  y2={height - padBottom}
+                  stroke="#94a3b8"
+                />
                 {points.map((point, index) => {
-                  const x = pad + ((point.x - minX) / xRange) * (width - pad * 2);
-                  const y = height - pad - ((point.y - minY) / yRange) * (height - pad * 2);
+                  const x = padLeft + ((point.x - minX) / xRange) * plotWidth;
+                  const y = padTop + (1 - (point.y - minY) / yRange) * plotHeight;
                   return <circle key={`scatter-${index}`} cx={x} cy={y} r="3.2" fill="#2563eb" opacity="0.85" />;
                 })}
+                <text
+                  x={padLeft + plotWidth / 2}
+                  y={height - 8}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fill="#334155"
+                >
+                  {xCol}
+                </text>
+                <text
+                  x={14}
+                  y={padTop + plotHeight / 2}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fill="#334155"
+                  transform={`rotate(-90 14 ${padTop + plotHeight / 2})`}
+                >
+                  {yCol}
+                </text>
+                <g transform={`translate(${width - padRight - 188}, ${padTop + 6})`}>
+                  <rect x="0" y="0" width="182" height="24" fill="#f8fafc" stroke="#e2e8f0" rx="4" />
+                  <circle cx="12" cy="12" r="3.2" fill="#2563eb" />
+                  <text x="24" y="15" fontSize="10" fill="#334155">
+                    {`${xCol} vs ${yCol}`}
+                  </text>
+                </g>
               </svg>
             </div>
             <p className="text-xs text-muted-foreground mt-2">
-              {xCol} vs {yCol} ({points.length} points)
+              X axis: {xCol} · Y axis: {yCol} · Legend: points · {points.length} points
             </p>
           </CardContent>
         </Card>
@@ -828,9 +1097,6 @@ export function Message({
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {message.visualization_note && (
-              <p className="mb-2 text-xs text-amber-700">{message.visualization_note}</p>
-            )}
             <div className="flex flex-wrap items-start gap-4">
               <div
                 className="h-40 w-40 rounded-full border border-border"
@@ -844,11 +1110,17 @@ export function Message({
                       style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}
                     />
                     <span className="flex-1 truncate">{slice.label}</span>
-                    <span>{formatMetricNumber(slice.value)}</span>
+                    <span>
+                      {formatMetricNumber(slice.value)} (
+                      {((slice.value / total) * 100).toFixed(1)}%)
+                    </span>
                   </li>
                 ))}
               </ul>
             </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Legend: {labelCol} categories · Slice value: {valueCol}
+            </p>
           </CardContent>
         </Card>
       );
@@ -909,7 +1181,7 @@ export function Message({
 
   const tabs: Array<{ id: TabId; label: string }> = useMemo(() => {
     const items: Array<{ id: TabId; label: string }> = [{ id: "answer", label: "Answer" }];
-    if (message.sql) {
+    if (activeSql) {
       items.push({ id: "sql", label: "SQL" });
     }
     if (hasTable) {
@@ -923,7 +1195,7 @@ export function Message({
       items.push({ id: "timing", label: "Timing" });
     }
     return items;
-  }, [hasAgentTimings, hasEvidence, hasSources, hasTable, message.sql]);
+  }, [activeSql, hasAgentTimings, hasEvidence, hasSources, hasTable]);
 
   useEffect(() => {
     if (!tabs.some((tab) => tab.id === activeTab)) {
@@ -932,11 +1204,11 @@ export function Message({
   }, [activeTab, tabs]);
 
   const assistantMeta = !isUser && (message.answer_source || message.tool_approval_required);
-  const showActions = !isUser && (Boolean(message.sql) || hasTable);
+  const showActions = !isUser && (Boolean(activeSql) || hasTable);
 
   const renderAnswerOnly = () => (
     <>
-      {renderMarkdownish(message.content)}
+      {renderMarkdownish(activeContent)}
       {renderClarifyingQuestions()}
     </>
   );
@@ -973,7 +1245,6 @@ export function Message({
       executor: "Executor",
       context_answer: "Context Answer",
       response_synthesis: "Response Synthesis",
-      multi_sql_planner: "Multi SQL Planner",
     };
     if (labels[agent]) {
       return labels[agent];
@@ -1019,7 +1290,7 @@ export function Message({
 
           {showActions && (
             <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
-              {message.sql && (
+              {activeSql && (
                 <button
                   type="button"
                   className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-secondary"
@@ -1042,6 +1313,8 @@ export function Message({
               {actionNotice && <span className="text-muted-foreground">{actionNotice}</span>}
             </div>
           )}
+
+          {!isUser && renderSubAnswerSelector()}
 
           {!isUser && displayMode === "tabbed" ? (
             <>
@@ -1067,7 +1340,7 @@ export function Message({
           ) : (
             <>
               {renderAnswerOnly()}
-              {!isUser && message.sql && renderSqlSection()}
+              {!isUser && activeSql && renderSqlSection()}
               {!isUser && hasTable && renderTableSection()}
               {!isUser && (hasSources || hasEvidence) && renderSourcesSection()}
             </>

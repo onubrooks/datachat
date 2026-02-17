@@ -277,3 +277,21 @@ def test_release_gate_fails_when_required_database_type_missing_without_skip(mon
     )
 
     assert GATE.run_release_gate(config, api_base="http://localhost:8000") == 1
+
+
+def test_build_eval_command_maps_compiler_thresholds():
+    command = GATE._build_eval_command(
+        api_base="http://localhost:8000",
+        mode="compiler",
+        dataset="eval/compiler/grocery_query_compiler.json",
+        thresholds={
+            "min_compiler_table_match_rate": 0.8,
+            "min_compiler_path_match_rate": 0.75,
+            "min_source_match_rate": 0.6,
+        },
+    )
+
+    assert "--mode compiler" in command
+    assert "--min-compiler-table-match-rate 0.8" in command
+    assert "--min-compiler-path-match-rate 0.75" in command
+    assert "--min-source-match-rate 0.6" in command

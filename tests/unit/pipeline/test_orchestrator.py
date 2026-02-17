@@ -227,6 +227,9 @@ class TestPipelineExecution:
         assert len(result.get("sub_answers", [])) == 2
         assert "multiple questions" in result["natural_language_answer"].lower()
         assert result["answer_source"] == "multi"
+        assert result["sub_answers"][0]["sql"] == "SELECT * FROM test_table"
+        assert result["sub_answers"][0]["data"]["id"] == [1]
+        assert result.get("generated_sql") == "SELECT * FROM test_table"
         assert mock_agents.classifier.execute.await_count == 2
 
     @pytest.mark.asyncio
@@ -615,6 +618,50 @@ class TestPipelineExecution:
         sql_input = mock_agents.sql.execute.call_args.args[0]
         assert sql_input.database_type == "clickhouse"
         assert sql_input.database_url == "clickhouse://user:pass@click.example.com:8123/analytics"
+
+    @pytest.mark.asyncio
+    async def test_pipeline_surfaces_query_compiler_metrics_and_decision_trace(self, mock_agents):
+        mock_agents.sql.execute = AsyncMock(
+            return_value=SQLAgentOutput(
+                success=True,
+                generated_sql=GeneratedSQL(
+                    sql="SELECT * FROM test_table",
+                    explanation="Simple select query",
+                    confidence=0.95,
+                    used_datapoints=["table_001"],
+                    assumptions=[],
+                    clarifying_questions=[],
+                ),
+                metadata=AgentMetadata(agent_name="SQLAgent", llm_calls=1),
+                data={
+                    "formatter_fallback_calls": 0,
+                    "formatter_fallback_successes": 0,
+                    "query_compiler_llm_calls": 1,
+                    "query_compiler_llm_refinements": 1,
+                    "query_compiler_latency_ms": 123.4,
+                    "query_compiler": {
+                        "path": "llm_refined",
+                        "reason": "llm_refined_ambiguous_candidates",
+                        "confidence": 0.9,
+                        "selected_tables": ["public.test_table"],
+                        "candidate_tables": ["public.test_table"],
+                        "operators": ["reconciliation"],
+                    },
+                },
+            )
+        )
+
+        result = await mock_agents.run("test query")
+
+        assert result["query_compiler_llm_calls"] == 1
+        assert result["query_compiler_llm_refinements"] == 1
+        assert result["query_compiler_latency_ms"] == pytest.approx(123.4)
+        assert result["query_compiler"]["path"] == "llm_refined"
+        assert any(
+            entry.get("stage") == "query_compiler"
+            and entry.get("decision") == "llm_refined"
+            for entry in result.get("decision_trace", [])
+        )
 
     @pytest.mark.asyncio
     async def test_live_table_catalog_uses_database_url_connector(self, pipeline):
@@ -1081,6 +1128,14 @@ class TestIntentGate:
         assert not pipeline.classifier.execute.called
 
     @pytest.mark.asyncio
+    async def test_intent_gate_datapoint_help_short_circuits(self, pipeline):
+        result = await pipeline.run("show datapoints")
+        assert result.get("intent_gate") == "datapoint_help"
+        assert result.get("answer_source") == "system"
+        assert "datachat dp list" in result.get("natural_language_answer", "")
+        assert not pipeline.classifier.execute.called
+
+    @pytest.mark.asyncio
     async def test_intent_gate_fast_path_list_tables_handles_empty_investigation_memory(
         self, pipeline
     ):
@@ -1315,6 +1370,9 @@ class TestIntentGate:
 
     def test_query_requires_sql_ignores_datapoint_keyword(self, pipeline):
         assert pipeline._query_requires_sql("what datapoint explains loan default rate?") is False
+
+    def test_datapoint_help_intent_does_not_trigger_for_metric_explanation_query(self, pipeline):
+        assert pipeline._classify_intent_gate("what datapoint explains loan default rate?") == "data_query"
 
     def test_definition_query_with_rate_routes_to_context(self, pipeline):
         state = {

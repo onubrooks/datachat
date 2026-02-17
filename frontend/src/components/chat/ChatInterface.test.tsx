@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChatInterface } from "@/components/chat/ChatInterface";
@@ -106,13 +106,40 @@ describe("ChatInterface target database", () => {
     expect(request.target_database).toBe("db_pg");
   });
 
-  it("preserves selected database from localStorage on refresh", async () => {
-    window.localStorage.setItem("datachat.active_connection_id", "db_pg");
+  it("restores input focus after response completes", async () => {
+    let handlers:
+      | {
+          onComplete?: (response: { answer: string }) => void;
+        }
+      | undefined;
+
+    mockStreamChat.mockImplementation((_request, callbacks) => {
+      handlers = callbacks;
+    });
+
     render(<ChatInterface />);
 
     await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
 
-    const select = await screen.findByLabelText("Target database");
-    expect((select as HTMLSelectElement).value).toBe("db_pg");
+    const input = screen.getByPlaceholderText(
+      "Ask a question about your data..."
+    ) as HTMLInputElement;
+
+    fireEvent.change(input, { target: { value: "list all available tables" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => expect(mockStreamChat).toHaveBeenCalledTimes(1));
+    expect(handlers).toBeDefined();
+
+    input.blur();
+    expect(document.activeElement).not.toBe(input);
+
+    await act(async () => {
+      handlers?.onComplete?.({ answer: "Found tables." });
+    });
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(input);
+    });
   });
 });

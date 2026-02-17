@@ -18,13 +18,16 @@ export interface Message extends ChatMessage {
     answer_source?: string | null;
     answer_confidence?: number | null;
     sql?: string | null;
+    data?: Record<string, unknown[]> | null;
+    visualization_hint?: string | null;
+    visualization_metadata?: Record<string, unknown> | null;
     clarifying_questions?: string[];
     error?: string | null;
   }>;
   sql?: string | null;
   data?: Record<string, unknown[]> | null;
   visualization_hint?: string | null;
-  visualization_note?: string | null;
+  visualization_metadata?: Record<string, unknown> | null;
   clarifying_questions?: string[];
   sources?: Array<{
     datapoint_id: string;
@@ -53,6 +56,9 @@ export interface Message extends ChatMessage {
     retry_count: number;
     sql_formatter_fallback_calls?: number;
     sql_formatter_fallback_successes?: number;
+    query_compiler_llm_calls?: number;
+    query_compiler_llm_refinements?: number;
+    query_compiler_latency_ms?: number;
   };
 }
 
@@ -258,7 +264,7 @@ export const useChatStore = create<ChatState>()(
         sql: response.sql,
         data: response.data,
         visualization_hint: response.visualization_hint,
-        visualization_note: response.visualization_note,
+        visualization_metadata: response.visualization_metadata,
         sources: response.sources,
         answer_source: response.answer_source,
         answer_confidence: response.answer_confidence,
