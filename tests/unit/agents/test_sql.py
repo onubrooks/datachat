@@ -782,6 +782,19 @@ class TestPromptBuilding:
         assert "Revenue" in prompt
         assert "completed" in prompt or "refund" in prompt.lower()
 
+    @pytest.mark.asyncio
+    async def test_build_generation_prompt_includes_operator_guidance(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(
+            update={"query": "Which 5 SKUs have the highest stockout risk this week?"}
+        )
+
+        prompt = await sql_agent._build_generation_prompt(sql_input)
+
+        assert "Analytic operator hints (semantic patterns):" in prompt
+        assert "stockout_risk" in prompt
+
     def test_builds_correction_prompt(self, sql_agent, sample_sql_agent_input):
         """Test correction prompt includes issues and original SQL."""
         generated_sql = GeneratedSQL(
@@ -1229,6 +1242,81 @@ class TestErrorHandling:
         assert output.success is True
         assert output.needs_clarification is False
         assert output.generated_sql.sql == "SELECT SUM(amount) FROM analytics.fact_sales"
+
+    def test_parse_llm_response_recovers_sql_from_partial_json(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        content = (
+            "{\"sql\":\"SELECT store_id, SUM(quantity) "
+            "FROM public.grocery_sales_transactions GROUP BY store_id\", "
+            "\"explanation\":\"aggregate"
+        )
+
+        generated = sql_agent._parse_llm_response(content, sample_sql_agent_input)
+
+        assert generated.sql.startswith("SELECT store_id")
+        assert "grocery_sales_transactions" in generated.sql
+
+    def test_parse_llm_response_handles_dict_payload(self, sql_agent, sample_sql_agent_input):
+        generated = sql_agent._parse_llm_response(
+            {
+                "sql": "SELECT COUNT(*) FROM analytics.fact_sales",
+                "confidence": 0.9,
+            },
+            sample_sql_agent_input,
+        )
+
+        assert generated.sql == "SELECT COUNT(*) FROM analytics.fact_sales"
+
+    @pytest.mark.asyncio
+    async def test_handles_non_string_retry_payload_without_type_error(
+        self, sample_sql_agent_input
+    ):
+        malformed_response = LLMResponse(
+            content='{\"explanation\":\"missing sql\"}',
+            model="gpt-4o",
+            usage=LLMUsage(prompt_tokens=20, completion_tokens=10, total_tokens=30),
+            finish_reason="stop",
+            provider="openai",
+        )
+
+        # Simulate unexpected SDK payload type on retry.
+        retry_response = Mock()
+        retry_response.content = AsyncMock()
+        retry_response.usage = Mock(total_tokens=10)
+        retry_response.finish_reason = "stop"
+
+        main_provider = Mock()
+        main_provider.generate = AsyncMock(side_effect=[malformed_response, retry_response])
+        main_provider.provider = "openai"
+        main_provider.model = "gpt-4o"
+
+        formatter_provider = Mock()
+        formatter_provider.generate = AsyncMock(return_value=malformed_response)
+        formatter_provider.provider = "openai"
+        formatter_provider.model = "gpt-4o-mini"
+
+        mock_settings = Mock()
+        mock_settings.llm = Mock(sql_formatter_model=None)
+        mock_settings.database = Mock(url=None, db_type="postgresql", pool_size=5)
+        mock_settings.pipeline = Mock(
+            sql_two_stage_enabled=False,
+            sql_prompt_budget_enabled=False,
+            schema_snapshot_cache_enabled=False,
+            sql_formatter_fallback_enabled=False,
+        )
+
+        with (
+            patch("backend.agents.sql.get_settings", return_value=mock_settings),
+            patch(
+                "backend.agents.sql.LLMProviderFactory.create_agent_provider",
+                side_effect=[main_provider, formatter_provider],
+            ),
+        ):
+            agent = SQLAgent()
+
+        output = await agent(sample_sql_agent_input)
+        assert output.needs_clarification is True
 
     def test_does_not_treat_natural_language_show_phrase_as_sql(self, sql_agent):
         text = (

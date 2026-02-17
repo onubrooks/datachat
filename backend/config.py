@@ -478,6 +478,16 @@ class PipelineSettings(BaseSettings):
             "Set to 0 for no expiry while process is running."
         ),
     )
+    sql_operator_templates_enabled: bool = Field(
+        default=True,
+        description="Inject semantic analytic operator hints into SQL generation prompts.",
+    )
+    sql_operator_templates_max: int = Field(
+        default=8,
+        ge=2,
+        le=20,
+        description="Maximum operator templates to inject into a single SQL prompt.",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="PIPELINE_",

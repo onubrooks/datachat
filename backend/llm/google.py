@@ -8,6 +8,7 @@ Supports Gemini 1.5 Pro, Gemini 1.5 Flash, etc.
 import logging
 import warnings
 from collections.abc import AsyncIterator
+from typing import Any
 
 from backend.llm.base import BaseLLMProvider
 from backend.llm.models import (
@@ -96,22 +97,24 @@ class GoogleProvider(BaseLLMProvider):
                 max_output_tokens=request.max_tokens,
             ),
         )
+        response_text = self._extract_response_text(response)
+        finish_reason = self._extract_finish_reason(response)
 
         # Estimate token usage (Gemini doesn't always provide exact counts)
         prompt_tokens = self.count_tokens(prompt)
-        completion_tokens = self.count_tokens(response.text)
+        completion_tokens = self.count_tokens(response_text)
 
         llm_response = LLMResponse(
-            content=response.text,
+            content=response_text,
             model=model_name,
             usage=LLMUsage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
             ),
-            finish_reason="stop",
+            finish_reason=finish_reason,
             provider="google",
-            metadata={},
+            metadata={"raw_finish_reason": self._extract_raw_finish_reason(response)},
         )
 
         self._log_response(llm_response)
@@ -154,6 +157,34 @@ class GoogleProvider(BaseLLMProvider):
         """Count tokens for Google models."""
         # Rough approximation
         return len(text) // 4
+
+    def _extract_response_text(self, response: Any) -> str:
+        text = getattr(response, "text", "")
+        if isinstance(text, str):
+            return text
+        if text is None:
+            return ""
+        return str(text)
+
+    def _extract_raw_finish_reason(self, response: Any) -> str:
+        candidates = getattr(response, "candidates", None)
+        if not candidates:
+            return ""
+        first = candidates[0] if len(candidates) > 0 else None
+        if first is None:
+            return ""
+        reason = getattr(first, "finish_reason", "")
+        return str(reason or "")
+
+    def _extract_finish_reason(self, response: Any) -> str:
+        raw_reason = self._extract_raw_finish_reason(response).lower()
+        if any(token in raw_reason for token in ("max_tokens", "length")):
+            return "length"
+        if any(token in raw_reason for token in ("safety", "blocked", "recitation")):
+            return "content_filter"
+        if "error" in raw_reason:
+            return "error"
+        return "stop"
 
     def get_model_info(self, model_name: str | None = None) -> ModelInfo:
         """Get Google model information."""

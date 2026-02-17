@@ -29,6 +29,7 @@ from backend.database.catalog_templates import (
     get_catalog_schemas,
     get_list_tables_query,
 )
+from backend.database.operator_templates import build_operator_guidance
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
 from backend.models.agent import (
@@ -376,6 +377,7 @@ class SQLAgent(BaseAgent):
         llm_request = LLMRequest(
             messages=[
                 LLMMessage(role="system", content=self._get_system_prompt()),
+                LLMMessage(role="system", content=self._sql_output_contract_message()),
                 LLMMessage(role="user", content=prompt),
             ],
             temperature=0.0,  # Deterministic for SQL generation
@@ -438,25 +440,40 @@ class SQLAgent(BaseAgent):
         runtime_stats: dict[str, int],
     ) -> GeneratedSQL:
         response = await provider.generate(llm_request)
-        self._track_llm_call(tokens=response.usage.total_tokens)
+        self._track_llm_call(tokens=self._safe_total_tokens(response))
+        response_content = self._coerce_response_content(response.content)
 
         try:
-            return self._parse_llm_response(response.content, input)
+            return self._parse_llm_response(response_content, input)
         except ValueError:
+            if self._looks_truncated_response(response_content, response.finish_reason):
+                recovered = await self._recover_sql_with_formatter(
+                    raw_content=response_content,
+                    input=input,
+                    runtime_stats=runtime_stats,
+                )
+                if recovered is not None:
+                    return recovered
+
             retry_request = llm_request.model_copy()
             retry_request.messages.append(
                 LLMMessage(
                     role="system",
-                    content="Return ONLY JSON with a top-level 'sql' field.",
+                    content=(
+                        "Previous output was malformed. "
+                        "Return ONLY valid JSON with keys: sql, explanation, confidence, "
+                        "used_datapoints, assumptions, clarifying_questions."
+                    ),
                 )
             )
             retry_response = await provider.generate(retry_request)
-            self._track_llm_call(tokens=retry_response.usage.total_tokens)
+            self._track_llm_call(tokens=self._safe_total_tokens(retry_response))
+            retry_content = self._coerce_response_content(retry_response.content)
             try:
-                return self._parse_llm_response(retry_response.content, input)
+                return self._parse_llm_response(retry_content, input)
             except ValueError as exc:
                 recovered = await self._recover_sql_with_formatter(
-                    raw_content=retry_response.content or response.content,
+                    raw_content=retry_content or response_content,
                     input=input,
                     runtime_stats=runtime_stats,
                 )
@@ -505,6 +522,7 @@ class SQLAgent(BaseAgent):
         llm_request = LLMRequest(
             messages=[
                 LLMMessage(role="system", content=self._get_system_prompt()),
+                LLMMessage(role="system", content=self._sql_output_contract_message()),
                 LLMMessage(role="user", content=prompt),
             ],
             temperature=0.0,
@@ -516,7 +534,7 @@ class SQLAgent(BaseAgent):
             response = await self.llm.generate(llm_request)
 
             # Track LLM call and tokens
-            self._track_llm_call(tokens=response.usage.total_tokens)
+            self._track_llm_call(tokens=self._safe_total_tokens(response))
 
             # Parse corrected response
             try:
@@ -587,7 +605,7 @@ class SQLAgent(BaseAgent):
                 int(runtime_stats.get("formatter_fallback_calls", 0)) + 1
             )
             formatter_response = await provider.generate(formatter_request)
-            self._track_llm_call(tokens=formatter_response.usage.total_tokens)
+            self._track_llm_call(tokens=self._safe_total_tokens(formatter_response))
             parsed = self._parse_llm_response(formatter_response.content, input)
             runtime_stats["formatter_fallback_successes"] = (
                 int(runtime_stats.get("formatter_fallback_successes", 0)) + 1
@@ -1017,6 +1035,18 @@ class SQLAgent(BaseAgent):
         """
         return self.prompts.load("system/main.md")
 
+    def _sql_output_contract_message(self) -> str:
+        """Return strict output contract for SQL generation responses."""
+        return (
+            "Return ONLY one valid JSON object. No markdown, no prose outside JSON.\n"
+            "Allowed keys: sql, explanation, confidence, used_datapoints, assumptions, "
+            "clarifying_questions.\n"
+            "If SQL is available, set sql to executable SQL text.\n"
+            "If SQL is not possible, set sql to an empty string and provide at most 2 "
+            "clarifying_questions.\n"
+            "Keep explanation concise (max 2 sentences). Do not include sql_components or metadata."
+        )
+
     async def _build_generation_prompt(self, input: SQLAgentInput) -> str:
         """
         Build prompt for SQL generation.
@@ -1046,6 +1076,10 @@ class SQLAgent(BaseAgent):
             database_url=input.database_url,
             include_profile=include_profile,
         )
+        db_type = input.database_type or getattr(self.config.database, "db_type", "postgresql")
+        db_url = input.database_url or (
+            str(self.config.database.url) if self.config.database.url else None
+        )
         if live_context:
             if schema_context == "No schema context available":
                 schema_context = live_context
@@ -1054,6 +1088,20 @@ class SQLAgent(BaseAgent):
                     f"{schema_context}\n\n**Live schema snapshot (authoritative):**\n"
                     f"{live_context}"
                 )
+
+        if self._pipeline_flag("sql_operator_templates_enabled", True):
+            operator_guidance = self._build_operator_guidance_context(
+                query=resolved_query,
+                investigation_memory=input.investigation_memory,
+                db_type=db_type,
+                db_url=db_url,
+            )
+            if operator_guidance:
+                if schema_context == "No schema context available":
+                    schema_context = operator_guidance
+                else:
+                    schema_context = f"{schema_context}\n\n{operator_guidance}"
+
         if self._pipeline_flag("sql_prompt_budget_enabled", True):
             max_chars = self._pipeline_int("sql_prompt_max_context_chars", 12000)
             schema_context = self._truncate_context(schema_context, max_chars)
@@ -1067,7 +1115,7 @@ class SQLAgent(BaseAgent):
             schema_context=schema_context,
             business_context=business_context,
             conversation_context=conversation_context,
-            backend=input.database_type or getattr(self.config.database, "db_type", "postgresql"),
+            backend=db_type,
             user_preferences={"default_limit": 10},
         )
 
@@ -1079,6 +1127,73 @@ class SQLAgent(BaseAgent):
             f"{truncated}\n\n"
             "[Context truncated for latency budget. Ask a narrower query for more schema detail.]"
         )
+
+    def _build_operator_guidance_context(
+        self,
+        *,
+        query: str,
+        investigation_memory,
+        db_type: str,
+        db_url: str | None,
+    ) -> str:
+        table_columns = self._collect_table_columns_from_investigation(investigation_memory)
+        if db_url:
+            schema_key = f"{db_type}::{db_url}"
+            cached_snapshot = self._live_schema_snapshot_cache.get(schema_key, {})
+            cached_columns = cached_snapshot.get("columns")
+            if isinstance(cached_columns, dict):
+                for table, columns in cached_columns.items():
+                    if not isinstance(table, str):
+                        continue
+                    values = table_columns.setdefault(table, [])
+                    if not isinstance(columns, list):
+                        continue
+                    for col in columns:
+                        if isinstance(col, tuple) and col:
+                            col_name = str(col[0])
+                        else:
+                            col_name = str(col)
+                        if col_name and col_name not in values:
+                            values.append(col_name)
+
+        if not table_columns:
+            return ""
+
+        max_templates = self._pipeline_int("sql_operator_templates_max", 8)
+        return build_operator_guidance(
+            query,
+            table_columns=table_columns,
+            max_templates=max(2, min(max_templates, 12)),
+            max_table_hints=3,
+        )
+
+    def _collect_table_columns_from_investigation(
+        self, investigation_memory
+    ) -> dict[str, list[str]]:
+        table_columns: dict[str, list[str]] = {}
+        datapoints = getattr(investigation_memory, "datapoints", []) or []
+        for datapoint in datapoints:
+            if getattr(datapoint, "datapoint_type", None) != "Schema":
+                continue
+            metadata = datapoint.metadata if isinstance(datapoint.metadata, dict) else {}
+            table_name = metadata.get("table_name") or metadata.get("table")
+            if not table_name:
+                continue
+            columns = table_columns.setdefault(str(table_name), [])
+            key_columns = metadata.get("key_columns") or metadata.get("columns") or []
+            if not isinstance(key_columns, list):
+                continue
+            for item in key_columns:
+                if isinstance(item, dict):
+                    col_name = item.get("name") or item.get("column_name")
+                else:
+                    col_name = item
+                if not col_name:
+                    continue
+                col_text = str(col_name)
+                if col_text not in columns:
+                    columns.append(col_text)
+        return table_columns
 
     async def _get_live_schema_context(
         self,
@@ -1880,7 +1995,7 @@ class SQLAgent(BaseAgent):
 
         return "\n".join(lines) if lines else "No conversation context available."
 
-    def _parse_llm_response(self, content: str, input: SQLAgentInput) -> GeneratedSQL:
+    def _parse_llm_response(self, content: Any, input: SQLAgentInput) -> GeneratedSQL:
         """
         Parse LLM response into GeneratedSQL.
 
@@ -1894,13 +2009,21 @@ class SQLAgent(BaseAgent):
         Raises:
             ValueError: If response cannot be parsed
         """
+        normalized_content = self._coerce_response_content(content)
+        if not normalized_content.strip():
+            raise ValueError("Failed to parse LLM response: empty content")
+
         # Try JSON first.
         json_str = None
-        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+        json_match = re.search(
+            r"```(?:json)?\s*(\{.*?\})\s*```",
+            normalized_content,
+            re.DOTALL,
+        )
         if json_match:
             json_str = json_match.group(1)
         else:
-            json_match = re.search(r"\{.*\}", content, re.DOTALL)
+            json_match = re.search(r"\{.*\}", normalized_content, re.DOTALL)
             if json_match:
                 json_str = json_match.group(0)
 
@@ -1927,8 +2050,20 @@ class SQLAgent(BaseAgent):
             except json.JSONDecodeError as e:
                 logger.debug(f"Invalid JSON in LLM response: {e}")
 
+        partial_sql = self._extract_partial_json_sql(normalized_content)
+        if partial_sql:
+            generated = GeneratedSQL(
+                sql=partial_sql,
+                explanation="Recovered SQL from partial JSON output",
+                used_datapoints=[],
+                confidence=0.55,
+                assumptions=["Recovered from incomplete model output"],
+                clarifying_questions=[],
+            )
+            return self._apply_row_limit_policy(generated, input.query)
+
         # Fallback: extract SQL from markdown/code/text output.
-        sql_text = self._extract_sql_from_response(content)
+        sql_text = self._extract_sql_from_response(normalized_content)
         if sql_text:
             generated = GeneratedSQL(
                 sql=sql_text,
@@ -1941,8 +2076,79 @@ class SQLAgent(BaseAgent):
             return self._apply_row_limit_policy(generated, input.query)
 
         logger.warning("Failed to parse LLM response: Response missing 'sql' field")
-        logger.debug(f"LLM response content: {content}")
+        logger.debug(f"LLM response content: {normalized_content}")
         raise ValueError("Failed to parse LLM response: Response missing 'sql' field")
+
+    def _coerce_response_content(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, bytes):
+            return content.decode("utf-8", errors="ignore")
+        if isinstance(content, dict | list):
+            try:
+                return json.dumps(content)
+            except TypeError:
+                return str(content)
+        if content is None:
+            return ""
+        return str(content)
+
+    def _safe_total_tokens(self, response: Any) -> int | None:
+        usage = getattr(response, "usage", None)
+        total_tokens = getattr(usage, "total_tokens", None)
+        try:
+            return int(total_tokens) if total_tokens is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _extract_partial_json_sql(self, content: str) -> str | None:
+        complete_match = re.search(
+            r'"(?:sql|query)"\s*:\s*"((?:\\.|[^"\\])*)"',
+            content,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if complete_match:
+            candidate = self._decode_json_string_fragment(complete_match.group(1))
+            extracted = self._extract_sql_statement(candidate)
+            if extracted:
+                return extracted
+
+        truncated_match = re.search(
+            r'"(?:sql|query)"\s*:\s*"([\s\S]+?)(?:",\s*"(?:explanation|confidence|used_datapoints|assumptions|clarifying_questions)"|\}\s*$)',
+            content,
+            re.IGNORECASE,
+        )
+        if truncated_match:
+            candidate = self._decode_json_string_fragment(truncated_match.group(1))
+            extracted = self._extract_sql_statement(candidate)
+            if extracted:
+                return extracted
+
+        return None
+
+    def _decode_json_string_fragment(self, value: str) -> str:
+        candidate = value.strip()
+        if not candidate:
+            return ""
+        try:
+            return json.loads(f"\"{candidate}\"")
+        except json.JSONDecodeError:
+            # Best-effort unescape for partially malformed JSON strings.
+            return candidate.replace("\\n", " ").replace("\\t", " ").replace("\\\"", '"')
+
+    def _looks_truncated_response(self, content: str, finish_reason: str | None) -> bool:
+        normalized_reason = str(finish_reason or "").lower()
+        if normalized_reason in {"length", "max_tokens", "max_output_tokens"}:
+            return True
+
+        stripped = content.rstrip()
+        if stripped.startswith("```") and stripped.count("```") % 2 == 1:
+            return True
+        if stripped.count("{") > stripped.count("}"):
+            return True
+        if stripped.endswith(":") or stripped.endswith('\"sql\"'):
+            return True
+        return False
 
     def _apply_row_limit_policy(self, generated: GeneratedSQL, query: str) -> GeneratedSQL:
         """Normalize SQL limits for safe interactive responses."""
@@ -2125,6 +2331,14 @@ class SQLAgent(BaseAgent):
         code_blocks = re.findall(r"```(?:sql)?\s*(.*?)```", content, re.DOTALL | re.IGNORECASE)
         for block in code_blocks:
             candidate = block.strip()
+            extracted = self._extract_sql_statement(candidate)
+            if extracted:
+                return extracted
+
+        # Handle truncated markdown fence (opening fence without closing fence).
+        fence_match = re.search(r"```(?:sql)?\s*([\s\S]+)$", content, re.IGNORECASE)
+        if fence_match:
+            candidate = fence_match.group(1).strip()
             extracted = self._extract_sql_statement(candidate)
             if extracted:
                 return extracted
