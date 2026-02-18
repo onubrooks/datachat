@@ -109,6 +109,32 @@ Still limited:
 - Deep domain semantics still depend on DataPoint quality/coverage.
 - No fully managed ontology lifecycle.
 
+Planned enhancements:
+
+- **Knowledge Graph column-level edges** (in progress)
+  - DERIVES_FROM: column → column lineage
+  - COMPUTES: metric → column relationships
+  - HAS_GRAIN: table → granularity
+- **Entity memory in session context** (planned)
+  - Track tables/metrics/columns mentioned in conversation
+
+## Level 2.5: QueryDataPoints (Reusable SQL Patterns)
+
+Status: `Planned`
+
+Purpose:
+
+- Store and retrieve pre-validated SQL templates for common queries
+- Skip SQL generation for known query patterns (faster, more consistent)
+- Enable parameterized execution with validation
+
+Scope:
+
+- QueryDataPoint model: `sql_template`, `parameters`, `backend_variants`
+- CLI: `datachat dp add-query`, `datachat dp list --type Query`
+- Pipeline integration: ContextAgent retrieves, SQLAgent uses template
+- Contract validation: SQL syntax, parameter matching
+
 ## Level 3: Executable Metrics
 
 Status: `Planned`

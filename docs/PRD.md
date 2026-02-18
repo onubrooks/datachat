@@ -144,3 +144,65 @@ A feature can only be marked "supported" when:
 - code path exists,
 - behavior is test-covered,
 - user docs explain operational preconditions.
+
+---
+
+## Current DataPoint Type System
+
+DataPoints are implemented as JSON-based Pydantic models (not YAML):
+
+| Type | Purpose | Status |
+|------|---------|--------|
+| `SchemaDataPoint` | Tables/views with column metadata | Implemented |
+| `BusinessDataPoint` | Metrics and business concepts | Implemented |
+| `ProcessDataPoint` | ETL/scheduled processes | Implemented |
+| `QueryDataPoint` | Reusable SQL templates | Planned (Level 2.5) |
+
+The YAML-based schema described in DATAPOINT_SCHEMA.md is the target architecture for Levels 3-5. See docs/DATAPOINT_MIGRATION.md for the migration path.
+
+---
+
+## Phase Tracking
+
+### Phase 1: Doc Reconciliation ✅
+- [x] Update ARCHITECTURE.md with current implementation flow
+- [x] Add current vs target state sections to DATAPOINT_SCHEMA.md
+- [x] Add Level 2.5 (QueryDataPoints) to LEVELS.md
+- [x] Add Knowledge Graph column-level edges to foundation
+- [x] Create DATAPOINT_MIGRATION.md
+- [x] Add current DataPoint type system to PRD.md
+- [x] Add Phase Tracking section
+
+### Phase 2: QueryDataPoint Implementation
+- [ ] Add QueryDataPoint model to backend/models/datapoint.py
+- [ ] Add QueryDataPoint loader support in backend/knowledge/datapoints.py
+- [ ] Add QueryDataPoint to vector store
+- [ ] Add CLI commands: `datachat dp add-query`, `datachat dp list --type Query`
+- [ ] Integrate with pipeline (ContextAgent retrieval, SQLAgent template use)
+- [ ] Add tests for QueryDataPoint validation and retrieval
+
+### Phase 3: Contract v2 Expansion
+- [ ] Add business_meaning column validation
+- [ ] Add calculation SQL fragment validation
+- [ ] Add synonym coverage validation
+- [ ] Add CI integration for contract gates
+
+### Phase 4: Feedback Telemetry Loop
+- [ ] Create backend/pipeline/telemetry.py
+- [ ] Track wrong-table selections
+- [ ] Track clarification churn
+- [ ] Add CLI: `datachat telemetry report`
+- [ ] Add CLI: `datachat dp suggest --datapoint <id>`
+
+### Phase 5: Knowledge Graph Enhancement
+- [ ] Add column-level edges (DERIVES_FROM, COMPUTES, FILTERS_BY)
+- [ ] Add semantic edges (metric → column)
+- [ ] Add grain edges (table → granularity)
+- [ ] Integrate graph traversal into ContextAgent
+- [ ] Add CLI: `datachat graph show`, `datachat graph lineage`
+
+### Phase 6: Session Memory Enhancement
+- [ ] Add entity_memory to SessionContext
+- [ ] Add temporal_context handling
+- [ ] Implement pronoun resolution ("it", "that table")
+- [ ] Implement filter continuation ("same filter as before")

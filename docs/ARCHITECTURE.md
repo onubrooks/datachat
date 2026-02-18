@@ -76,39 +76,129 @@ Sequencing policy:
 - A thin onboarding wrapper layer (Level 1.4) may ship earlier if it does not alter retrieval/routing truth paths.
 - The full deterministic simplicity package (Level 1.6) lands only after foundation KPIs are stable.
 
-### High-Level Flow
+### Current Implementation vs Target State
+
+**Important:** This document describes both current implementation and target architecture.
+
+| Aspect | Current Implementation | Target State |
+|--------|------------------------|--------------|
+| DataPoint Types | JSON-based (Schema, Business, Process) | YAML-based with execution blocks |
+| Knowledge Graph | Basic edges (BELONGS_TO, JOINS_WITH) | Column-level + semantic edges |
+| Session Memory | last_goal, table_hints | Entity memory + temporal context |
+| Levels 3-5 | Planned architecture | Executable metrics, materialization, intelligence |
+
+### High-Level Flow (Current Implementation)
 
 ```txt
 User Query (Natural Language)
     ↓
 ┌─────────────────────────────┐
-│ Agent Router                │ ← Route to DB, Investigation, or Tool pipeline
+│ QueryAnalyzerAgent          │ ← Unified routing: intent + route classification
 └────────┬────────────────────┘
          ↓
 ┌─────────────────────────────┐
-│ Tool Planner                │ ← Decide whether to use tools or continue core pipeline
+│ RouteDispatcher             │ ← Branch to sql/context/tool/end route
 └────────┬────────────────────┘
          ↓
-┌─────────────────────────────┐
-│ Context Retrieval           │ ← Pull live schema + DataPoint evidence
-└────────┬────────────────────┘
-         ↓
-┌─────────────────────────────┐
-│ Query Compiler              │ ← Select likely tables/joins/operators before SQL prompt build
-└────────┬────────────────────┘
-         ↓
-┌─────────────────────────────┐
-│ SQL + Validation + Execution│ ← Generate SQL, safety-check, execute
-└────────┬────────────────────┘
-         ↓
-┌─────────────────────────────┐
-│ Response Synthesis          │ ← Natural-language answer shaping (configurable)
-└────────┬────────────────────┘
-         ↓
+    ┌────┴────┬──────────┬──────────┐
+    ↓         ↓          ↓          ↓
+┌───────┐ ┌───────┐ ┌────────┐ ┌─────┐
+│ SQL   │ │Context│ │ Tool   │ │ End │
+│ Route │ │ Route │ │ Route  │ │Route│
+└───┬───┘ └───┬───┘ └───┬────┘ └─────┘
+    ↓         ↓          ↓
+┌───────┐ ┌───────────┐ ┌────────┐
+│Query  │ │Context    │ │Tool    │
+│Compiler│ │Answer     │ │Executor│
+└───┬───┘ └─────┬─────┘ └────────┘
+    ↓           ↓
+┌───────┐ ┌─────┴─────┐
+│SQL    │ │ SQL (if   │
+│Agent  │ │ needs_sql)│
+└───┬───┘ └───────────┘
+    ↓
+┌───────┐
+│Valid- │
+│ator   │
+└───┬───┘
+    ↓
+┌───────┐
+│Exec-  │
+│utor   │
+└───────┘
+    ↓
 ┌─────────────────────────────┐
 │ Answer + Metrics            │ ← Includes decision_trace and timing telemetry
 └─────────────────────────────┘
 ```
+
+### Target Architecture Flow (Levels 3-5)
+
+The following represents the target state for executable metrics and beyond:
+
+```txt
+User Query
+    ↓
+┌─────────────────────────────┐
+│ Query Analyzer              │ ← Intent + route + DataPoint matching
+└────────┬────────────────────┘
+         ↓
+    ┌────┴────┐
+    ↓         ↓
+┌───────┐ ┌───────┐
+│Template│ │ Free  │
+│Path    │ │ Form  │
+│(L3+)   │ │ Path  │
+└───┬───┘ └───┬───┘
+    ↓         ↓
+┌───────┐ ┌───────┐
+│Execute │ │SQL Gen│
+│Template│ │ + Val │
+└───┬───┘ └───┬───┘
+    ↓         ↓
+┌─────────────────────────────┐
+│ Materialization Router (L4) │ ← Route to pre-computed results if available
+└────────┬────────────────────┘
+         ↓
+┌─────────────────────────────┐
+│ Intelligence Layer (L5)     │ ← Anomaly detection, root cause analysis
+└─────────────────────────────┘
+```
+
+---
+
+## DataPoint Type System
+
+### Current Implementation (JSON-based)
+
+DataPoints are currently implemented as JSON-based Pydantic models with three types:
+
+| Type | Purpose | Key Fields |
+|------|---------|------------|
+| `SchemaDataPoint` | Tables/views with column metadata | `table_name`, `key_columns`, `relationships` |
+| `BusinessDataPoint` | Metrics and business concepts | `calculation`, `synonyms`, `related_tables` |
+| `ProcessDataPoint` | ETL/scheduled processes | `schedule`, `data_freshness`, `target_tables` |
+
+**Planned types:**
+- `QueryDataPoint` - Reusable SQL templates (Level 2.5)
+- `ConstraintDataPoint` - Business rules affecting WHERE clauses
+- `DashboardDataPoint` - Pre-built visualizations (Level 3)
+
+### Target Architecture (YAML-based)
+
+The DATAPOINT_SCHEMA.md describes a YAML-based system with richer types:
+
+| Target YAML Type | Current JSON Type | Notes |
+|------------------|-------------------|-------|
+| `metric` | `BusinessDataPoint` | Partial match - needs execution block |
+| `dimension` | - | Planned |
+| `entity` | - | Planned |
+| `concept` | - | Planned |
+| `query` | `QueryDataPoint` | Planned (Level 2.5) |
+| - | `SchemaDataPoint` | No direct YAML equivalent |
+| - | `ProcessDataPoint` | No direct YAML equivalent |
+
+**Migration path:** The JSON types will remain the runtime format for Levels 1-2. YAML-based DataPoints with execution blocks become the target for Levels 3-5. See docs/DATAPOINT_MIGRATION.md for details.
 
 ---
 

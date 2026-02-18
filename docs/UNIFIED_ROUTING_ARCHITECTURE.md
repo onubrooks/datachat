@@ -1,5 +1,7 @@
 # Unified Routing Pipeline Architecture
 
+> **Note:** This document details the unified routing implementation. For the broader architecture including DataPoints, Knowledge Graph, and Levels, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+
 ## Overview
 
 The orchestrator has been refactored to use a unified routing architecture that consolidates multiple classification and routing steps into a single `QueryAnalyzerAgent`. This replaces the previous dual-classification system (`intent_gate` + `ClassifierAgent`).

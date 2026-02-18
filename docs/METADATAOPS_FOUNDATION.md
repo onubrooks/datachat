@@ -52,23 +52,37 @@ The core belief:
 
 These pillars are tracked before major Level 3-5 expansion.
 
-1. Metadata contracts + linting
+### 1. Metadata contracts + linting
 - enforce required metadata fields and reject invalid DataPoints early
+- contract v2: validate business_meaning on columns, calculation SQL fragments, synonym coverage
 
-2. Metadata authoring lifecycle
+### 2. Metadata authoring lifecycle
 - ownership, review discipline, versioning, and conflict handling
 
-3. AI-readiness evaluation in CI
+### 3. AI-readiness evaluation in CI
 - retrieval/qa/intent/catalog thresholded checks
 
-4. Governance metadata APIs
+### 4. Governance metadata APIs
 - expose lineage/freshness/quality context as first-class runtime data
 
-5. RAG observability + traceability
+### 5. RAG observability + traceability
 - source tier, source path, score, fallback path, and provenance visibility
 
-6. Runtime telemetry loops
+### 6. Runtime telemetry loops
 - clarification churn, wrong-table patterns, fallback rates, low-confidence hotspots
+- DataPoint improvement suggestions based on failure patterns
+
+### 7. Knowledge Graph enhancement (NEW)
+- column-level edges: `DERIVES_FROM`, `COMPUTES`, `FILTERS_BY`
+- semantic edges connecting metrics to source columns
+- grain edges: `HAS_GRAIN` for table granularity
+- lineage traversal for better SQL context
+
+### 8. Feedback telemetry loop (NEW)
+- track wrong-table selections → suggest DataPoint table hints
+- track clarification churn → suggest missing synonyms
+- track low-confidence queries → suggest missing business_meaning
+- CLI: `datachat telemetry report`, `datachat dp suggest --datapoint <id>`
 
 ## How contributors should align
 
