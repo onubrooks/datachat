@@ -25,7 +25,7 @@ from backend.models.agent import (
     ExtractedEntity,
     LLMError,
 )
-from backend.pipeline.pattern_matcher import QueryPatternMatcher, QueryPatternType
+from backend.utils.pattern_matcher import QueryPatternMatcher, QueryPatternType
 from backend.prompts.loader import PromptLoader
 
 logger = logging.getLogger(__name__)

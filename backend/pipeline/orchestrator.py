@@ -49,7 +49,7 @@ from backend.models import (
     ToolPlannerAgentInput,
     ValidatorAgentInput,
 )
-from backend.pipeline.pattern_matcher import QueryPatternMatcher
+from backend.utils.pattern_matcher import QueryPatternMatcher
 from backend.pipeline.route_handlers import (
     ClarificationRouteHandler,
     EndRouteHandler,

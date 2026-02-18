@@ -6,7 +6,7 @@ DataChat orchestration uses unified routing via QueryAnalyzerAgent with determin
 
 The pipeline uses a unified routing system with `QueryAnalyzerAgent` as the single entry point:
 
-```
+```txt
 Query → QueryAnalyzerAgent → Route Dispatcher
                                     ↓
               ┌─────────────────────┼─────────────────────┐

@@ -70,11 +70,13 @@ Automated evaluation supports a compiler-specific run:
 DataChat has two levels of observability:
 
 1. Always-on decision trace
+
 - Returned on every chat response as `decision_trace` (API and websocket).
 - Captures branch decisions across the pipeline (`stage`, `decision`, `reason`, optional `details`).
 - Includes query compiler decisions as `stage=query_compiler`.
 
 2. Deep execution trace (on demand)
+
 - Generated only when you run the trace script.
 - Captures exact LLM prompts/responses and SQL-internal step outputs.
 
