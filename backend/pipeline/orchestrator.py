@@ -2,11 +2,13 @@
 DataChat Pipeline Orchestrator
 
 LangGraph-based pipeline that orchestrates all agents:
-- ClassifierAgent → ContextAgent → SQLAgent → ValidatorAgent → ExecutorAgent
+- QueryAnalyzerAgent → ContextAgent → SQLAgent → ValidatorAgent → ExecutorAgent
 - Self-correction loop: ValidatorAgent can send back to SQLAgent (max 3 retries)
 - Streaming support for real-time status updates
 - Cost and latency tracking
 - Error recovery and graceful degradation
+
+REFACTORED: Unified routing with QueryAnalyzerAgent replacing intent_gate + ClassifierAgent.
 """
 
 import json
@@ -21,10 +23,10 @@ from urllib.parse import urlparse
 
 from langgraph.graph import END, StateGraph
 
-from backend.agents.classifier import ClassifierAgent
 from backend.agents.context import ContextAgent
 from backend.agents.context_answer import ContextAnswerAgent
 from backend.agents.executor import ExecutorAgent
+from backend.agents.query_analyzer import QueryAnalyzerAgent, QueryAnalyzerInput
 from backend.agents.response_synthesis import ResponseSynthesisAgent
 from backend.agents.sql import SQLAgent
 from backend.agents.tool_planner import ToolPlannerAgent
@@ -37,7 +39,6 @@ from backend.knowledge.retriever import Retriever
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
 from backend.models import (
-    ClassifierAgentInput,
     ContextAgentInput,
     ContextAnswerAgentInput,
     EvidenceItem,
@@ -48,6 +49,16 @@ from backend.models import (
     ToolPlannerAgentInput,
     ValidatorAgentInput,
 )
+from backend.pipeline.pattern_matcher import QueryPatternMatcher
+from backend.pipeline.route_handlers import (
+    ClarificationRouteHandler,
+    EndRouteHandler,
+    RouteDispatcher,
+    SQLRouteHandler,
+    ContextRouteHandler,
+    ToolRouteHandler,
+)
+from backend.pipeline.session_context import SessionContext
 from backend.tools import ToolExecutor, initialize_tools
 from backend.tools.base import ToolContext
 from backend.tools.policy import ToolPolicyError
@@ -214,8 +225,8 @@ class DataChatPipeline:
         self.config = get_settings()
         self.routing_policy = self._build_routing_policy()
 
-        # Initialize agents
-        self.classifier = ClassifierAgent()
+        # Initialize agents - using QueryAnalyzerAgent instead of ClassifierAgent
+        self.query_analyzer = QueryAnalyzerAgent()
         self.context = ContextAgent(retriever=retriever)
         self.context_answer = ContextAnswerAgent()
         self.sql = SQLAgent()
@@ -224,6 +235,13 @@ class DataChatPipeline:
         self.response_synthesis = ResponseSynthesisAgent()
         self.tool_planner = ToolPlannerAgent()
         self.tool_executor = ToolExecutor()
+
+        # Initialize route dispatcher
+        self.route_dispatcher = self._build_route_dispatcher()
+
+        # Initialize pattern matcher for fast-path detection
+        self.pattern_matcher = QueryPatternMatcher()
+
         try:
             self.intent_llm = LLMProviderFactory.create_default_provider(
                 self.config.llm, model_type="mini"
@@ -242,6 +260,21 @@ class DataChatPipeline:
         self.graph = self._build_graph()
 
         logger.info("DataChatPipeline initialized")
+
+    def _build_route_dispatcher(self) -> RouteDispatcher:
+        """Build the route dispatcher with all handlers."""
+        dispatcher = RouteDispatcher()
+        dispatcher.register(EndRouteHandler())
+        dispatcher.register(
+            ClarificationRouteHandler(
+                max_clarifications=self.max_clarifications,
+                clarification_count_fn=lambda s: int(s.get("clarification_turn_count", 0) or 0),
+            )
+        )
+        dispatcher.register(SQLRouteHandler())
+        dispatcher.register(ContextRouteHandler())
+        dispatcher.register(ToolRouteHandler())
+        return dispatcher
 
     def _build_routing_policy(self) -> dict[str, float | int]:
         pipeline_cfg = getattr(self.config, "pipeline", None)
@@ -273,11 +306,10 @@ class DataChatPipeline:
         """
         workflow = StateGraph(PipelineState)
 
-        # Add nodes
-        workflow.add_node("intent_gate", self._run_intent_gate)
+        # Add nodes - using query_analyzer instead of intent_gate + classifier
+        workflow.add_node("query_analyzer", self._run_query_analyzer)
         workflow.add_node("tool_planner", self._run_tool_planner)
         workflow.add_node("tool_executor", self._run_tool_executor)
-        workflow.add_node("classifier", self._run_classifier)
         workflow.add_node("context", self._run_context)
         workflow.add_node("context_answer", self._run_context_answer)
         workflow.add_node("sql", self._run_sql)
@@ -287,16 +319,16 @@ class DataChatPipeline:
         workflow.add_node("error_handler", self._handle_error)
 
         # Set entry point
-        workflow.set_entry_point("intent_gate")
+        workflow.set_entry_point("query_analyzer")
 
         workflow.add_conditional_edges(
-            "intent_gate",
-            self._should_continue_after_intent_gate,
+            "query_analyzer",
+            self._should_continue_after_query_analyzer,
             {
                 "end": END,
                 "sql": "sql",
                 "tool_planner": "tool_planner",
-                "classifier": "classifier",
+                "context": "context",
             },
         )
 
@@ -305,7 +337,7 @@ class DataChatPipeline:
             self._should_use_tools,
             {
                 "tools": "tool_executor",
-                "pipeline": "classifier",
+                "pipeline": "context",
             },
         )
         workflow.add_conditional_edges(
@@ -313,20 +345,12 @@ class DataChatPipeline:
             self._should_continue_after_tool_execution,
             {
                 "end": END,
-                "pipeline": "classifier",
+                "pipeline": "context",
             },
         )
 
         # Add edges
-        workflow.add_edge("classifier", "context")
-        workflow.add_conditional_edges(
-            "context",
-            self._should_use_context_answer,
-            {
-                "context": "context_answer",
-                "sql": "sql",
-            },
-        )
+        workflow.add_edge("context", "context_answer")
         workflow.add_conditional_edges(
             "context_answer",
             self._should_execute_after_context_answer,
@@ -372,10 +396,14 @@ class DataChatPipeline:
     # Agent Execution Methods
     # ========================================================================
 
-    async def _run_intent_gate(self, state: PipelineState) -> PipelineState:
-        """Run a lightweight intent gate before the main pipeline."""
+    async def _run_query_analyzer(self, state: PipelineState) -> PipelineState:
+        """
+        Run QueryAnalyzerAgent - the unified entry point.
+
+        This replaces the old intent_gate + classifier combination.
+        """
         start_time = time.time()
-        state["current_agent"] = "IntentGate"
+        state["current_agent"] = "QueryAnalyzerAgent"
         state["clarification_limit"] = self.max_clarifications
         state["clarification_turn_count"] = max(
             state.get("clarification_turn_count", 0),
@@ -385,45 +413,99 @@ class DataChatPipeline:
         state.setdefault("skip_response_synthesis", False)
 
         query = state.get("query") or ""
-        summary = self._build_intent_summary(query, state.get("conversation_history", []))
-        summary = self._merge_session_state_into_summary(
-            summary,
-            state.get("session_state"),
-        )
 
-        contextual_rewrite = self._rewrite_contextual_followup(query, summary)
-        if contextual_rewrite and contextual_rewrite != query:
-            summary["resolved_query"] = contextual_rewrite
-        state["intent_summary"] = summary
+        # Build session context from history
+        session_ctx = SessionContext()
+        session_ctx.update_from_history(state.get("conversation_history", []))
+        if state.get("session_state"):
+            session_ctx = SessionContext.from_dict(state.get("session_state", {}))
 
-        resolved_query = summary.get("resolved_query")
-        if resolved_query and resolved_query != query:
+        # Resolve follow-up queries
+        resolved_query = session_ctx.resolve_followup_query(query)
+        if resolved_query:
             state["original_query"] = query
             state["query"] = resolved_query
-            self._record_decision(
-                state,
-                stage="intent_gate.rewrite",
-                decision="rewrite_query",
-                reason="resolved_followup",
-                details={"from": query, "to": resolved_query},
+            query = resolved_query
+        else:
+            table_hint = session_ctx.resolve_table_hint(query)
+            if table_hint and session_ctx.last_goal:
+                resolved_query = f"{session_ctx.last_goal} Use table {table_hint}."
+                state["original_query"] = query
+                state["query"] = resolved_query
+                query = resolved_query
+
+        # Run the query analyzer
+        try:
+            input_data = QueryAnalyzerInput(
+                query=query,
+                conversation_history=state.get("conversation_history", []),
+                session_state=session_ctx.to_dict(),
             )
 
-        fast_path = self._is_deterministic_sql_query(state.get("query") or "")
-        if fast_path:
+            output = await self.query_analyzer.execute(input_data)
+
+            if output.success and output.analysis:
+                analysis = output.analysis
+                state["intent"] = analysis.intent
+                state["intent_gate"] = (
+                    analysis.route if analysis.route != "end" else analysis.intent
+                )
+                state["entities"] = [
+                    {
+                        "entity_type": e.entity_type,
+                        "value": e.value,
+                        "confidence": e.confidence,
+                        "normalized_value": e.normalized_value,
+                    }
+                    for e in analysis.entities
+                ]
+                state["complexity"] = analysis.complexity
+                state["fast_path"] = analysis.deterministic
+
+                if analysis.deterministic:
+                    state["skip_response_synthesis"] = True
+
+                # Handle different routes
+                if analysis.route == "end":
+                    state["answer_source"] = "system"
+                    state["answer_confidence"] = 0.8
+                    state["natural_language_answer"] = self._build_intent_gate_response(
+                        analysis.intent
+                    )
+                    state["clarification_needed"] = False
+                    state["clarifying_questions"] = []
+                elif analysis.route == "clarification":
+                    state["clarification_needed"] = True
+                    state["clarifying_questions"] = analysis.clarifying_questions or [
+                        "What would you like to do with your data?"
+                    ]
+                    state["answer_source"] = "clarification"
+                    state["answer_confidence"] = 0.2
+                    intro = "I need a bit more detail to help you."
+                    formatted = "\n".join(f"- {q}" for q in state["clarifying_questions"])
+                    state["natural_language_answer"] = f"{intro}\n{formatted}"
+
+                self._record_decision(
+                    state,
+                    stage="query_analyzer",
+                    decision=analysis.route,
+                    reason=f"intent={analysis.intent}, deterministic={analysis.deterministic}",
+                    details={"confidence": analysis.confidence},
+                )
+
+            elapsed = (time.time() - start_time) * 1000
+            state.setdefault("agent_timings", {})["query_analyzer"] = elapsed
+            state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
+            state["llm_calls"] = state.get("llm_calls", 0) + output.metadata.llm_calls
+
+        except Exception as e:
+            logger.error(f"QueryAnalyzerAgent failed: {e}")
+            # Fallback to data_query route
             state["intent"] = "data_query"
             state["intent_gate"] = "data_query"
-            state["fast_path"] = True
-            state["skip_response_synthesis"] = True
-            self._record_decision(
-                state,
-                stage="intent_gate",
-                decision="data_query_fast_path",
-                reason="deterministic_sql_query",
-            )
-            elapsed = (time.time() - start_time) * 1000
-            state.setdefault("agent_timings", {})["intent_gate"] = elapsed
-            state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
-            return state
+            state["error"] = f"Query analysis failed: {e}"
+
+        return state
 
         intent_gate = self._classify_intent_gate(state.get("query") or "")
         if intent_gate == "clarify":
@@ -447,9 +529,7 @@ class DataChatPipeline:
             return state
 
         if intent_gate == "data_query" and self._should_call_intent_llm(state, summary):
-            llm_result, llm_calls = await self._llm_intent_gate(
-                state.get("query") or "", summary
-            )
+            llm_result, llm_calls = await self._llm_intent_gate(state.get("query") or "", summary)
             if llm_calls:
                 state["llm_calls"] = state.get("llm_calls", 0) + llm_calls
             if llm_result:
@@ -485,9 +565,8 @@ class DataChatPipeline:
                     state.setdefault("agent_timings", {})["intent_gate"] = elapsed
                     state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
                     return state
-                if (
-                    intent_gate == "data_query"
-                    and self._is_non_actionable_utterance(state.get("query") or "")
+                if intent_gate == "data_query" and self._is_non_actionable_utterance(
+                    state.get("query") or ""
                 ):
                     self._apply_clarification_response(
                         state,
@@ -547,9 +626,7 @@ class DataChatPipeline:
             state["intent"] = intent_gate
             state["answer_source"] = "system"
             state["answer_confidence"] = 0.8
-            state["natural_language_answer"] = self._build_intent_gate_response(
-                intent_gate
-            )
+            state["natural_language_answer"] = self._build_intent_gate_response(intent_gate)
             state["clarification_needed"] = False
             state["clarifying_questions"] = []
 
@@ -558,6 +635,67 @@ class DataChatPipeline:
         state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
 
         return state
+
+    def _should_continue_after_query_analyzer(self, state: PipelineState) -> str:
+        """Determine route after query analysis."""
+        intent_gate = state.get("intent_gate")
+
+        # End route for system intents
+        if intent_gate in {
+            "exit",
+            "out_of_scope",
+            "small_talk",
+            "setup_help",
+            "datapoint_help",
+            "clarify",
+        }:
+            self._record_decision(
+                state,
+                stage="continue_after_query_analyzer",
+                decision="end",
+                reason=f"intent_gate={intent_gate}",
+            )
+            return "end"
+
+        # Fast path for deterministic SQL
+        if state.get("fast_path"):
+            self._record_decision(
+                state,
+                stage="continue_after_query_analyzer",
+                decision="sql",
+                reason="fast_path",
+            )
+            return "sql"
+
+        # Check for tool requests
+        if self._should_run_tool_planner(state):
+            self._record_decision(
+                state,
+                stage="continue_after_query_analyzer",
+                decision="tool_planner",
+                reason="tool_planner_enabled_for_query",
+            )
+            return "tool_planner"
+
+        # Context route for exploration/explanation
+        intent = state.get("intent")
+        if intent in ("exploration", "explanation", "meta", "definition"):
+            self._record_decision(
+                state,
+                stage="continue_after_query_analyzer",
+                decision="context",
+                reason=f"intent={intent}",
+            )
+            return "context"
+
+        # Default to context for entity extraction
+        self._record_decision(
+            state,
+            stage="continue_after_query_analyzer",
+            decision="context",
+            reason="default_context_path",
+        )
+        return "context"
 
     async def _run_tool_planner(self, state: PipelineState) -> PipelineState:
         """Run ToolPlannerAgent."""
@@ -617,9 +755,7 @@ class DataChatPipeline:
             if approval_calls:
                 state["tool_approval_required"] = True
                 state["tool_approval_calls"] = approval_calls
-                state["tool_approval_message"] = (
-                    "Approval required to run this tool."
-                )
+                state["tool_approval_message"] = "Approval required to run this tool."
                 state["answer_source"] = "approval"
                 state["natural_language_answer"] = (
                     "This action needs approval before I can proceed."
@@ -654,50 +790,6 @@ class DataChatPipeline:
         except Exception as exc:
             state["tool_error"] = str(exc)
             state["tool_results"] = []
-
-        return state
-
-    async def _run_classifier(self, state: PipelineState) -> PipelineState:
-        """Run ClassifierAgent."""
-        start_time = time.time()
-        state["current_agent"] = "ClassifierAgent"
-
-        try:
-            input_data = ClassifierAgentInput(
-                query=state["query"],
-                conversation_history=self._augment_history_with_summary(state),
-            )
-
-            output = await self.classifier.execute(input_data)
-
-            # Update state
-            state["intent"] = output.classification.intent
-            state["entities"] = [
-                {
-                    "entity_type": e.entity_type,
-                    "value": e.value,
-                    "confidence": e.confidence,
-                    "normalized_value": e.normalized_value,
-                }
-                for e in output.classification.entities
-            ]
-            state["complexity"] = output.classification.complexity
-            state["clarification_needed"] = output.classification.clarification_needed
-            state["clarifying_questions"] = output.classification.clarifying_questions
-
-            # Update metadata
-            elapsed = (time.time() - start_time) * 1000
-            state.setdefault("agent_timings", {})["classifier"] = elapsed
-            state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
-            state["llm_calls"] = state.get("llm_calls", 0) + output.metadata.llm_calls
-
-            logger.info(
-                f"ClassifierAgent complete: intent={state['intent']}, complexity={state['complexity']}"
-            )
-
-        except Exception as e:
-            logger.error(f"ClassifierAgent failed: {e}")
-            state["error"] = f"Classification failed: {e}"
 
         return state
 
@@ -797,9 +889,7 @@ class DataChatPipeline:
         allowed_connection_ids = {str(target_connection_id)}
         if target_connection_ids:
             allowed_connection_ids.update(
-                str(connection_id)
-                for connection_id in target_connection_ids
-                if connection_id
+                str(connection_id) for connection_id in target_connection_ids if connection_id
             )
 
         scoped: list[dict[str, Any]] = []
@@ -810,10 +900,12 @@ class DataChatPipeline:
             metadata = dp.get("metadata") or {}
             scope = str(metadata.get("scope", "")).strip().lower()
             shared_raw = metadata.get("shared")
-            shared_flag = (
-                shared_raw is True
-                or str(shared_raw).strip().lower() in {"1", "true", "yes", "y"}
-            )
+            shared_flag = shared_raw is True or str(shared_raw).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "y",
+            }
             if scope in {"global", "shared"} or shared_flag:
                 global_items.append(dp)
                 continue
@@ -876,9 +968,7 @@ class DataChatPipeline:
             equivalents.add(ENV_DATABASE_CONNECTION_ID)
 
         system_database_url = (
-            str(self.config.system_database.url)
-            if self.config.system_database.url
-            else None
+            str(self.config.system_database.url) if self.config.system_database.url else None
         )
         if system_database_url:
             manager = DatabaseConnectionManager(system_database_url=system_database_url)
@@ -955,12 +1045,8 @@ class DataChatPipeline:
             investigation_memory = InvestigationMemory(
                 query=state["query"],
                 datapoints=datapoints,
-                total_retrieved=investigation_memory_state.get(
-                    "total_retrieved", len(datapoints)
-                ),
-                retrieval_mode=investigation_memory_state.get(
-                    "retrieval_mode", "hybrid"
-                ),
+                total_retrieved=investigation_memory_state.get("total_retrieved", len(datapoints)),
+                retrieval_mode=investigation_memory_state.get("retrieval_mode", "hybrid"),
                 sources_used=investigation_memory_state.get("sources_used", []),
             )
 
@@ -978,8 +1064,7 @@ class DataChatPipeline:
             state["answer_source"] = "context"
             state["answer_confidence"] = output.context_answer.confidence
             state["evidence"] = [
-                evidence.model_dump()
-                for evidence in output.context_answer.evidence
+                evidence.model_dump() for evidence in output.context_answer.evidence
             ]
             state["context_needs_sql"] = output.context_answer.needs_sql
             state["generated_sql"] = None
@@ -989,8 +1074,7 @@ class DataChatPipeline:
             if output.context_answer.needs_sql:
                 state["context_preface"] = output.context_answer.answer
                 state["context_evidence"] = [
-                    evidence.model_dump()
-                    for evidence in output.context_answer.evidence
+                    evidence.model_dump() for evidence in output.context_answer.evidence
                 ]
             if output.context_answer.clarifying_questions:
                 clarification_intro = (
@@ -1284,12 +1368,8 @@ class DataChatPipeline:
             investigation_memory = InvestigationMemory(
                 query=state["query"],
                 datapoints=datapoints,
-                total_retrieved=investigation_memory_state.get(
-                    "total_retrieved", len(datapoints)
-                ),
-                retrieval_mode=investigation_memory_state.get(
-                    "retrieval_mode", "hybrid"
-                ),
+                total_retrieved=investigation_memory_state.get("total_retrieved", len(datapoints)),
+                retrieval_mode=investigation_memory_state.get("retrieval_mode", "hybrid"),
                 sources_used=investigation_memory_state.get(
                     "sources_used",
                     list({dp["source"] for dp in state.get("retrieved_datapoints", [])}),
@@ -1550,17 +1630,12 @@ class DataChatPipeline:
             }
             state["natural_language_answer"] = output.executed_query.natural_language_answer
             state["visualization_hint"] = output.executed_query.visualization_hint
-            state["visualization_note"] = getattr(
-                output.executed_query, "visualization_note", None
-            )
+            state["visualization_note"] = getattr(output.executed_query, "visualization_note", None)
             state["visualization_metadata"] = output.executed_query.visualization_metadata
             state["key_insights"] = output.executed_query.key_insights
             state["answer_source"] = "sql"
             state["answer_confidence"] = state.get("sql_confidence", 0.7)
-            sql_evidence = [
-                evidence.model_dump()
-                for evidence in self._build_evidence_items(state)
-            ]
+            sql_evidence = [evidence.model_dump() for evidence in self._build_evidence_items(state)]
             context_evidence = state.get("context_evidence") or []
             seen_ids = set()
             merged_evidence = []
@@ -2036,9 +2111,7 @@ class DataChatPipeline:
             )
         return evidence
 
-    def _apply_tool_results(
-        self, state: PipelineState, results: list[dict[str, Any]]
-    ) -> None:
+    def _apply_tool_results(self, state: PipelineState, results: list[dict[str, Any]]) -> None:
         for result in results:
             payload = result.get("result") or {}
             answer = payload.get("answer")
@@ -2066,9 +2139,7 @@ class DataChatPipeline:
                 state["validation_errors"] = payload.get("validation_errors")
 
         if state.get("used_datapoints") and not state.get("evidence"):
-            state["evidence"] = [
-                item.model_dump() for item in self._build_evidence_items(state)
-            ]
+            state["evidence"] = [item.model_dump() for item in self._build_evidence_items(state)]
 
     def _should_retry_sql(self, state: PipelineState) -> str:
         """
@@ -2138,9 +2209,7 @@ class DataChatPipeline:
             return False
         return True
 
-    def _format_clarifying_response(
-        self, query: str, questions: list[str]
-    ) -> str:
+    def _format_clarifying_response(self, query: str, questions: list[str]) -> str:
         if not questions:
             return "I need a bit more detail to generate SQL. Which table should I use?"
         prompt = "I need a bit more detail to generate SQL:"
@@ -2190,20 +2259,15 @@ class DataChatPipeline:
         candidates = self._collect_table_candidates(state)
         options: list[str] = []
         if candidates:
-            options.append(
-                f"1. Pick one table to continue: {', '.join(candidates[:5])}."
-            )
+            options.append(f"1. Pick one table to continue: {', '.join(candidates[:5])}.")
         options.append("2. Ask me to list available tables.")
         options.append("3. Ask a fully specified question with table + metric.")
         options.append("4. Type `exit` to end the session.")
-        return (
-            "I still cannot answer confidently after several clarifications.\n"
-            + "\n".join(options)
+        return "I still cannot answer confidently after several clarifications.\n" + "\n".join(
+            options
         )
 
-    def _build_intent_summary(
-        self, query: str, history: list[Message]
-    ) -> dict[str, Any]:
+    def _build_intent_summary(self, query: str, history: list[Message]) -> dict[str, Any]:
         summary: dict[str, Any] = {
             "last_goal": None,
             "last_clarifying_question": None,
@@ -2307,7 +2371,9 @@ class DataChatPipeline:
 
         system_messages: list[Message] = []
         if session_summary:
-            system_messages.append({"role": "system", "content": f"Session memory: {session_summary}"})
+            system_messages.append(
+                {"role": "system", "content": f"Session memory: {session_summary}"}
+            )
         if summary_text:
             system_messages.append({"role": "system", "content": summary_text})
         if not system_messages:
@@ -2424,7 +2490,9 @@ class DataChatPipeline:
 
     def _extract_followup_focus(self, text: str) -> str | None:
         cleaned = text.strip().strip("\"'").strip()
-        cleaned = re.sub(r"^(what\s+about|how\s+about|what\s+of|and|about)\s+", "", cleaned, flags=re.I)
+        cleaned = re.sub(
+            r"^(what\s+about|how\s+about|what\s+of|and|about)\s+", "", cleaned, flags=re.I
+        )
         cleaned = cleaned.strip(" .,!?:;\"'")
         cleaned = re.sub(r"^(the|our|their)\s+", "", cleaned, flags=re.I)
         if not cleaned:
@@ -2463,9 +2531,7 @@ class DataChatPipeline:
 
         return f"{query.rstrip('. ')} Use table {selected}."
 
-    async def _build_clarification_fallback(
-        self, state: PipelineState
-    ) -> dict[str, Any] | None:
+    async def _build_clarification_fallback(self, state: PipelineState) -> dict[str, Any] | None:
         candidates = self._collect_table_candidates(state)
         if not candidates:
             live_tables = await self._get_live_table_catalog(
@@ -2863,9 +2929,7 @@ class DataChatPipeline:
         ]
         return any(re.search(pattern, text.lower()) for pattern in patterns)
 
-    def _should_call_intent_llm(
-        self, state: PipelineState, summary: dict[str, Any]
-    ) -> bool:
+    def _should_call_intent_llm(self, state: PipelineState, summary: dict[str, Any]) -> bool:
         query = (state.get("query") or "").strip().lower()
         if not query:
             return False
@@ -2916,11 +2980,7 @@ class DataChatPipeline:
             "Return JSON with keys: intent, confidence (0-1), "
             "clarifying_question (optional, only if intent=clarify)."
         )
-        user_prompt = (
-            f"User message: {query}\n"
-            f"Intent summary: {summary_text}\n"
-            "Return JSON only."
-        )
+        user_prompt = f"User message: {query}\nIntent summary: {summary_text}\nReturn JSON only."
         request = LLMRequest(
             messages=[
                 LLMMessage(role="system", content=system_prompt),
@@ -3162,7 +3222,9 @@ class DataChatPipeline:
                 text,
                 flags=re.IGNORECASE,
             )
-            connector_split = [segment.strip(" .") for segment in connector_split if segment.strip()]
+            connector_split = [
+                segment.strip(" .") for segment in connector_split if segment.strip()
+            ]
             if len(connector_split) > 1:
                 parts = connector_split
 
@@ -3464,12 +3526,16 @@ class DataChatPipeline:
             if item.get("answer_confidence") is not None
         ]
         if confidence_values:
-            merged["answer_confidence"] = max(0.0, min(1.0, sum(confidence_values) / len(confidence_values)))
+            merged["answer_confidence"] = max(
+                0.0, min(1.0, sum(confidence_values) / len(confidence_values))
+            )
 
         merged["llm_calls"] = (
             sum(int(result.get("llm_calls", 0) or 0) for result in sub_results) + extra_llm_calls
         )
-        merged["retry_count"] = sum(int(result.get("retry_count", 0) or 0) for result in sub_results)
+        merged["retry_count"] = sum(
+            int(result.get("retry_count", 0) or 0) for result in sub_results
+        )
         merged["total_latency_ms"] = sum(
             float(result.get("total_latency_ms", 0.0) or 0.0) for result in sub_results
         )
@@ -3509,9 +3575,13 @@ class DataChatPipeline:
         merged_agent_timings: dict[str, float] = {}
         for result in sub_results:
             for agent, duration in (result.get("agent_timings") or {}).items():
-                merged_agent_timings[agent] = merged_agent_timings.get(agent, 0.0) + float(duration or 0.0)
+                merged_agent_timings[agent] = merged_agent_timings.get(agent, 0.0) + float(
+                    duration or 0.0
+                )
         for agent, duration in (extra_agent_timings or {}).items():
-            merged_agent_timings[agent] = merged_agent_timings.get(agent, 0.0) + float(duration or 0.0)
+            merged_agent_timings[agent] = merged_agent_timings.get(agent, 0.0) + float(
+                duration or 0.0
+            )
         merged["agent_timings"] = merged_agent_timings
 
         all_sources: list[dict[str, Any]] = []
@@ -3644,7 +3714,11 @@ class DataChatPipeline:
                 synthesize_simple_sql=synthesize_simple_sql,
             )
 
-        planned_sql_map, planner_llm_calls, planner_duration_ms = await self._plan_multi_sql_for_parts(
+        (
+            planned_sql_map,
+            planner_llm_calls,
+            planner_duration_ms,
+        ) = await self._plan_multi_sql_for_parts(
             parts=parts,
             database_type=database_type,
             database_url=database_url,
@@ -3931,7 +4005,11 @@ class DataChatPipeline:
             planner_duration_ms = 0.0
             if event_callback:
                 await event_callback("agent_start", {"agent": "MultiSQLPlanner"})
-            planned_sql_map, planner_llm_calls, planner_duration_ms = await self._plan_multi_sql_for_parts(
+            (
+                planned_sql_map,
+                planner_llm_calls,
+                planner_duration_ms,
+            ) = await self._plan_multi_sql_for_parts(
                 parts=parts,
                 database_type=database_type,
                 database_url=database_url,

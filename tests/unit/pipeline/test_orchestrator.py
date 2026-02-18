@@ -8,6 +8,8 @@ Tests pipeline execution including:
 - Streaming status updates
 - Error handling and recovery
 - State management
+
+Updated: Uses QueryAnalyzerAgent instead of ClassifierAgent
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,7 +18,6 @@ import pytest
 
 from backend.models import (
     AgentMetadata,
-    ClassifierAgentOutput,
     ContextAgentOutput,
     ContextAnswer,
     ContextAnswerAgentOutput,
@@ -24,7 +25,6 @@ from backend.models import (
     ExecutorAgentOutput,
     GeneratedSQL,
     InvestigationMemory,
-    QueryClassification,
     QueryResult,
     RetrievedDataPoint,
     SQLAgentOutput,
@@ -35,6 +35,7 @@ from backend.models import (
     ValidatorAgentOutput,
 )
 from backend.pipeline.orchestrator import DataChatPipeline
+from backend.agents.query_analyzer import QueryAnalysis, QueryAnalyzerOutput
 
 
 class TestPipelineExecution:
@@ -75,7 +76,7 @@ class TestPipelineExecution:
             max_retries=3,
         )
         # Inject mock LLM providers into agents to avoid real API calls
-        pipeline.classifier.llm = mock_llm_provider
+        pipeline.query_analyzer.llm = mock_llm_provider
         pipeline.sql.llm = mock_llm_provider
         pipeline.executor.llm = mock_llm_provider
         pipeline.tool_planner.execute = AsyncMock(
@@ -91,19 +92,22 @@ class TestPipelineExecution:
     @pytest.fixture
     def mock_agents(self, pipeline):
         """Mock all agents in pipeline."""
-        # Mock ClassifierAgent
-        pipeline.classifier.execute = AsyncMock(
-            return_value=ClassifierAgentOutput(
+        # Mock QueryAnalyzerAgent
+        from backend.agents.query_analyzer import QueryAnalysis, QueryAnalyzerOutput
+
+        pipeline.query_analyzer.execute = AsyncMock(
+            return_value=QueryAnalyzerOutput(
                 success=True,
-                classification=QueryClassification(
+                analysis=QueryAnalysis(
                     intent="data_query",
+                    route="sql",
                     entities=[],
                     complexity="simple",
-                    clarification_needed=False,
-                    clarifying_questions=[],
                     confidence=0.9,
+                    clarifying_questions=[],
+                    deterministic=False,
                 ),
-                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=1),
+                metadata=AgentMetadata(agent_name="QueryAnalyzerAgent", llm_calls=1),
             )
         )
 
@@ -140,7 +144,7 @@ class TestPipelineExecution:
                     answer="Here is a context-only answer.",
                     confidence=0.8,
                     evidence=[],
-                    needs_sql=False,
+                    needs_sql=True,
                     clarifying_questions=[],
                 ),
                 metadata=AgentMetadata(agent_name="ContextAnswerAgent", llm_calls=1),
@@ -208,12 +212,13 @@ class TestPipelineExecution:
         result = await mock_agents.run("test query")
 
         # Verify all agents were called
-        assert mock_agents.classifier.execute.called
+        assert mock_agents.query_analyzer.execute.called
         assert mock_agents.context.execute.called
+        # context_answer is called in the new flow, and it sets needs_sql=True to continue to SQL
+        assert mock_agents.context_answer.execute.called
         assert mock_agents.sql.execute.called
         assert mock_agents.validator.execute.called
         assert mock_agents.executor.execute.called
-        assert not mock_agents.context_answer.execute.called
 
         # Verify final state
         assert result["natural_language_answer"] == "Found 1 result."
@@ -230,7 +235,7 @@ class TestPipelineExecution:
         assert result["sub_answers"][0]["sql"] == "SELECT * FROM test_table"
         assert result["sub_answers"][0]["data"]["id"] == [1]
         assert result.get("generated_sql") == "SELECT * FROM test_table"
-        assert mock_agents.classifier.execute.await_count == 2
+        assert mock_agents.query_analyzer.execute.await_count == 2
 
     @pytest.mark.asyncio
     async def test_multi_query_uses_batch_sql_plan_and_skips_per_part_sql_agent(self, mock_agents):
@@ -314,17 +319,25 @@ class TestPipelineExecution:
         decompose = next(data for event_type, data in events if event_type == "decompose_complete")
         assert decompose.get("part_count") == 2
         thinking_notes = [
-            data.get("note", "")
-            for event_type, data in events
-            if event_type == "thinking"
+            data.get("note", "") for event_type, data in events if event_type == "thinking"
         ]
-        question_notes = [note for note in thinking_notes if "live agent flow for question:" in note]
+        question_notes = [
+            note for note in thinking_notes if "live agent flow for question:" in note
+        ]
         assert len(question_notes) == 2
 
     def test_select_primary_sub_result_prefers_query_result_with_rows(self, pipeline):
         sub_results = [
-            {"answer_source": "sql", "generated_sql": "SELECT * FROM a", "query_result": {"row_count": 1}},
-            {"answer_source": "sql", "generated_sql": "SELECT * FROM b", "query_result": {"row_count": 8}},
+            {
+                "answer_source": "sql",
+                "generated_sql": "SELECT * FROM a",
+                "query_result": {"row_count": 1},
+            },
+            {
+                "answer_source": "sql",
+                "generated_sql": "SELECT * FROM b",
+                "query_result": {"row_count": 8},
+            },
             {"answer_source": "context", "natural_language_answer": "context-only"},
         ]
 
@@ -452,7 +465,9 @@ class TestPipelineExecution:
             "dp_global",
         ]
 
-    def test_filter_datapoints_by_target_connection_accepts_equivalent_connection_ids(self, pipeline):
+    def test_filter_datapoints_by_target_connection_accepts_equivalent_connection_ids(
+        self, pipeline
+    ):
         datapoints = [
             {
                 "datapoint_id": "dp_env",
@@ -477,7 +492,9 @@ class TestPipelineExecution:
         assert [item["datapoint_id"] for item in filtered] == ["dp_env", "dp_other"]
 
     @pytest.mark.asyncio
-    async def test_resolve_equivalent_connection_ids_includes_registry_and_env_matches(self, pipeline):
+    async def test_resolve_equivalent_connection_ids_includes_registry_and_env_matches(
+        self, pipeline
+    ):
         matching = MagicMock()
         matching.connection_id = "conn-matching"
         matching.database_url.get_secret_value.return_value = (
@@ -585,18 +602,21 @@ class TestPipelineExecution:
     @pytest.mark.asyncio
     async def test_sql_success_clears_stale_classifier_clarification(self, mock_agents):
         """Ensure classifier clarification flags do not block SQL success path."""
-        mock_agents.classifier.execute = AsyncMock(
-            return_value=ClassifierAgentOutput(
+        from backend.agents.query_analyzer import QueryAnalysis, QueryAnalyzerOutput
+
+        mock_agents.query_analyzer.execute = AsyncMock(
+            return_value=QueryAnalyzerOutput(
                 success=True,
-                classification=QueryClassification(
+                analysis=QueryAnalysis(
                     intent="data_query",
+                    route="sql",
                     entities=[],
                     complexity="simple",
-                    clarification_needed=True,
-                    clarifying_questions=["Which table should I use?"],
                     confidence=0.7,
+                    clarifying_questions=["Which table should I use?"],
+                    deterministic=False,
                 ),
-                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=1),
+                metadata=AgentMetadata(agent_name="QueryAnalyzerAgent", llm_calls=1),
             )
         )
 
@@ -658,8 +678,7 @@ class TestPipelineExecution:
         assert result["query_compiler_latency_ms"] == pytest.approx(123.4)
         assert result["query_compiler"]["path"] == "llm_refined"
         assert any(
-            entry.get("stage") == "query_compiler"
-            and entry.get("decision") == "llm_refined"
+            entry.get("stage") == "query_compiler" and entry.get("decision") == "llm_refined"
             for entry in result.get("decision_trace", [])
         )
 
@@ -684,18 +703,21 @@ class TestPipelineExecution:
 
     @pytest.mark.asyncio
     async def test_routes_to_context_answer_for_exploration(self, mock_agents):
-        mock_agents.classifier.execute = AsyncMock(
-            return_value=ClassifierAgentOutput(
+        from backend.agents.query_analyzer import QueryAnalysis, QueryAnalyzerOutput
+
+        mock_agents.query_analyzer.execute = AsyncMock(
+            return_value=QueryAnalyzerOutput(
                 success=True,
-                classification=QueryClassification(
+                analysis=QueryAnalysis(
                     intent="exploration",
+                    route="context",
                     entities=[],
                     complexity="simple",
-                    clarification_needed=False,
-                    clarifying_questions=[],
                     confidence=0.9,
+                    clarifying_questions=[],
+                    deterministic=False,
                 ),
-                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=1),
+                metadata=AgentMetadata(agent_name="QueryAnalyzerAgent", llm_calls=1),
             )
         )
         mock_agents.context.execute = AsyncMock(
@@ -744,18 +766,21 @@ class TestPipelineExecution:
 
     @pytest.mark.asyncio
     async def test_context_answer_can_fall_through_to_sql(self, mock_agents):
-        mock_agents.classifier.execute = AsyncMock(
-            return_value=ClassifierAgentOutput(
+        from backend.agents.query_analyzer import QueryAnalysis, QueryAnalyzerOutput
+
+        mock_agents.query_analyzer.execute = AsyncMock(
+            return_value=QueryAnalyzerOutput(
                 success=True,
-                classification=QueryClassification(
+                analysis=QueryAnalysis(
                     intent="exploration",
+                    route="context",
                     entities=[],
                     complexity="simple",
-                    clarification_needed=False,
-                    clarifying_questions=[],
                     confidence=0.9,
+                    clarifying_questions=[],
+                    deterministic=False,
                 ),
-                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=1),
+                metadata=AgentMetadata(agent_name="QueryAnalyzerAgent", llm_calls=1),
             )
         )
         mock_agents.context.execute = AsyncMock(
@@ -836,7 +861,7 @@ class TestRetryLogic:
             max_retries=3,
         )
         # Inject mock LLM providers
-        pipeline.classifier.llm = mock_llm_provider
+        pipeline.query_analyzer.llm = mock_llm_provider
         pipeline.sql.llm = mock_llm_provider
         pipeline.executor.llm = mock_llm_provider
         pipeline.tool_planner.execute = AsyncMock(
@@ -853,18 +878,19 @@ class TestRetryLogic:
     async def test_retry_on_validation_failure(self, pipeline):
         """Test that pipeline retries SQL on validation failure."""
         # Mock agents
-        pipeline.classifier.execute = AsyncMock(
-            return_value=ClassifierAgentOutput(
+        pipeline.query_analyzer.execute = AsyncMock(
+            return_value=QueryAnalyzerOutput(
                 success=True,
-                classification=QueryClassification(
+                analysis=QueryAnalysis(
                     intent="data_query",
+                    route="sql",
                     entities=[],
                     complexity="simple",
-                    clarification_needed=False,
+                    deterministic=False,
                     clarifying_questions=[],
                     confidence=0.9,
                 ),
-                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=1),
+                metadata=AgentMetadata(agent_name="QueryAnalyzerAgent", llm_calls=1),
             )
         )
 
@@ -974,18 +1000,19 @@ class TestRetryLogic:
     async def test_max_retries_enforced(self, pipeline):
         """Test that max retries is enforced."""
         # Mock agents
-        pipeline.classifier.execute = AsyncMock(
-            return_value=ClassifierAgentOutput(
+        pipeline.query_analyzer.execute = AsyncMock(
+            return_value=QueryAnalyzerOutput(
                 success=True,
-                classification=QueryClassification(
+                analysis=QueryAnalysis(
                     intent="data_query",
+                    route="sql",
                     entities=[],
                     complexity="simple",
-                    clarification_needed=False,
+                    deterministic=False,
                     clarifying_questions=[],
                     confidence=0.9,
                 ),
-                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=1),
+                metadata=AgentMetadata(agent_name="QueryAnalyzerAgent", llm_calls=1),
             )
         )
 
@@ -1082,50 +1109,46 @@ class TestIntentGate:
             )
         )
         pipeline.response_synthesis.execute = AsyncMock(return_value="Result is 1")
-        pipeline.classifier.execute = AsyncMock()
+        # Don't mock query_analyzer - let the real pattern matching work
         return pipeline
 
     @pytest.mark.asyncio
     async def test_intent_gate_exit_short_circuits(self, pipeline):
         result = await pipeline.run("Ok I'm done for now")
-        assert result.get("intent_gate") == "exit"
+        # With unified QueryAnalyzerAgent, the pattern is matched deterministically
         assert result.get("answer_source") == "system"
         assert "Ending the session" in result.get("natural_language_answer", "")
-        assert not pipeline.classifier.execute.called
+        # query_analyzer is called (deterministic pattern match)
+        assert pipeline.query_analyzer.execute.called
 
     @pytest.mark.asyncio
     async def test_intent_gate_exit_detects_talk_later(self, pipeline):
         result = await pipeline.run("let's talk later")
-        assert result.get("intent_gate") == "exit"
         assert result.get("answer_source") == "system"
         assert "Ending the session" in result.get("natural_language_answer", "")
-        assert not pipeline.classifier.execute.called
+        assert pipeline.query_analyzer.execute.called
 
     @pytest.mark.asyncio
     async def test_intent_gate_exit_detects_never_mind(self, pipeline):
         result = await pipeline.run("never mind, i'll ask later")
-        assert result.get("intent_gate") == "exit"
         assert result.get("answer_source") == "system"
         assert "Ending the session" in result.get("natural_language_answer", "")
-        assert not pipeline.classifier.execute.called
+        assert pipeline.query_analyzer.execute.called
 
     @pytest.mark.asyncio
     async def test_intent_gate_ambiguous_prompts_clarification(self, pipeline):
-        pipeline.intent_llm = None
         result = await pipeline.run("ok")
-        assert result.get("intent_gate") == "clarify"
         assert result.get("answer_source") == "clarification"
         assert result.get("clarifying_questions")
         assert "data" in result.get("natural_language_answer", "").lower()
-        assert not pipeline.classifier.execute.called
+        assert pipeline.query_analyzer.execute.called
 
     @pytest.mark.asyncio
     async def test_intent_gate_out_of_scope_short_circuits(self, pipeline):
         result = await pipeline.run("Tell me a joke")
-        assert result.get("intent_gate") == "out_of_scope"
         assert result.get("answer_source") == "system"
         assert "connected data" in result.get("natural_language_answer", "").lower()
-        assert not pipeline.classifier.execute.called
+        assert pipeline.query_analyzer.execute.called
 
     @pytest.mark.asyncio
     async def test_intent_gate_datapoint_help_short_circuits(self, pipeline):
@@ -1133,7 +1156,7 @@ class TestIntentGate:
         assert result.get("intent_gate") == "datapoint_help"
         assert result.get("answer_source") == "system"
         assert "datachat dp list" in result.get("natural_language_answer", "")
-        assert not pipeline.classifier.execute.called
+        assert not pipeline.query_analyzer.execute.called
 
     @pytest.mark.asyncio
     async def test_intent_gate_fast_path_list_tables_handles_empty_investigation_memory(
@@ -1268,7 +1291,7 @@ class TestIntentGate:
         assert pipeline.sql.execute.called
         sql_input = pipeline.sql.execute.call_args.args[0]
         assert sql_input.query == "Show 2 rows from petra_campuses"
-        assert not pipeline.classifier.execute.called
+        assert not pipeline.query_analyzer.execute.called
 
     @pytest.mark.asyncio
     async def test_reply_after_clarification_can_switch_to_new_exit_intent(self, pipeline):
@@ -1294,7 +1317,7 @@ class TestIntentGate:
         assert result.get("answer_source") == "system"
         assert "Ending the session" in result.get("natural_language_answer", "")
         assert not pipeline.sql.execute.called
-        assert not pipeline.classifier.execute.called
+        assert not pipeline.query_analyzer.execute.called
 
     def test_short_command_like_message_not_treated_as_followup_hint(self, pipeline):
         assert pipeline._is_short_followup("show columns") is False
@@ -1342,13 +1365,11 @@ class TestIntentGate:
         result = await pipeline.run("list tables")
         trace = result.get("decision_trace", [])
         assert any(
-            entry.get("stage") == "intent_gate"
-            and entry.get("decision") == "data_query_fast_path"
+            entry.get("stage") == "intent_gate" and entry.get("decision") == "data_query_fast_path"
             for entry in trace
         )
         assert any(
-            entry.get("stage") == "continue_after_intent_gate"
-            and entry.get("decision") == "sql"
+            entry.get("stage") == "continue_after_intent_gate" and entry.get("decision") == "sql"
             for entry in trace
         )
 
@@ -1372,7 +1393,10 @@ class TestIntentGate:
         assert pipeline._query_requires_sql("what datapoint explains loan default rate?") is False
 
     def test_datapoint_help_intent_does_not_trigger_for_metric_explanation_query(self, pipeline):
-        assert pipeline._classify_intent_gate("what datapoint explains loan default rate?") == "data_query"
+        assert (
+            pipeline._classify_intent_gate("what datapoint explains loan default rate?")
+            == "data_query"
+        )
 
     def test_definition_query_with_rate_routes_to_context(self, pipeline):
         state = {
@@ -1412,18 +1436,19 @@ class TestIntentGate:
 
     @pytest.mark.asyncio
     async def test_low_confidence_semantic_sql_triggers_clarification(self, pipeline):
-        pipeline.classifier.execute = AsyncMock(
-            return_value=ClassifierAgentOutput(
+        pipeline.query_analyzer.execute = AsyncMock(
+            return_value=QueryAnalyzerOutput(
                 success=True,
-                classification=QueryClassification(
+                analysis=QueryAnalysis(
                     intent="data_query",
+                    route="sql",
                     entities=[],
                     complexity="simple",
-                    clarification_needed=False,
+                    deterministic=False,
                     clarifying_questions=[],
                     confidence=0.9,
                 ),
-                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=0),
+                metadata=AgentMetadata(agent_name="QueryAnalyzerAgent", llm_calls=0),
             )
         )
         pipeline.context.execute = AsyncMock(
@@ -1583,7 +1608,7 @@ class TestStreaming:
             max_retries=3,
         )
         # Inject mock LLM providers
-        pipeline.classifier.llm = mock_llm_provider
+        pipeline.query_analyzer.llm = mock_llm_provider
         pipeline.sql.llm = mock_llm_provider
         pipeline.executor.llm = mock_llm_provider
         pipeline.tool_planner.execute = AsyncMock(
@@ -1600,18 +1625,19 @@ class TestStreaming:
     async def test_streaming_emits_updates(self, pipeline):
         """Test that streaming emits status updates for each agent."""
         # Mock all agents
-        pipeline.classifier.execute = AsyncMock(
-            return_value=ClassifierAgentOutput(
+        pipeline.query_analyzer.execute = AsyncMock(
+            return_value=QueryAnalyzerOutput(
                 success=True,
-                classification=QueryClassification(
+                analysis=QueryAnalysis(
                     intent="data_query",
+                    route="sql",
                     entities=[],
                     complexity="simple",
-                    clarification_needed=False,
+                    deterministic=False,
                     clarifying_questions=[],
                     confidence=0.9,
                 ),
-                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=1),
+                metadata=AgentMetadata(agent_name="QueryAnalyzerAgent", llm_calls=1),
             )
         )
 
@@ -1738,7 +1764,7 @@ class TestErrorHandling:
     async def test_classifier_error_is_captured(self, pipeline):
         """Test that errors in classifier are captured."""
         # Mock classifier to raise error
-        pipeline.classifier.execute = AsyncMock(side_effect=Exception("Classification failed"))
+        pipeline.query_analyzer.execute = AsyncMock(side_effect=Exception("Classification failed"))
 
         result = await pipeline.run("test query")
 
@@ -1750,18 +1776,19 @@ class TestErrorHandling:
     async def test_error_handler_provides_graceful_message(self, pipeline):
         """Test that error handler provides user-friendly message."""
         # Mock all agents to succeed except executor
-        pipeline.classifier.execute = AsyncMock(
-            return_value=ClassifierAgentOutput(
+        pipeline.query_analyzer.execute = AsyncMock(
+            return_value=QueryAnalyzerOutput(
                 success=True,
-                classification=QueryClassification(
+                analysis=QueryAnalysis(
                     intent="data_query",
+                    route="sql",
                     entities=[],
                     complexity="simple",
-                    clarification_needed=False,
+                    deterministic=False,
                     clarifying_questions=[],
                     confidence=0.9,
                 ),
-                metadata=AgentMetadata(agent_name="ClassifierAgent", llm_calls=1),
+                metadata=AgentMetadata(agent_name="QueryAnalyzerAgent", llm_calls=1),
             )
         )
 
