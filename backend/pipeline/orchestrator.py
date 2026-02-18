@@ -27,6 +27,7 @@ from backend.agents.context import ContextAgent
 from backend.agents.context_answer import ContextAnswerAgent
 from backend.agents.executor import ExecutorAgent
 from backend.agents.query_analyzer import QueryAnalyzerAgent, QueryAnalyzerInput
+from backend.agents.query_compiler import QueryCompilerAgent, QueryCompilerInput
 from backend.agents.response_synthesis import ResponseSynthesisAgent
 from backend.agents.sql import SQLAgent
 from backend.agents.tool_planner import ToolPlannerAgent
@@ -227,6 +228,7 @@ class DataChatPipeline:
 
         # Initialize agents - using QueryAnalyzerAgent instead of ClassifierAgent
         self.query_analyzer = QueryAnalyzerAgent()
+        self.query_compiler = QueryCompilerAgent()
         self.context = ContextAgent(retriever=retriever)
         self.context_answer = ContextAnswerAgent()
         self.sql = SQLAgent()
