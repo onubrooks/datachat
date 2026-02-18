@@ -6,10 +6,10 @@ Multi-agent pipeline for natural language to SQL conversion.
 Available Agents:
     - BaseAgent: Abstract base class for all agents
     - ContextAgent: Knowledge graph and vector retrieval (pure retrieval, no LLM)
+    - QueryAnalyzerAgent: Unified intent detection and entity extraction
     - SQLAgent: SQL query generation with self-correction
     - ValidatorAgent: SQL validation with security and performance checks
-    - ClassifierAgent: Intent detection and entity extraction (TODO)
-    - ExecutorAgent: Query execution and response formatting (TODO)
+    - ExecutorAgent: Query execution and response formatting
 
 Usage:
     from backend.agents import BaseAgent, ContextAgent, SQLAgent, ValidatorAgent
@@ -24,10 +24,10 @@ Usage:
 """
 
 from backend.agents.base import BaseAgent
-from backend.agents.classifier import ClassifierAgent
 from backend.agents.context import ContextAgent
 from backend.agents.context_answer import ContextAnswerAgent
 from backend.agents.executor import ExecutorAgent
+from backend.agents.query_analyzer import QueryAnalyzerAgent
 from backend.agents.response_synthesis import ResponseSynthesisAgent
 from backend.agents.sql import SQLAgent
 from backend.agents.tool_planner import ToolPlannerAgent
@@ -35,10 +35,10 @@ from backend.agents.validator import ValidatorAgent
 
 __all__ = [
     "BaseAgent",
-    "ClassifierAgent",
     "ContextAgent",
     "ContextAnswerAgent",
     "ExecutorAgent",
+    "QueryAnalyzerAgent",
     "ToolPlannerAgent",
     "ResponseSynthesisAgent",
     "SQLAgent",

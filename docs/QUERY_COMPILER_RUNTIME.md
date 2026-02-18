@@ -2,6 +2,8 @@
 
 This document describes how DataChat compiles SQL-oriented questions into an explicit query plan before SQL generation.
 
+> **Note**: Intent classification is now handled by `QueryAnalyzerAgent` (see `UNIFIED_ROUTING_ARCHITECTURE.md`). The query compiler runs after context retrieval for SQL-routed queries.
+
 ## Why This Exists
 
 Before SQL generation, DataChat compiles a semantic plan from:

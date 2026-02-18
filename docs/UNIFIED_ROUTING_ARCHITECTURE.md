@@ -11,10 +11,12 @@ The orchestrator has been refactored to use a unified routing architecture that 
 **Location**: `backend/agents/query_analyzer.py`
 
 Replaces both:
+
 - `intent_gate` (rules-based pattern matching)
 - `ClassifierAgent` (LLM-based classification)
 
 **Produces**:
+
 ```python
 class QueryAnalysis:
     intent: str      # data_query, definition, exploration, meta, exit, out_of_scope, etc.
@@ -30,6 +32,7 @@ class QueryAnalysis:
 **Location**: `backend/pipeline/pattern_matcher.py`
 
 Consolidates all query pattern detection:
+
 - Table listing (`list tables`, `show tables`)
 - Column listing
 - Row count queries
@@ -42,6 +45,7 @@ Consolidates all query pattern detection:
 **Location**: `backend/pipeline/route_handlers.py`
 
 Modular handlers for each route:
+
 - `EndRouteHandler` - exit, out_of_scope, small_talk, setup_help
 - `ClarificationRouteHandler` - ambiguous queries
 - `SQLRouteHandler` - data queries
@@ -53,6 +57,7 @@ Modular handlers for each route:
 **Location**: `backend/pipeline/session_context.py`
 
 Manages conversation state for follow-ups:
+
 - Last goal tracking
 - Clarification history
 - Table/column hints
@@ -94,21 +99,25 @@ context_answer?  validator → executor
 ## Files Changed
 
 ### Created
+
 - `backend/agents/query_analyzer.py`
 - `backend/pipeline/pattern_matcher.py`
 - `backend/pipeline/route_handlers.py`
 - `backend/pipeline/session_context.py`
 
 ### Modified
+
 - `backend/pipeline/orchestrator.py` - Integrated new components, removed ClassifierAgent
 - `tests/unit/pipeline/test_orchestrator.py` - Updated tests for new architecture
 
 ### Deleted (Deprecated)
+
 - `backend/agents/classifier.py` - Functionality moved to QueryAnalyzerAgent
 
 ## Testing
 
 Run tests:
+
 ```bash
 python -m pytest tests/unit/pipeline/test_orchestrator.py -v
 ```
@@ -118,6 +127,7 @@ Expected: 43+ passing tests (some failures expected during architectural transit
 ## Configuration
 
 New pipeline settings in `config/settings.py`:
+
 ```python
 class PipelineSettings(BaseSettings):
     intent_llm_confidence_threshold: float = 0.45

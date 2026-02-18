@@ -447,6 +447,7 @@ class DataChatPipeline:
             if output.success and output.analysis:
                 analysis = output.analysis
                 state["intent"] = analysis.intent
+                state["route"] = analysis.route  # Store the explicit route
                 state["intent_gate"] = (
                     analysis.route if analysis.route != "end" else analysis.intent
                 )
@@ -639,6 +640,7 @@ class DataChatPipeline:
     def _should_continue_after_query_analyzer(self, state: PipelineState) -> str:
         """Determine route after query analysis."""
         intent_gate = state.get("intent_gate")
+        intent = state.get("intent")
 
         # End route for system intents
         if intent_gate in {
@@ -667,7 +669,27 @@ class DataChatPipeline:
             )
             return "sql"
 
-        # Check for tool requests
+        # Check the explicit route from QueryAnalyzer first
+        # If route is explicitly sql or context, respect that
+        route = state.get("route")
+        if route == "sql":
+            self._record_decision(
+                state,
+                stage="continue_after_query_analyzer",
+                decision="sql",
+                reason="explicit_route=sql",
+            )
+            return "sql"
+        if route == "context":
+            self._record_decision(
+                state,
+                stage="continue_after_query_analyzer",
+                decision="context",
+                reason="explicit_route=context",
+            )
+            return "context"
+
+        # Check for tool requests (only if no explicit route was set)
         if self._should_run_tool_planner(state):
             self._record_decision(
                 state,
@@ -678,7 +700,6 @@ class DataChatPipeline:
             return "tool_planner"
 
         # Context route for exploration/explanation
-        intent = state.get("intent")
         if intent in ("exploration", "explanation", "meta", "definition"):
             self._record_decision(
                 state,
@@ -1825,13 +1846,14 @@ class DataChatPipeline:
                 reason="tool_planner_enabled_for_query",
             )
             return "tool_planner"
+        # Default to context path for entity extraction
         self._record_decision(
             state,
-            stage="continue_after_intent_gate",
-            decision="classifier",
-            reason="default_classifier_path",
+            stage="continue_after_query_analyzer",
+            decision="context",
+            reason="default_context_path",
         )
-        return "classifier"
+        return "context"
 
     def _should_run_tool_planner(self, state: PipelineState) -> bool:
         if not (self.tooling_enabled and self.tool_planner_enabled):
@@ -3886,9 +3908,10 @@ class DataChatPipeline:
                     duration_ms = (time.time() - agent_start_times[current_agent]) * 1000
                     if event_callback:
                         agent_data: dict[str, Any] = {}
-                        if current_agent == "ClassifierAgent":
+                        if current_agent == "QueryAnalyzerAgent":
                             agent_data = {
                                 "intent": state_update.get("intent"),
+                                "route": state_update.get("route"),
                                 "entities": state_update.get("entities", []),
                                 "complexity": state_update.get("complexity"),
                             }
