@@ -51,13 +51,13 @@ describe("Message", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: "Answer" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "SQL" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Table" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Visualization" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Sources" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Answer" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "SQL" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Table" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Visualization" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Sources" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Visualization" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
     expect(screen.getByText("Bar Chart")).toBeInTheDocument();
   });
 
@@ -79,11 +79,37 @@ describe("Message", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Visualization" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
     expect(screen.getByText("Line Chart")).toBeInTheDocument();
     expect(screen.getByText(/X axis:/)).toBeInTheDocument();
     expect(screen.getByText(/Y axis:/)).toBeInTheDocument();
     expect(screen.getByText(/Legend:/)).toBeInTheDocument();
+  });
+
+  it("shows line chart settings controls when toggled", () => {
+    render(
+      <Message
+        displayMode="tabbed"
+        message={{
+          id: "msg-2c",
+          role: "assistant",
+          content: "Revenue trend",
+          data: {
+            business_date: ["2026-01-01", "2026-01-02", "2026-01-03"],
+            revenue: [100, 130, 120],
+          },
+          visualization_hint: "line_chart",
+          timestamp: new Date(),
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
+    fireEvent.click(screen.getByRole("button", { name: "Toggle line chart settings" }));
+
+    expect(screen.getByLabelText("Line chart X axis column")).toBeInTheDocument();
+    expect(screen.getByLabelText("Line chart Y axis column")).toBeInTheDocument();
+    expect(screen.getByLabelText("Line chart zoom")).toBeInTheDocument();
   });
 
   it("collapses results and evidence sections by default in stacked mode", () => {
@@ -176,7 +202,7 @@ describe("Message", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Timing" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Timing" }));
 
     const rows = screen.getAllByText(/s$/);
     expect(rows[0]).toHaveTextContent("2.1s");
@@ -225,7 +251,7 @@ describe("Message", () => {
     expect(screen.getByRole("button", { name: "Q1" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Q2" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "SQL" }));
+    fireEvent.click(screen.getByRole("tab", { name: "SQL" }));
     expect(screen.getByText(/supplier_late_rates/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Q2" }));
@@ -266,7 +292,7 @@ describe("Message", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Table" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Table" }));
     fireEvent.click(screen.getByText("Results (120 rows)"));
 
     fireEvent.click(screen.getByRole("button", { name: /Next/i }));

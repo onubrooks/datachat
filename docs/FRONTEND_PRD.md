@@ -1,6 +1,6 @@
 # Frontend Product Requirements Document
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Last Updated:** February 19, 2026
 
 This document describes the frontend architecture, current state, and roadmap for the DataChat web UI.
@@ -40,6 +40,10 @@ This document describes the frontend architecture, current state, and roadmap fo
 | Conversation History Sidebar | Resume prior local sessions | ✅ Implemented |
 | Schema Explorer Sidebar | Browse tables/columns with search | ✅ Implemented |
 | Query Templates | Quick-action buttons for common prompts | ✅ Implemented |
+| Chart Interaction | Tooltips, zoom controls, legend toggles | ✅ Implemented |
+| Chart Configuration | Per-chart axis + display settings panel | ✅ Implemented |
+| Accessibility Labels | ARIA labels, dialog semantics, live regions | ✅ Implemented |
+| Keyboard Navigation | Tabs + global shortcuts + modal focus handling | ✅ Implemented |
 
 ### Database Management
 
@@ -93,15 +97,22 @@ This document describes the frontend architecture, current state, and roadmap fo
 
 | Issue | Impact | Recommendation |
 |-------|--------|----------------|
-| **No Chart Interaction** | Can't explore data in chart | Add tooltips, zoom, legend toggle |
-| **No Chart Configuration** | Can't customize axes | Add settings panel per chart type |
+| ✅ **Chart Interaction Added** | Users can inspect datapoints and control visual density | Tooltips + zoom + legend toggles across chart types |
+| ✅ **Chart Configuration Added** | Users can adjust chart behavior without re-querying | Per-chart settings panel (axes, max points/slices, grid/legend) |
 
 ### P4: Accessibility
 
 | Issue | Impact | Recommendation |
 |-------|--------|----------------|
-| **Missing ARIA Labels** | Screen reader gaps | Add comprehensive ARIA attributes |
-| **No Keyboard Navigation** | Power users slowed | Add keyboard shortcuts + focus management |
+| ✅ **ARIA Coverage Expanded** | Better screen reader support across chat/sidebar/modal/chart surfaces | Region labels, control labels, dialog roles, status/live semantics |
+| ✅ **Keyboard Navigation Added** | Faster non-pointer workflows | Tab keyboard navigation + global shortcuts + focus restoration |
+
+**Implemented keyboard shortcuts**
+- `Ctrl/Cmd + K`: Focus chat input
+- `Ctrl/Cmd + H`: Toggle conversation history sidebar
+- `Ctrl/Cmd + /`: Open/close shortcut reference modal
+- `/`: Focus chat input (when not typing in an input)
+- `Esc`: Close open modal and restore chat input focus
 
 ---
 

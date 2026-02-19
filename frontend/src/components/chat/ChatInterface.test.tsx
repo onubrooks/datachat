@@ -161,4 +161,21 @@ describe("ChatInterface target database", () => {
       screen.getByDisplayValue("List all available tables.")
     ).toBeInTheDocument();
   });
+
+  it("opens and closes keyboard shortcuts modal from keyboard shortcut", async () => {
+    render(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(window, { key: "/", ctrlKey: true });
+    expect(
+      screen.getByRole("dialog", { name: "Keyboard shortcuts" })
+    ).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Keyboard shortcuts" })
+      ).not.toBeInTheDocument()
+    );
+  });
 });

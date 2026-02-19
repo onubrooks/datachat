@@ -12,7 +12,7 @@
 
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   User,
   Bot,
@@ -26,6 +26,7 @@ import {
   BarChart3,
   ChevronLeft,
   ChevronRight,
+  Settings2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { cn } from "@/lib/utils";
@@ -41,6 +42,49 @@ interface MessageProps {
 
 type TabId = "answer" | "sql" | "table" | "visualization" | "sources" | "timing";
 type VizHint = "table" | "bar_chart" | "line_chart" | "pie_chart" | "scatter" | "none";
+type InteractiveChartType = "bar_chart" | "line_chart" | "pie_chart" | "scatter";
+
+interface BarChartConfig {
+  labelCol: string;
+  valueCol: string;
+  maxItems: number;
+  zoom: number;
+  showLegend: boolean;
+  seriesVisible: boolean;
+}
+
+interface LineChartConfig {
+  xCol: string;
+  yCol: string;
+  maxItems: number;
+  zoom: number;
+  showLegend: boolean;
+  showGrid: boolean;
+  seriesVisible: boolean;
+}
+
+interface ScatterChartConfig {
+  xCol: string;
+  yCol: string;
+  maxItems: number;
+  zoom: number;
+  showLegend: boolean;
+  showGrid: boolean;
+  seriesVisible: boolean;
+}
+
+interface PieChartConfig {
+  labelCol: string;
+  valueCol: string;
+  maxItems: number;
+  zoom: number;
+  showLegend: boolean;
+}
+
+interface ChartTooltipState {
+  title: string;
+  detail?: string;
+}
 
 const CHART_COLORS = [
   "#2563eb",
@@ -217,6 +261,45 @@ export function Message({
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [selectedSubAnswerIndex, setSelectedSubAnswerIndex] = useState<number>(0);
   const [tablePage, setTablePage] = useState<number>(0);
+  const [showChartSettings, setShowChartSettings] = useState(false);
+  const [chartTooltip, setChartTooltip] = useState<ChartTooltipState | null>(null);
+  const [hiddenPieLabels, setHiddenPieLabels] = useState<string[]>([]);
+  const [barConfig, setBarConfig] = useState<BarChartConfig>({
+    labelCol: "",
+    valueCol: "",
+    maxItems: 12,
+    zoom: 1,
+    showLegend: true,
+    seriesVisible: true,
+  });
+  const [lineConfig, setLineConfig] = useState<LineChartConfig>({
+    xCol: "",
+    yCol: "",
+    maxItems: 30,
+    zoom: 1,
+    showLegend: true,
+    showGrid: true,
+    seriesVisible: true,
+  });
+  const [scatterConfig, setScatterConfig] = useState<ScatterChartConfig>({
+    xCol: "",
+    yCol: "",
+    maxItems: 120,
+    zoom: 1,
+    showLegend: true,
+    showGrid: true,
+    seriesVisible: true,
+  });
+  const [pieConfig, setPieConfig] = useState<PieChartConfig>({
+    labelCol: "",
+    valueCol: "",
+    maxItems: 8,
+    zoom: 1,
+    showLegend: true,
+  });
+  const tabButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const tabListId = `message-tablist-${message.id}`;
+  const activeTabPanelId = `${message.id}-panel-${activeTab}`;
   const ROWS_PER_PAGE = 50;
 
   const subAnswers = message.sub_answers || [];
@@ -244,6 +327,12 @@ export function Message({
 
   useEffect(() => {
     setTablePage(0);
+  }, [message.id, selectedSubAnswerIndex]);
+
+  useEffect(() => {
+    setShowChartSettings(false);
+    setChartTooltip(null);
+    setHiddenPieLabels([]);
   }, [message.id, selectedSubAnswerIndex]);
 
   const columnNames = useMemo(
@@ -292,6 +381,71 @@ export function Message({
     () => columnNames.filter((column) => !numericColumns.includes(column)),
     [columnNames, numericColumns]
   );
+
+  useEffect(() => {
+    const defaultBarLabel = nonNumericColumns[0] || columnNames[0] || "";
+    const defaultBarValue = numericColumns[0] || "";
+    const defaultLineX =
+      columnNames.find((column) => isDateLikeColumn(column)) ||
+      nonNumericColumns[0] ||
+      columnNames[0] ||
+      "";
+    const defaultLineY = numericColumns[0] || "";
+    const defaultScatterX = numericColumns[0] || "";
+    const defaultScatterY = numericColumns[1] || numericColumns[0] || "";
+    const defaultPieLabel = nonNumericColumns[0] || columnNames[0] || "";
+    const defaultPieValue = numericColumns[0] || "";
+
+    setBarConfig((prev) => ({
+      ...prev,
+      labelCol:
+        prev.labelCol && columnNames.includes(prev.labelCol)
+          ? prev.labelCol
+          : defaultBarLabel,
+      valueCol:
+        prev.valueCol && numericColumns.includes(prev.valueCol)
+          ? prev.valueCol
+          : defaultBarValue,
+    }));
+
+    setLineConfig((prev) => ({
+      ...prev,
+      xCol:
+        prev.xCol && columnNames.includes(prev.xCol)
+          ? prev.xCol
+          : defaultLineX,
+      yCol:
+        prev.yCol && numericColumns.includes(prev.yCol)
+          ? prev.yCol
+          : defaultLineY,
+    }));
+
+    setScatterConfig((prev) => ({
+      ...prev,
+      xCol:
+        prev.xCol && numericColumns.includes(prev.xCol)
+          ? prev.xCol
+          : defaultScatterX,
+      yCol:
+        prev.yCol &&
+        numericColumns.includes(prev.yCol) &&
+        (!prev.xCol || prev.yCol !== prev.xCol || numericColumns.length === 1)
+          ? prev.yCol
+          : defaultScatterY,
+    }));
+
+    setPieConfig((prev) => ({
+      ...prev,
+      labelCol:
+        prev.labelCol && columnNames.includes(prev.labelCol)
+          ? prev.labelCol
+          : defaultPieLabel,
+      valueCol:
+        prev.valueCol && numericColumns.includes(prev.valueCol)
+          ? prev.valueCol
+          : defaultPieValue,
+    }));
+  }, [columnNames, nonNumericColumns, numericColumns]);
 
   useEffect(() => {
     if (!actionNotice) {
@@ -419,6 +573,7 @@ export function Message({
                     type="button"
                     className="text-xs text-primary underline"
                     onClick={() => onClarifyingAnswer(question)}
+                    aria-label={`Answer clarifying question: ${question}`}
                   >
                     Answer
                   </button>
@@ -529,7 +684,7 @@ export function Message({
     return (
       <Card className="mt-4">
         <details>
-          <summary className="cursor-pointer list-none px-6 py-4">
+          <summary className="cursor-pointer list-none px-6 py-4" aria-label="Toggle result table">
             <div className="flex items-center justify-between gap-3">
               <CardTitle className="text-sm flex items-center gap-2">
                 <TableIcon size={16} />
@@ -540,7 +695,8 @@ export function Message({
           </summary>
           <CardContent className="pt-0">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm" aria-label="Query result table">
+                <caption className="sr-only">Query results</caption>
                 <thead>
                   <tr className="border-b">
                     {columnNames.map((key) => (
@@ -582,6 +738,7 @@ export function Message({
                     onClick={handlePrevPage}
                     disabled={tablePage === 0}
                     className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Go to previous result page"
                   >
                     <ChevronLeft size={14} />
                     Previous
@@ -594,6 +751,7 @@ export function Message({
                     onClick={handleNextPage}
                     disabled={tablePage >= totalPages - 1}
                     className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Go to next result page"
                   >
                     Next
                     <ChevronRight size={14} />
@@ -721,6 +879,391 @@ export function Message({
       );
     }
 
+    const interactiveChartType: InteractiveChartType | null =
+      resolvedVizHint === "bar_chart" ||
+      resolvedVizHint === "line_chart" ||
+      resolvedVizHint === "scatter" ||
+      resolvedVizHint === "pie_chart"
+        ? resolvedVizHint
+        : null;
+
+    const chartTooltipDescription = chartTooltip?.detail
+      ? `${chartTooltip.title} · ${chartTooltip.detail}`
+      : chartTooltip?.title || null;
+
+    const renderChartSettings = (chartType: InteractiveChartType) => {
+      if (!showChartSettings) {
+        return null;
+      }
+
+      const commonClassName = "h-8 rounded-md border border-input bg-background px-2 text-xs";
+
+      if (chartType === "bar_chart") {
+        return (
+          <Card className="mt-2">
+            <CardContent className="space-y-3 pt-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1 text-xs">
+                  <span className="font-medium">X axis column</span>
+                  <select
+                    className={commonClassName}
+                    value={barConfig.labelCol}
+                    aria-label="Bar chart X axis column"
+                    onChange={(event) =>
+                      setBarConfig((prev) => ({ ...prev, labelCol: event.target.value }))
+                    }
+                  >
+                    {columnNames.map((column) => (
+                      <option key={`bar-label-${column}`} value={column}>
+                        {column}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="space-y-1 text-xs">
+                  <span className="font-medium">Y axis column</span>
+                  <select
+                    className={commonClassName}
+                    value={barConfig.valueCol}
+                    aria-label="Bar chart Y axis column"
+                    onChange={(event) =>
+                      setBarConfig((prev) => ({ ...prev, valueCol: event.target.value }))
+                    }
+                  >
+                    {numericColumns.map((column) => (
+                      <option key={`bar-value-${column}`} value={column}>
+                        {column}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1 text-xs">
+                  <span className="font-medium">Max bars: {barConfig.maxItems}</span>
+                  <input
+                    type="range"
+                    min={2}
+                    max={50}
+                    value={barConfig.maxItems}
+                    aria-label="Bar chart max bars"
+                    onChange={(event) =>
+                      setBarConfig((prev) => ({ ...prev, maxItems: Number(event.target.value) }))
+                    }
+                  />
+                </label>
+                <label className="space-y-1 text-xs">
+                  <span className="font-medium">Zoom: {barConfig.zoom.toFixed(1)}x</span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={2}
+                    step={0.1}
+                    value={barConfig.zoom}
+                    aria-label="Bar chart zoom"
+                    onChange={(event) =>
+                      setBarConfig((prev) => ({ ...prev, zoom: Number(event.target.value) }))
+                    }
+                  />
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={barConfig.showLegend}
+                    onChange={(event) =>
+                      setBarConfig((prev) => ({ ...prev, showLegend: event.target.checked }))
+                    }
+                  />
+                  Show legend
+                </label>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      }
+
+      if (chartType === "line_chart") {
+        return (
+          <Card className="mt-2">
+            <CardContent className="space-y-3 pt-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1 text-xs">
+                  <span className="font-medium">X axis column</span>
+                  <select
+                    className={commonClassName}
+                    value={lineConfig.xCol}
+                    aria-label="Line chart X axis column"
+                    onChange={(event) =>
+                      setLineConfig((prev) => ({ ...prev, xCol: event.target.value }))
+                    }
+                  >
+                    {columnNames.map((column) => (
+                      <option key={`line-x-${column}`} value={column}>
+                        {column}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="space-y-1 text-xs">
+                  <span className="font-medium">Y axis column</span>
+                  <select
+                    className={commonClassName}
+                    value={lineConfig.yCol}
+                    aria-label="Line chart Y axis column"
+                    onChange={(event) =>
+                      setLineConfig((prev) => ({ ...prev, yCol: event.target.value }))
+                    }
+                  >
+                    {numericColumns.map((column) => (
+                      <option key={`line-y-${column}`} value={column}>
+                        {column}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1 text-xs">
+                  <span className="font-medium">Max points: {lineConfig.maxItems}</span>
+                  <input
+                    type="range"
+                    min={2}
+                    max={120}
+                    value={lineConfig.maxItems}
+                    aria-label="Line chart max points"
+                    onChange={(event) =>
+                      setLineConfig((prev) => ({ ...prev, maxItems: Number(event.target.value) }))
+                    }
+                  />
+                </label>
+                <label className="space-y-1 text-xs">
+                  <span className="font-medium">Zoom: {lineConfig.zoom.toFixed(1)}x</span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={3}
+                    step={0.1}
+                    value={lineConfig.zoom}
+                    aria-label="Line chart zoom"
+                    onChange={(event) =>
+                      setLineConfig((prev) => ({ ...prev, zoom: Number(event.target.value) }))
+                    }
+                  />
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={lineConfig.showLegend}
+                    onChange={(event) =>
+                      setLineConfig((prev) => ({ ...prev, showLegend: event.target.checked }))
+                    }
+                  />
+                  Show legend
+                </label>
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={lineConfig.showGrid}
+                    onChange={(event) =>
+                      setLineConfig((prev) => ({ ...prev, showGrid: event.target.checked }))
+                    }
+                  />
+                  Show grid
+                </label>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      }
+
+      if (chartType === "scatter") {
+        return (
+          <Card className="mt-2">
+            <CardContent className="space-y-3 pt-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1 text-xs">
+                  <span className="font-medium">X axis column</span>
+                  <select
+                    className={commonClassName}
+                    value={scatterConfig.xCol}
+                    aria-label="Scatter chart X axis column"
+                    onChange={(event) =>
+                      setScatterConfig((prev) => ({ ...prev, xCol: event.target.value }))
+                    }
+                  >
+                    {numericColumns.map((column) => (
+                      <option key={`scatter-x-${column}`} value={column}>
+                        {column}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="space-y-1 text-xs">
+                  <span className="font-medium">Y axis column</span>
+                  <select
+                    className={commonClassName}
+                    value={scatterConfig.yCol}
+                    aria-label="Scatter chart Y axis column"
+                    onChange={(event) =>
+                      setScatterConfig((prev) => ({ ...prev, yCol: event.target.value }))
+                    }
+                  >
+                    {numericColumns.map((column) => (
+                      <option key={`scatter-y-${column}`} value={column}>
+                        {column}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1 text-xs">
+                  <span className="font-medium">Max points: {scatterConfig.maxItems}</span>
+                  <input
+                    type="range"
+                    min={2}
+                    max={300}
+                    value={scatterConfig.maxItems}
+                    aria-label="Scatter chart max points"
+                    onChange={(event) =>
+                      setScatterConfig((prev) => ({
+                        ...prev,
+                        maxItems: Number(event.target.value),
+                      }))
+                    }
+                  />
+                </label>
+                <label className="space-y-1 text-xs">
+                  <span className="font-medium">Zoom: {scatterConfig.zoom.toFixed(1)}x</span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={3}
+                    step={0.1}
+                    value={scatterConfig.zoom}
+                    aria-label="Scatter chart zoom"
+                    onChange={(event) =>
+                      setScatterConfig((prev) => ({ ...prev, zoom: Number(event.target.value) }))
+                    }
+                  />
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={scatterConfig.showLegend}
+                    onChange={(event) =>
+                      setScatterConfig((prev) => ({ ...prev, showLegend: event.target.checked }))
+                    }
+                  />
+                  Show legend
+                </label>
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={scatterConfig.showGrid}
+                    onChange={(event) =>
+                      setScatterConfig((prev) => ({ ...prev, showGrid: event.target.checked }))
+                    }
+                  />
+                  Show grid
+                </label>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      }
+
+      return (
+        <Card className="mt-2">
+          <CardContent className="space-y-3 pt-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1 text-xs">
+                <span className="font-medium">Category column</span>
+                <select
+                  className={commonClassName}
+                  value={pieConfig.labelCol}
+                  aria-label="Pie chart category column"
+                  onChange={(event) =>
+                    setPieConfig((prev) => ({ ...prev, labelCol: event.target.value }))
+                  }
+                >
+                  {columnNames.map((column) => (
+                    <option key={`pie-label-${column}`} value={column}>
+                      {column}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1 text-xs">
+                <span className="font-medium">Value column</span>
+                <select
+                  className={commonClassName}
+                  value={pieConfig.valueCol}
+                  aria-label="Pie chart value column"
+                  onChange={(event) =>
+                    setPieConfig((prev) => ({ ...prev, valueCol: event.target.value }))
+                  }
+                >
+                  {numericColumns.map((column) => (
+                    <option key={`pie-value-${column}`} value={column}>
+                      {column}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1 text-xs">
+                <span className="font-medium">Max slices: {pieConfig.maxItems}</span>
+                <input
+                  type="range"
+                  min={2}
+                  max={20}
+                  value={pieConfig.maxItems}
+                  aria-label="Pie chart max slices"
+                  onChange={(event) =>
+                    setPieConfig((prev) => ({ ...prev, maxItems: Number(event.target.value) }))
+                  }
+                />
+              </label>
+              <label className="space-y-1 text-xs">
+                <span className="font-medium">Zoom: {pieConfig.zoom.toFixed(1)}x</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={2.4}
+                  step={0.1}
+                  value={pieConfig.zoom}
+                  aria-label="Pie chart zoom"
+                  onChange={(event) =>
+                    setPieConfig((prev) => ({ ...prev, zoom: Number(event.target.value) }))
+                  }
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={pieConfig.showLegend}
+                  onChange={(event) =>
+                    setPieConfig((prev) => ({ ...prev, showLegend: event.target.checked }))
+                  }
+                />
+                Show legend
+              </label>
+            </div>
+          </CardContent>
+        </Card>
+      );
+    };
+
     const renderFallback = (messageText: string) => (
       <Card className="mt-4">
         <CardHeader className="pb-2">
@@ -730,6 +1273,21 @@ export function Message({
           </CardTitle>
         </CardHeader>
         <CardContent>
+          {interactiveChartType && (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
+                onClick={() => setShowChartSettings((prev) => !prev)}
+                aria-pressed={showChartSettings}
+                aria-label="Toggle chart settings panel"
+              >
+                <Settings2 size={12} />
+                {showChartSettings ? "Hide settings" : "Chart settings"}
+              </button>
+            </div>
+          )}
+          {interactiveChartType && renderChartSettings(interactiveChartType)}
           <p className="text-sm text-muted-foreground">{messageText}</p>
           <p className="mt-2 text-xs text-muted-foreground">
             Tip: switch to the Table tab for raw results.
@@ -739,8 +1297,8 @@ export function Message({
     );
 
     const renderBarChart = () => {
-      const valueCol = numericColumns[0];
-      const labelCol = nonNumericColumns[0] || columnNames[0];
+      const valueCol = barConfig.valueCol || numericColumns[0];
+      const labelCol = barConfig.labelCol || nonNumericColumns[0] || columnNames[0];
       if (!valueCol || !labelCol) {
         return renderFallback("This result shape is not suitable for a bar chart.");
       }
@@ -751,7 +1309,7 @@ export function Message({
           value: toNumber(row[valueCol]),
         }))
         .filter((row) => row.value !== null)
-        .slice(0, 12) as Array<{ label: string; value: number }>;
+        .slice(0, Math.max(2, barConfig.maxItems)) as Array<{ label: string; value: number }>;
 
       if (points.length < 2) {
         return renderFallback("Not enough points to draw a bar chart.");
@@ -771,18 +1329,57 @@ export function Message({
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {points.map((point, index) => (
-              <div key={`${point.label}-${index}`} className="flex items-center gap-2">
-                <div className="w-28 truncate text-xs">{point.label}</div>
-                <div className="h-4 flex-1 rounded bg-secondary overflow-hidden">
-                  <div
-                    className="h-full bg-primary"
-                    style={{ width: `${clampPercent((Math.abs(point.value) / maxValue) * 100)}%` }}
-                  />
-                </div>
-                <div className="w-16 text-right text-xs">{formatMetricNumber(point.value)}</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
+                onClick={() => setShowChartSettings((prev) => !prev)}
+                aria-pressed={showChartSettings}
+                aria-label="Toggle bar chart settings"
+              >
+                <Settings2 size={12} />
+                {showChartSettings ? "Hide settings" : "Chart settings"}
+              </button>
+            </div>
+            {renderChartSettings("bar_chart")}
+            {!barConfig.seriesVisible ? (
+              <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
+                The <code>{valueCol}</code> series is hidden. Re-enable it from the legend toggle.
               </div>
-            ))}
+            ) : (
+              points.map((point, index) => (
+                <div key={`${point.label}-${index}`} className="flex items-center gap-2">
+                  <div className="w-28 truncate text-xs">{point.label}</div>
+                  <div className="h-4 flex-1 rounded bg-secondary overflow-hidden">
+                    <div
+                      className="h-full origin-left bg-primary transition-transform"
+                      style={{
+                        width: `${clampPercent((Math.abs(point.value) / maxValue) * 100)}%`,
+                        transform: `scaleX(${barConfig.zoom})`,
+                      }}
+                      role="img"
+                      tabIndex={0}
+                      aria-label={`${labelCol}: ${point.label}, ${valueCol}: ${formatMetricNumber(point.value)}`}
+                      onMouseEnter={() =>
+                        setChartTooltip({
+                          title: point.label,
+                          detail: `${valueCol}: ${formatMetricNumber(point.value)}`,
+                        })
+                      }
+                      onMouseLeave={() => setChartTooltip(null)}
+                      onFocus={() =>
+                        setChartTooltip({
+                          title: point.label,
+                          detail: `${valueCol}: ${formatMetricNumber(point.value)}`,
+                        })
+                      }
+                      onBlur={() => setChartTooltip(null)}
+                    />
+                  </div>
+                  <div className="w-16 text-right text-xs">{formatMetricNumber(point.value)}</div>
+                </div>
+              ))
+            )}
             <div className="rounded border border-border/80 bg-muted/30 px-2 py-2 text-xs text-muted-foreground">
               <div>
                 <span className="font-medium text-foreground">X axis:</span> {labelCol}
@@ -790,27 +1387,41 @@ export function Message({
               <div>
                 <span className="font-medium text-foreground">Y axis:</span> {valueCol}
               </div>
-              <div className="mt-1 flex items-center gap-2">
-                <span
-                  className="inline-block h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: CHART_COLORS[0] }}
-                />
-                <span>
-                  <span className="font-medium text-foreground">Legend:</span> {valueCol}
-                </span>
-              </div>
+              {barConfig.showLegend && (
+                <div className="mt-1 flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] hover:bg-secondary"
+                    aria-pressed={!barConfig.seriesVisible}
+                    onClick={() =>
+                      setBarConfig((prev) => ({
+                        ...prev,
+                        seriesVisible: !prev.seriesVisible,
+                      }))
+                    }
+                  >
+                    <span
+                      className="inline-block h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: CHART_COLORS[0] }}
+                    />
+                    {barConfig.seriesVisible ? "Hide" : "Show"} {valueCol}
+                  </button>
+                </div>
+              )}
             </div>
+            {chartTooltipDescription && (
+              <p className="text-xs text-muted-foreground" aria-live="polite">
+                {chartTooltipDescription}
+              </p>
+            )}
           </CardContent>
         </Card>
       );
     };
 
     const renderLineChart = () => {
-      const valueCol = numericColumns[0];
-      const xCol =
-        columnNames.find((column) => isDateLikeColumn(column)) ||
-        nonNumericColumns[0] ||
-        columnNames[0];
+      const valueCol = lineConfig.yCol || numericColumns[0];
+      const xCol = lineConfig.xCol || columnNames.find((column) => isDateLikeColumn(column)) || nonNumericColumns[0] || columnNames[0];
       if (!valueCol || !xCol) {
         return renderFallback("This result shape is not suitable for a line chart.");
       }
@@ -821,7 +1432,7 @@ export function Message({
           y: toNumber(row[valueCol]),
         }))
         .filter((row) => row.y !== null)
-        .slice(0, 30) as Array<{ xLabel: string; y: number }>;
+        .slice(0, Math.max(2, lineConfig.maxItems)) as Array<{ xLabel: string; y: number }>;
 
       if (points.length < 2) {
         return renderFallback("Not enough points to draw a line chart.");
@@ -860,21 +1471,42 @@ export function Message({
               Line Chart
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
+                onClick={() => setShowChartSettings((prev) => !prev)}
+                aria-pressed={showChartSettings}
+                aria-label="Toggle line chart settings"
+              >
+                <Settings2 size={12} />
+                {showChartSettings ? "Hide settings" : "Chart settings"}
+              </button>
+            </div>
+            {renderChartSettings("line_chart")}
             <div className="overflow-x-auto">
-              <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[360px] w-full h-[280px]">
+              <svg
+                viewBox={`0 0 ${width} ${height}`}
+                className="min-w-[360px] h-[280px]"
+                role="img"
+                aria-label={`Line chart of ${valueCol} by ${xCol}`}
+                style={{ width: `${Math.max(100, lineConfig.zoom * 100)}%` }}
+              >
                 {yTicks.map((tick, index) => {
                   const y = padTop + (1 - (tick - minY) / yRange) * plotHeight;
                   return (
                     <g key={`line-y-tick-${index}`}>
-                      <line
-                        x1={padLeft}
-                        y1={y}
-                        x2={width - padRight}
-                        y2={y}
-                        stroke="#e2e8f0"
-                        strokeDasharray="3 3"
-                      />
+                      {lineConfig.showGrid && (
+                        <line
+                          x1={padLeft}
+                          y1={y}
+                          x2={width - padRight}
+                          y2={y}
+                          stroke="#e2e8f0"
+                          strokeDasharray="3 3"
+                        />
+                      )}
                       <text
                         x={padLeft - 8}
                         y={y + 4}
@@ -906,11 +1538,37 @@ export function Message({
                   stroke="#2563eb"
                   strokeWidth="2.5"
                   points={linePoints}
+                  opacity={lineConfig.seriesVisible ? 1 : 0.2}
                 />
-                {points.map((point, index) => {
+                {lineConfig.seriesVisible &&
+                  points.map((point, index) => {
                   const x = padLeft + (index / (points.length - 1)) * plotWidth;
                   const y = padTop + (1 - (point.y - minY) / yRange) * plotHeight;
-                  return <circle key={`${point.xLabel}-${index}`} cx={x} cy={y} r="3" fill="#2563eb" />;
+                  return (
+                    <circle
+                      key={`${point.xLabel}-${index}`}
+                      cx={x}
+                      cy={y}
+                      r="3"
+                      fill="#2563eb"
+                      tabIndex={0}
+                      aria-label={`${xCol}: ${point.xLabel}, ${valueCol}: ${formatMetricNumber(point.y)}`}
+                      onMouseEnter={() =>
+                        setChartTooltip({
+                          title: point.xLabel,
+                          detail: `${valueCol}: ${formatMetricNumber(point.y)}`,
+                        })
+                      }
+                      onMouseLeave={() => setChartTooltip(null)}
+                      onFocus={() =>
+                        setChartTooltip({
+                          title: point.xLabel,
+                          detail: `${valueCol}: ${formatMetricNumber(point.y)}`,
+                        })
+                      }
+                      onBlur={() => setChartTooltip(null)}
+                    />
+                  );
                 })}
                 {xTickIndexes.map((index) => {
                   const x = padLeft + (index / Math.max(points.length - 1, 1)) * plotWidth;
@@ -949,24 +1607,46 @@ export function Message({
                   {valueCol}
                 </text>
                 <g transform={`translate(${width - padRight - 140}, ${padTop + 6})`}>
-                  <rect x="0" y="0" width="134" height="24" fill="#f8fafc" stroke="#e2e8f0" rx="4" />
-                  <rect x="8" y="9" width="14" height="2.5" fill="#2563eb" />
-                  <text x="28" y="13" fontSize="10" fill="#334155">
-                    {valueCol}
-                  </text>
+                  {lineConfig.showLegend && (
+                    <>
+                      <rect x="0" y="0" width="134" height="24" fill="#f8fafc" stroke="#e2e8f0" rx="4" />
+                      <rect x="8" y="9" width="14" height="2.5" fill="#2563eb" />
+                      <text x="28" y="13" fontSize="10" fill="#334155">
+                        {valueCol}
+                      </text>
+                    </>
+                  )}
                 </g>
               </svg>
             </div>
-            <p className="text-xs text-muted-foreground mt-2">
+            {lineConfig.showLegend && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
+                onClick={() =>
+                  setLineConfig((prev) => ({ ...prev, seriesVisible: !prev.seriesVisible }))
+                }
+                aria-pressed={!lineConfig.seriesVisible}
+              >
+                {lineConfig.seriesVisible ? "Hide" : "Show"} {valueCol}
+              </button>
+            )}
+            <p className="text-xs text-muted-foreground">
               X axis: {xCol} · Y axis: {valueCol} · Legend: {valueCol} · {points.length} points
             </p>
+            {chartTooltipDescription && (
+              <p className="text-xs text-muted-foreground" aria-live="polite">
+                {chartTooltipDescription}
+              </p>
+            )}
           </CardContent>
         </Card>
       );
     };
 
     const renderScatter = () => {
-      const [xCol, yCol] = numericColumns;
+      const xCol = scatterConfig.xCol || numericColumns[0];
+      const yCol = scatterConfig.yCol || numericColumns[1] || numericColumns[0];
       if (!xCol || !yCol) {
         return renderFallback("Scatter plot needs at least two numeric columns.");
       }
@@ -977,7 +1657,7 @@ export function Message({
           y: toNumber(row[yCol]),
         }))
         .filter((row) => row.x !== null && row.y !== null)
-        .slice(0, 120) as Array<{ x: number; y: number }>;
+        .slice(0, Math.max(2, scatterConfig.maxItems)) as Array<{ x: number; y: number }>;
 
       if (points.length < 2) {
         return renderFallback("Not enough numeric points for scatter plot.");
@@ -1010,21 +1690,42 @@ export function Message({
               Scatter Plot
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
+                onClick={() => setShowChartSettings((prev) => !prev)}
+                aria-pressed={showChartSettings}
+                aria-label="Toggle scatter chart settings"
+              >
+                <Settings2 size={12} />
+                {showChartSettings ? "Hide settings" : "Chart settings"}
+              </button>
+            </div>
+            {renderChartSettings("scatter")}
             <div className="overflow-x-auto">
-              <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[360px] w-full h-[280px]">
+              <svg
+                viewBox={`0 0 ${width} ${height}`}
+                className="min-w-[360px] h-[280px]"
+                role="img"
+                aria-label={`Scatter plot of ${yCol} by ${xCol}`}
+                style={{ width: `${Math.max(100, scatterConfig.zoom * 100)}%` }}
+              >
                 {yTicks.map((tick, index) => {
                   const y = padTop + (1 - (tick - minY) / yRange) * plotHeight;
                   return (
                     <g key={`scatter-y-tick-${index}`}>
-                      <line
-                        x1={padLeft}
-                        y1={y}
-                        x2={width - padRight}
-                        y2={y}
-                        stroke="#e2e8f0"
-                        strokeDasharray="3 3"
-                      />
+                      {scatterConfig.showGrid && (
+                        <line
+                          x1={padLeft}
+                          y1={y}
+                          x2={width - padRight}
+                          y2={y}
+                          stroke="#e2e8f0"
+                          strokeDasharray="3 3"
+                        />
+                      )}
                       <text
                         x={padLeft - 8}
                         y={y + 4}
@@ -1041,14 +1742,16 @@ export function Message({
                   const x = padLeft + ((tick - minX) / xRange) * plotWidth;
                   return (
                     <g key={`scatter-x-tick-${index}`}>
-                      <line
-                        x1={x}
-                        y1={padTop}
-                        x2={x}
-                        y2={height - padBottom}
-                        stroke="#e2e8f0"
-                        strokeDasharray="3 3"
-                      />
+                      {scatterConfig.showGrid && (
+                        <line
+                          x1={x}
+                          y1={padTop}
+                          x2={x}
+                          y2={height - padBottom}
+                          stroke="#e2e8f0"
+                          strokeDasharray="3 3"
+                        />
+                      )}
                       <text
                         x={x}
                         y={height - padBottom + 16}
@@ -1078,7 +1781,32 @@ export function Message({
                 {points.map((point, index) => {
                   const x = padLeft + ((point.x - minX) / xRange) * plotWidth;
                   const y = padTop + (1 - (point.y - minY) / yRange) * plotHeight;
-                  return <circle key={`scatter-${index}`} cx={x} cy={y} r="3.2" fill="#2563eb" opacity="0.85" />;
+                  return (
+                    <circle
+                      key={`scatter-${index}`}
+                      cx={x}
+                      cy={y}
+                      r="3.2"
+                      fill="#2563eb"
+                      opacity={scatterConfig.seriesVisible ? 0.85 : 0.2}
+                      tabIndex={0}
+                      aria-label={`${xCol}: ${formatMetricNumber(point.x)}, ${yCol}: ${formatMetricNumber(point.y)}`}
+                      onMouseEnter={() =>
+                        setChartTooltip({
+                          title: `${xCol}: ${formatMetricNumber(point.x)}`,
+                          detail: `${yCol}: ${formatMetricNumber(point.y)}`,
+                        })
+                      }
+                      onMouseLeave={() => setChartTooltip(null)}
+                      onFocus={() =>
+                        setChartTooltip({
+                          title: `${xCol}: ${formatMetricNumber(point.x)}`,
+                          detail: `${yCol}: ${formatMetricNumber(point.y)}`,
+                        })
+                      }
+                      onBlur={() => setChartTooltip(null)}
+                    />
+                  );
                 })}
                 <text
                   x={padLeft + plotWidth / 2}
@@ -1100,38 +1828,69 @@ export function Message({
                   {yCol}
                 </text>
                 <g transform={`translate(${width - padRight - 188}, ${padTop + 6})`}>
-                  <rect x="0" y="0" width="182" height="24" fill="#f8fafc" stroke="#e2e8f0" rx="4" />
-                  <circle cx="12" cy="12" r="3.2" fill="#2563eb" />
-                  <text x="24" y="15" fontSize="10" fill="#334155">
-                    {`${xCol} vs ${yCol}`}
-                  </text>
+                  {scatterConfig.showLegend && (
+                    <>
+                      <rect x="0" y="0" width="182" height="24" fill="#f8fafc" stroke="#e2e8f0" rx="4" />
+                      <circle cx="12" cy="12" r="3.2" fill="#2563eb" />
+                      <text x="24" y="15" fontSize="10" fill="#334155">
+                        {`${xCol} vs ${yCol}`}
+                      </text>
+                    </>
+                  )}
                 </g>
               </svg>
             </div>
-            <p className="text-xs text-muted-foreground mt-2">
+            {scatterConfig.showLegend && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
+                onClick={() =>
+                  setScatterConfig((prev) => ({
+                    ...prev,
+                    seriesVisible: !prev.seriesVisible,
+                  }))
+                }
+                aria-pressed={!scatterConfig.seriesVisible}
+              >
+                {scatterConfig.seriesVisible ? "Hide" : "Show"} points
+              </button>
+            )}
+            <p className="text-xs text-muted-foreground">
               X axis: {xCol} · Y axis: {yCol} · Legend: points · {points.length} points
             </p>
+            {chartTooltipDescription && (
+              <p className="text-xs text-muted-foreground" aria-live="polite">
+                {chartTooltipDescription}
+              </p>
+            )}
           </CardContent>
         </Card>
       );
     };
 
     const renderPie = () => {
-      const valueCol = numericColumns[0];
-      const labelCol = nonNumericColumns[0] || columnNames[0];
+      const valueCol = pieConfig.valueCol || numericColumns[0];
+      const labelCol = pieConfig.labelCol || nonNumericColumns[0] || columnNames[0];
       if (!valueCol || !labelCol) {
         return renderFallback("This result shape is not suitable for a pie chart.");
       }
-      const slices = rowObjects
+
+      const allSlices = rowObjects
         .map((row) => ({
           label: String(row[labelCol] ?? ""),
           value: toNumber(row[valueCol]),
         }))
         .filter((row) => row.value !== null && row.value > 0)
-        .slice(0, 8) as Array<{ label: string; value: number }>;
-      if (slices.length < 2) {
+        .slice(0, Math.max(2, pieConfig.maxItems)) as Array<{ label: string; value: number }>;
+      const slices = allSlices.filter((slice) => !hiddenPieLabels.includes(slice.label));
+
+      if (allSlices.length < 2) {
         return renderFallback("Not enough positive categories for a pie chart.");
       }
+      if (slices.length < 1) {
+        return renderFallback("All slices are hidden. Re-enable legend categories.");
+      }
+
       const total = slices.reduce((sum, slice) => sum + slice.value, 0);
       if (total <= 0) {
         return renderFallback("Pie values are not positive.");
@@ -1144,6 +1903,7 @@ export function Message({
         const color = CHART_COLORS[index % CHART_COLORS.length];
         return `${color} ${start}deg ${end}deg`;
       });
+      const pieSize = Math.max(120, Math.round(160 * pieConfig.zoom));
 
       return (
         <Card className="mt-4">
@@ -1153,31 +1913,102 @@ export function Message({
               Pie Chart
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
+                onClick={() => setShowChartSettings((prev) => !prev)}
+                aria-pressed={showChartSettings}
+                aria-label="Toggle pie chart settings"
+              >
+                <Settings2 size={12} />
+                {showChartSettings ? "Hide settings" : "Chart settings"}
+              </button>
+              {hiddenPieLabels.length > 0 && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
+                  onClick={() => setHiddenPieLabels([])}
+                >
+                  Reset hidden slices
+                </button>
+              )}
+            </div>
+            {renderChartSettings("pie_chart")}
             <div className="flex flex-wrap items-start gap-4">
               <div
-                className="h-40 w-40 rounded-full border border-border"
+                className="rounded-full border border-border"
                 style={{ background: `conic-gradient(${stops.join(", ")})` }}
-              />
-              <ul className="flex-1 space-y-1 text-xs">
-                {slices.map((slice, index) => (
-                  <li key={`${slice.label}-${index}`} className="flex items-center gap-2">
-                    <span
-                      className="inline-block h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}
-                    />
-                    <span className="flex-1 truncate">{slice.label}</span>
-                    <span>
-                      {formatMetricNumber(slice.value)} (
-                      {((slice.value / total) * 100).toFixed(1)}%)
-                    </span>
-                  </li>
-                ))}
-              </ul>
+                role="img"
+                aria-label={`Pie chart with ${slices.length} visible categories`}
+                aria-describedby={chartTooltipDescription ? `${message.id}-viz-tooltip` : undefined}
+                onMouseLeave={() => setChartTooltip(null)}
+                onBlur={() => setChartTooltip(null)}
+              >
+                <div style={{ height: pieSize, width: pieSize }} />
+              </div>
+              {pieConfig.showLegend && (
+                <ul className="flex-1 space-y-1 text-xs" aria-label="Pie chart legend">
+                  {allSlices.map((slice, index) => {
+                    const isHidden = hiddenPieLabels.includes(slice.label);
+                    return (
+                      <li key={`${slice.label}-${index}`} className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="inline-flex w-full items-center gap-2 rounded border border-border px-2 py-1 text-left hover:bg-secondary"
+                          aria-pressed={!isHidden}
+                          onClick={() =>
+                            setHiddenPieLabels((prev) =>
+                              prev.includes(slice.label)
+                                ? prev.filter((label) => label !== slice.label)
+                                : [...prev, slice.label]
+                            )
+                          }
+                          onMouseEnter={() =>
+                            setChartTooltip({
+                              title: slice.label,
+                              detail: `${formatMetricNumber(slice.value)} (${((slice.value / (allSlices.reduce((sum, item) => sum + item.value, 0) || 1)) * 100).toFixed(1)}%)`,
+                            })
+                          }
+                          onFocus={() =>
+                            setChartTooltip({
+                              title: slice.label,
+                              detail: `${formatMetricNumber(slice.value)} (${((slice.value / (allSlices.reduce((sum, item) => sum + item.value, 0) || 1)) * 100).toFixed(1)}%)`,
+                            })
+                          }
+                          onMouseLeave={() => setChartTooltip(null)}
+                          onBlur={() => setChartTooltip(null)}
+                        >
+                          <span
+                            className="inline-block h-2.5 w-2.5 rounded-full"
+                            style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}
+                          />
+                          <span className={`flex-1 truncate ${isHidden ? "line-through opacity-60" : ""}`}>
+                            {slice.label}
+                          </span>
+                          <span className={isHidden ? "opacity-60" : ""}>
+                            {formatMetricNumber(slice.value)}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
-            <p className="text-xs text-muted-foreground mt-2">
+            <p className="text-xs text-muted-foreground">
               Legend: {labelCol} categories · Slice value: {valueCol}
             </p>
+            {chartTooltipDescription && (
+              <p
+                id={`${message.id}-viz-tooltip`}
+                className="text-xs text-muted-foreground"
+                aria-live="polite"
+              >
+                {chartTooltipDescription}
+              </p>
+            )}
           </CardContent>
         </Card>
       );
@@ -1260,6 +2091,34 @@ export function Message({
     }
   }, [activeTab, tabs]);
 
+  const focusTabByIndex = (index: number) => {
+    const nextIndex = (index + tabs.length) % tabs.length;
+    tabButtonRefs.current[nextIndex]?.focus();
+    setActiveTab(tabs[nextIndex].id);
+  };
+
+  const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      focusTabByIndex(index + 1);
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      focusTabByIndex(index - 1);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      focusTabByIndex(0);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      focusTabByIndex(tabs.length - 1);
+    }
+  };
+
   const assistantMeta = !isUser && (message.answer_source || message.tool_approval_required);
   const showActions = !isUser && (Boolean(activeSql) || hasTable);
 
@@ -1313,9 +2172,16 @@ export function Message({
   };
 
   return (
-    <div className={cn("flex gap-3 mb-4", isUser ? "justify-end" : "justify-start")}>
+    <div
+      className={cn("flex gap-3 mb-4", isUser ? "justify-end" : "justify-start")}
+      role="article"
+      aria-label={isUser ? "User message" : "Assistant message"}
+    >
       {!isUser && (
-        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground">
+        <div
+          className="flex-shrink-0 w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground"
+          aria-hidden="true"
+        >
           <Bot size={18} />
         </div>
       )}
@@ -1352,6 +2218,7 @@ export function Message({
                   type="button"
                   className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-secondary"
                   onClick={copySql}
+                  aria-label="Copy generated SQL"
                 >
                   <Copy size={12} />
                   Copy SQL
@@ -1362,12 +2229,17 @@ export function Message({
                   type="button"
                   className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-secondary"
                   onClick={downloadCsv}
+                  aria-label="Download query results as CSV"
                 >
                   <Download size={12} />
                   Download CSV
                 </button>
               )}
-              {actionNotice && <span className="text-muted-foreground">{actionNotice}</span>}
+              {actionNotice && (
+                <span className="text-muted-foreground" role="status" aria-live="polite">
+                  {actionNotice}
+                </span>
+              )}
             </div>
           )}
 
@@ -1375,11 +2247,23 @@ export function Message({
 
           {!isUser && displayMode === "tabbed" ? (
             <>
-              <div className="mb-2 flex flex-wrap gap-2 border-b border-border pb-2">
-                {tabs.map((tab) => (
+              <div
+                className="mb-2 flex flex-wrap gap-2 border-b border-border pb-2"
+                role="tablist"
+                aria-label="Assistant response sections"
+                id={tabListId}
+              >
+                {tabs.map((tab, index) => (
                   <button
                     key={tab.id}
                     type="button"
+                    ref={(element) => {
+                      tabButtonRefs.current[index] = element;
+                    }}
+                    role="tab"
+                    id={`${message.id}-tab-${tab.id}`}
+                    aria-selected={activeTab === tab.id}
+                    aria-controls={`${message.id}-panel-${tab.id}`}
                     className={cn(
                       "rounded px-2.5 py-1 text-xs transition",
                       activeTab === tab.id
@@ -1387,12 +2271,19 @@ export function Message({
                         : "bg-secondary text-foreground hover:bg-secondary/80"
                     )}
                     onClick={() => setActiveTab(tab.id)}
+                    onKeyDown={(event) => handleTabKeyDown(event, index)}
                   >
                     {tab.label}
                   </button>
                 ))}
               </div>
-              {renderTabContent()}
+              <div
+                role="tabpanel"
+                id={activeTabPanelId}
+                aria-labelledby={`${message.id}-tab-${activeTab}`}
+              >
+                {renderTabContent()}
+              </div>
             </>
           ) : (
             <>
@@ -1423,7 +2314,10 @@ export function Message({
       </div>
 
       {isUser && (
-        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-secondary flex items-center justify-center text-secondary-foreground">
+        <div
+          className="flex-shrink-0 w-8 h-8 rounded-full bg-secondary flex items-center justify-center text-secondary-foreground"
+          aria-hidden="true"
+        >
           <User size={18} />
         </div>
       )}

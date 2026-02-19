@@ -11,7 +11,7 @@
 
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -33,6 +33,7 @@ import {
   History,
   Plus,
   Table2,
+  Keyboard,
 } from "lucide-react";
 import { Message } from "./Message";
 import { AgentStatus } from "../agents/AgentStatus";
@@ -174,13 +175,16 @@ export function ChatInterface() {
   const [schemaError, setSchemaError] = useState<string | null>(null);
   const [schemaSearch, setSchemaSearch] = useState("");
   const [selectedSchemaTable, setSelectedSchemaTable] = useState<string | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const restoreInputFocus = () => {
+  const shortcutsCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const toolApprovalApproveButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreInputFocus = useCallback(() => {
     window.requestAnimationFrame(() => {
       inputRef.current?.focus();
     });
-  };
+  }, []);
 
   const serializeMessages = (items: ChatStoreMessage[]): SerializedMessage[] =>
     items.slice(-MAX_CONVERSATION_MESSAGES).map((message) => ({
@@ -797,6 +801,80 @@ export function ChatInterface() {
     }
   };
 
+  useEffect(() => {
+    if (toolApprovalOpen) {
+      window.requestAnimationFrame(() => {
+        toolApprovalApproveButtonRef.current?.focus();
+      });
+    }
+  }, [toolApprovalOpen]);
+
+  useEffect(() => {
+    if (shortcutsOpen) {
+      window.requestAnimationFrame(() => {
+        shortcutsCloseButtonRef.current?.focus();
+      });
+    }
+  }, [shortcutsOpen]);
+
+  useEffect(() => {
+    const handleGlobalShortcuts = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName?.toLowerCase();
+      const isEditable =
+        !!target &&
+        (target.isContentEditable ||
+          tagName === "input" ||
+          tagName === "textarea" ||
+          tagName === "select");
+      const hasModifier = event.metaKey || event.ctrlKey;
+      const key = event.key.toLowerCase();
+
+      if (event.key === "Escape") {
+        if (toolApprovalOpen) {
+          event.preventDefault();
+          setToolApprovalOpen(false);
+          restoreInputFocus();
+          return;
+        }
+        if (shortcutsOpen) {
+          event.preventDefault();
+          setShortcutsOpen(false);
+          restoreInputFocus();
+          return;
+        }
+      }
+
+      if (hasModifier && key === "k") {
+        event.preventDefault();
+        restoreInputFocus();
+        return;
+      }
+
+      if (hasModifier && key === "h") {
+        event.preventDefault();
+        setIsHistorySidebarOpen((prev) => !prev);
+        return;
+      }
+
+      if (hasModifier && key === "/") {
+        event.preventDefault();
+        setShortcutsOpen((prev) => !prev);
+        return;
+      }
+
+      if (!hasModifier && !isEditable && event.key === "/") {
+        event.preventDefault();
+        restoreInputFocus();
+      }
+    };
+
+    window.addEventListener("keydown", handleGlobalShortcuts);
+    return () => {
+      window.removeEventListener("keydown", handleGlobalShortcuts);
+    };
+  }, [restoreInputFocus, shortcutsOpen, toolApprovalOpen]);
+
   // Handle clear conversation
   const handleClear = () => {
     if (confirm("Clear all messages?")) {
@@ -841,95 +919,9 @@ export function ChatInterface() {
   };
 
   return (
-    <div className="flex h-full min-h-0">
-      <aside
-        className={`hidden border-r bg-muted/20 transition-all duration-200 lg:flex lg:flex-col ${
-          isHistorySidebarOpen ? "w-72" : "w-14"
-        }`}
-      >
-        <div className="flex items-center justify-between border-b px-2 py-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setIsHistorySidebarOpen((prev) => !prev)}
-            aria-label="Toggle conversation history sidebar"
-          >
-            {isHistorySidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-          </Button>
-          {isHistorySidebarOpen && (
-            <>
-              <div className="text-xs font-medium">Conversations</div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleStartNewConversation}
-                aria-label="Start new conversation"
-              >
-                <Plus size={15} />
-              </Button>
-            </>
-          )}
-        </div>
-        {isHistorySidebarOpen ? (
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {sortedConversationHistory.length === 0 ? (
-              <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
-                No saved conversations yet.
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {sortedConversationHistory.map((snapshot) => {
-                  const isActive = snapshot.frontendSessionId === frontendSessionId;
-                  return (
-                    <div
-                      key={snapshot.frontendSessionId}
-                      className={`rounded border ${
-                        isActive ? "border-primary/50 bg-primary/5" : "border-border"
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => handleLoadConversation(snapshot)}
-                        className="w-full px-2 py-2 text-left"
-                      >
-                        <p className="truncate text-xs font-medium">{snapshot.title}</p>
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          {formatSnapshotTime(snapshot.updatedAt)}
-                        </p>
-                        {snapshot.targetDatabaseId && (
-                          <p className="mt-1 text-[11px] text-muted-foreground">
-                            DB: {snapshot.targetDatabaseId}
-                          </p>
-                        )}
-                      </button>
-                      <div className="flex justify-end border-t px-1 py-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 px-2 text-[11px]"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleDeleteConversation(snapshot.frontendSessionId);
-                          }}
-                        >
-                          <Trash2 size={12} />
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="flex flex-1 items-center justify-center text-muted-foreground">
-            <History size={16} />
-          </div>
-        )}
-      </aside>
-
+    <div className="flex h-full min-h-0" role="main" aria-label="DataChat workspace">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex-shrink-0 border-b p-4">
+        <div className="flex-shrink-0 border-b p-4" role="banner">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Button
@@ -980,9 +972,19 @@ export function ChatInterface() {
                 size="sm"
                 onClick={handleStartNewConversation}
                 disabled={isLoading}
+                aria-label="Start new conversation"
               >
                 <Plus size={14} />
                 New
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShortcutsOpen(true)}
+                aria-label="Open keyboard shortcuts"
+              >
+                <Keyboard size={14} />
+                Shortcuts
               </Button>
               <Button asChild variant="ghost" size="sm">
                 <Link href="/settings">Settings</Link>
@@ -1006,7 +1008,7 @@ export function ChatInterface() {
                   }`}
                 />
                 {isLoading && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
-                <span className="text-muted-foreground">
+                <span className="text-muted-foreground" role="status" aria-live="polite">
                   {isLoading
                     ? formatWaitingChipLabel(loadingElapsedSeconds)
                     : isConnected
@@ -1022,6 +1024,7 @@ export function ChatInterface() {
                   size="sm"
                   onClick={handleClear}
                   disabled={isLoading}
+                  aria-label="Clear conversation"
                 >
                   <Trash2 size={14} />
                   Clear
@@ -1032,8 +1035,105 @@ export function ChatInterface() {
         </div>
 
         <div className="flex min-h-0 flex-1">
+          <aside
+            className={`hidden border-r bg-muted/20 transition-all duration-200 lg:flex lg:flex-col ${
+              isHistorySidebarOpen ? "w-72" : "w-14"
+            }`}
+            role="complementary"
+            aria-label="Conversation history sidebar"
+          >
+            <div className="flex items-center justify-between border-b px-2 py-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsHistorySidebarOpen((prev) => !prev)}
+                aria-label="Toggle conversation history sidebar"
+              >
+                {isHistorySidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+              </Button>
+              {isHistorySidebarOpen && (
+                <>
+                  <div className="text-xs font-medium">Conversations</div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleStartNewConversation}
+                    aria-label="Start new conversation"
+                  >
+                    <Plus size={15} />
+                  </Button>
+                </>
+              )}
+            </div>
+            {isHistorySidebarOpen ? (
+              <div className="min-h-0 flex-1 overflow-y-auto p-2" role="list" aria-label="Saved conversations">
+                {sortedConversationHistory.length === 0 ? (
+                  <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
+                    No saved conversations yet.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {sortedConversationHistory.map((snapshot) => {
+                      const isActive = snapshot.frontendSessionId === frontendSessionId;
+                      return (
+                        <div
+                          key={snapshot.frontendSessionId}
+                          className={`rounded border ${
+                            isActive ? "border-primary/50 bg-primary/5" : "border-border"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleLoadConversation(snapshot)}
+                            className="w-full px-2 py-2 text-left"
+                            aria-label={`Load conversation ${snapshot.title}`}
+                            aria-current={isActive ? "true" : undefined}
+                          >
+                            <p className="truncate text-xs font-medium">{snapshot.title}</p>
+                            <p className="mt-1 text-[11px] text-muted-foreground">
+                              {formatSnapshotTime(snapshot.updatedAt)}
+                            </p>
+                            {snapshot.targetDatabaseId && (
+                              <p className="mt-1 text-[11px] text-muted-foreground">
+                                DB: {snapshot.targetDatabaseId}
+                              </p>
+                            )}
+                          </button>
+                          <div className="flex justify-end border-t px-1 py-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2 text-[11px]"
+                              aria-label={`Delete conversation ${snapshot.title}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleDeleteConversation(snapshot.frontendSessionId);
+                              }}
+                            >
+                              <Trash2 size={12} />
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-1 items-center justify-center text-muted-foreground">
+                <History size={16} />
+              </div>
+            )}
+          </aside>
+
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex-1 overflow-y-auto p-4">
+              <section
+                role="log"
+                aria-live="polite"
+                aria-relevant="additions text"
+                aria-label="Chat message stream"
+              >
               {!isInitialized && !setupCompleted && (
                 <SystemSetup
                   steps={setupSteps}
@@ -1163,6 +1263,7 @@ export function ChatInterface() {
                 </Card>
               )}
               <div ref={messagesEndRef} />
+              </section>
             </div>
 
             <div className="flex-shrink-0 border-t p-4">
@@ -1193,11 +1294,13 @@ export function ChatInterface() {
                   placeholder="Ask a question about your data..."
                   disabled={isLoading || !isInitialized}
                   className="flex-1"
+                  aria-label="Chat query input"
                 />
                 <Button
                   onClick={handleSend}
                   disabled={!input.trim() || isLoading || !isInitialized}
                   size="icon"
+                  aria-label="Send chat message"
                 >
                   {isLoading ? (
                     <Loader2 size={18} className="animate-spin" />
@@ -1222,6 +1325,8 @@ export function ChatInterface() {
             className={`hidden border-l bg-muted/20 transition-all duration-200 xl:flex xl:flex-col ${
               isSchemaSidebarOpen ? "w-80" : "w-14"
             }`}
+            role="complementary"
+            aria-label="Schema explorer sidebar"
           >
             <div className="flex items-center justify-between border-b px-2 py-2">
               <Button
@@ -1242,6 +1347,7 @@ export function ChatInterface() {
                     onChange={(event) => setSchemaSearch(event.target.value)}
                     placeholder="Search table or column..."
                     className="h-8 text-xs"
+                    aria-label="Search schema tables and columns"
                   />
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto p-2">
@@ -1271,6 +1377,7 @@ export function ChatInterface() {
                             className={`cursor-pointer list-none px-2 py-2 text-xs ${
                               isSelected ? "bg-primary/5" : ""
                             }`}
+                            aria-label={`Toggle schema table ${fullName}`}
                             onClick={() => setSelectedSchemaTable(fullName)}
                           >
                             <div className="flex items-center justify-between gap-2">
@@ -1293,6 +1400,7 @@ export function ChatInterface() {
                             <button
                               type="button"
                               className="mb-2 inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] hover:bg-muted"
+                              aria-label={`Use table ${fullName} in query`}
                               onClick={() => {
                                 setSelectedSchemaTable(fullName);
                                 setInput(`Show first 100 rows from ${fullName}.`);
@@ -1335,8 +1443,59 @@ export function ChatInterface() {
           </aside>
         </div>
       </div>
+      {shortcutsOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Keyboard shortcuts"
+        >
+          <div className="w-full max-w-md rounded-lg bg-background p-6 shadow-lg">
+            <h3 className="text-base font-semibold">Keyboard shortcuts</h3>
+            <div className="mt-4 space-y-2 text-sm">
+              <div className="flex items-center justify-between rounded border border-border px-3 py-2">
+                <span>Focus query input</span>
+                <code className="text-xs">Ctrl/Cmd + K</code>
+              </div>
+              <div className="flex items-center justify-between rounded border border-border px-3 py-2">
+                <span>Toggle conversation history</span>
+                <code className="text-xs">Ctrl/Cmd + H</code>
+              </div>
+              <div className="flex items-center justify-between rounded border border-border px-3 py-2">
+                <span>Open shortcuts modal</span>
+                <code className="text-xs">Ctrl/Cmd + /</code>
+              </div>
+              <div className="flex items-center justify-between rounded border border-border px-3 py-2">
+                <span>Focus query input</span>
+                <code className="text-xs">/</code>
+              </div>
+              <div className="flex items-center justify-between rounded border border-border px-3 py-2">
+                <span>Close open modal</span>
+                <code className="text-xs">Esc</code>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                ref={shortcutsCloseButtonRef}
+                className="rounded-md border border-border px-3 py-2 text-xs"
+                onClick={() => {
+                  setShortcutsOpen(false);
+                  restoreInputFocus();
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {toolApprovalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Tool approval modal"
+        >
           <div className="w-full max-w-lg rounded-lg bg-background p-6 shadow-lg">
             <h3 className="text-base font-semibold">Tool Approval Required</h3>
             <p className="mt-2 text-sm text-muted-foreground">
@@ -1374,9 +1533,11 @@ export function ChatInterface() {
             )}
             <div className="mt-4 flex gap-2">
               <button
+                ref={toolApprovalApproveButtonRef}
                 className="rounded-md bg-primary px-3 py-2 text-xs text-primary-foreground"
                 onClick={handleApproveTools}
                 disabled={toolApprovalRunning}
+                aria-label="Approve tool calls"
               >
                 {toolApprovalRunning ? "Approving..." : "Approve"}
               </button>
@@ -1384,6 +1545,7 @@ export function ChatInterface() {
                 className="rounded-md border border-border px-3 py-2 text-xs"
                 onClick={() => setToolApprovalOpen(false)}
                 disabled={toolApprovalRunning}
+                aria-label="Cancel tool approval"
               >
                 Cancel
               </button>
