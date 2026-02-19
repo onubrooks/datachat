@@ -464,7 +464,9 @@ class Retriever:
         """Build a coarse conflict key for precedence handling."""
         metadata = item.metadata if isinstance(item.metadata, dict) else {}
 
-        table_name = metadata.get("table_name") or metadata.get("table") or metadata.get("table_key")
+        table_name = (
+            metadata.get("table_name") or metadata.get("table") or metadata.get("table_key")
+        )
         schema_name = metadata.get("schema") or metadata.get("schema_name")
         if table_name:
             table_key = str(table_name).strip().lower()
@@ -472,11 +474,17 @@ class Retriever:
                 table_key = f"{str(schema_name).strip().lower()}.{table_key}"
             return f"table::{table_key}"
 
-        # Metric/business fallback key: metric name + related tables.
         related_tables = self._coerce_string_list(metadata.get("related_tables"))
         metric_name = str(metadata.get("name", "")).strip().lower()
+        dp_type = str(metadata.get("type", "")).strip().lower()
         if metric_name and related_tables:
             return f"metric::{metric_name}::{'|'.join(sorted(related_tables))}"
+        if dp_type == "query" and metric_name:
+            return (
+                f"query::{metric_name}::{'|'.join(sorted(related_tables))}"
+                if related_tables
+                else None
+            )
         return None
 
     def _source_priority(self, metadata: dict[str, Any] | None) -> int:

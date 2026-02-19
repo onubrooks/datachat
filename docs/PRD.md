@@ -173,10 +173,12 @@ The YAML-based schema described in DATAPOINT_SCHEMA.md is the target architectur
 - [x] Add current DataPoint type system to PRD.md
 - [x] Add Phase Tracking section
 
-### Phase 2: QueryDataPoint Implementation 🔄
+### Phase 2: QueryDataPoint Implementation ✅
 - [x] Add QueryDataPoint model to backend/models/datapoint.py
-- [ ] Add QueryDataPoint loader support in backend/knowledge/datapoints.py
-- [ ] Add QueryDataPoint to vector store
+- [x] Add QueryDataPoint loader support in backend/knowledge/datapoints.py
+- [x] Add QueryDataPoint to vector store (document/metadata generation)
+- [x] Add QueryDataPoint contract validation
+- [x] Update retriever conflict key for Query type
 - [ ] Add CLI commands: `datachat dp add-query`, `datachat dp list --type Query`
 - [ ] Integrate with pipeline (ContextAgent retrieval, SQLAgent template use)
 - [ ] Add tests for QueryDataPoint validation and retrieval
