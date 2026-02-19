@@ -1541,6 +1541,103 @@ class TestIntentGate:
         assert pipeline.executor.execute.call_count == 0
 
     @pytest.mark.asyncio
+    async def test_context_answer_failure_falls_through_to_sql(self, pipeline):
+        pipeline.query_analyzer.execute = AsyncMock(
+            return_value=QueryAnalyzerOutput(
+                success=True,
+                analysis=QueryAnalysis(
+                    intent="data_query",
+                    route="sql",
+                    entities=[],
+                    complexity="simple",
+                    deterministic=False,
+                    clarifying_questions=[],
+                    confidence=0.9,
+                ),
+                metadata=AgentMetadata(agent_name="QueryAnalyzerAgent", llm_calls=0),
+            )
+        )
+        pipeline.context.execute = AsyncMock(
+            return_value=ContextAgentOutput(
+                success=True,
+                data={},
+                investigation_memory=InvestigationMemory(
+                    query="Show revenue by campus this month",
+                    datapoints=[
+                        RetrievedDataPoint(
+                            datapoint_id="table_orders_001",
+                            datapoint_type="Schema",
+                            name="Orders",
+                            score=0.91,
+                            source="vector",
+                            metadata={"table_name": "public.orders"},
+                        )
+                    ],
+                    retrieval_mode="hybrid",
+                    total_retrieved=1,
+                    sources_used=["table_orders_001"],
+                ),
+                context_confidence=0.2,
+                metadata=AgentMetadata(agent_name="ContextAgent", llm_calls=0),
+            )
+        )
+        pipeline.context_answer.execute = AsyncMock(side_effect=RuntimeError("context llm failed"))
+        pipeline.sql.execute = AsyncMock(
+            return_value=SQLAgentOutput(
+                success=True,
+                generated_sql=GeneratedSQL(
+                    sql="SELECT campus, SUM(amount) AS revenue FROM public.orders GROUP BY campus",
+                    explanation="Grouped revenue by campus.",
+                    confidence=0.88,
+                    used_datapoints=["table_orders_001"],
+                    assumptions=[],
+                    clarifying_questions=[],
+                ),
+                metadata=AgentMetadata(agent_name="SQLAgent", llm_calls=1),
+            )
+        )
+        pipeline.validator.execute = AsyncMock(
+            return_value=ValidatorAgentOutput(
+                success=True,
+                validated_sql=ValidatedSQL(
+                    sql="SELECT campus, SUM(amount) AS revenue FROM public.orders GROUP BY campus",
+                    is_valid=True,
+                    is_safe=True,
+                    errors=[],
+                    warnings=[],
+                    performance_score=0.9,
+                ),
+                metadata=AgentMetadata(agent_name="ValidatorAgent", llm_calls=0),
+            )
+        )
+        pipeline.executor.execute = AsyncMock(
+            return_value=ExecutorAgentOutput(
+                success=True,
+                executed_query=ExecutedQuery(
+                    query_result=QueryResult(
+                        rows=[{"campus": "North", "revenue": 100}],
+                        row_count=1,
+                        columns=["campus", "revenue"],
+                        execution_time_ms=8.0,
+                        was_truncated=False,
+                    ),
+                    natural_language_answer="North campus revenue is 100.",
+                    visualization_hint="bar_chart",
+                    key_insights=[],
+                    source_citations=["table_orders_001"],
+                ),
+                metadata=AgentMetadata(agent_name="ExecutorAgent", llm_calls=0),
+            )
+        )
+
+        result = await pipeline.run("Show revenue by campus this month")
+
+        assert result.get("answer_source") == "sql"
+        assert pipeline.sql.execute.call_count == 1
+        assert pipeline.validator.execute.call_count == 1
+        assert pipeline.executor.execute.call_count == 1
+
+    @pytest.mark.asyncio
     async def test_sql_clarification_path_records_sql_timing_and_formatter_metrics(self, pipeline):
         pipeline.sql.execute = AsyncMock(
             return_value=SQLAgentOutput(

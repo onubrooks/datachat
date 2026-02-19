@@ -237,4 +237,58 @@ describe("ChatInterface target database", () => {
     expect(request.execution_mode).toBe("direct_sql");
     expect(request.sql).toBe("SELECT * FROM users LIMIT 10;");
   });
+
+  it("keeps natural-language retry payload unchanged when it contains SQL fences", async () => {
+    let handlers:
+      | {
+          onError?: (message: string) => void;
+        }
+      | undefined;
+
+    mockStreamChat.mockImplementation((_request, callbacks) => {
+      handlers = callbacks;
+    });
+
+    render(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+
+    const prompt =
+      "Explain why this query fails: ```sql SELECT * FROM users LIMIT 10 ```";
+    const input = screen.getByPlaceholderText(
+      "Ask a question about your data..."
+    ) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: prompt } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => expect(mockStreamChat).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      handlers?.onError?.("request failed");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry Query" }));
+
+    const restoredInput = screen.getByPlaceholderText(
+      "Ask a question about your data..."
+    ) as HTMLInputElement;
+    expect(restoredInput.value).toBe(prompt);
+    expect(screen.queryByLabelText("SQL editor input")).not.toBeInTheDocument();
+  });
+
+  it("restores focus to natural-language input after switching from SQL mode via template", async () => {
+    render(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: /SQL Editor/i }));
+    const sqlEditor = screen.getByLabelText("SQL editor input");
+    expect(sqlEditor).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "List Tables" }));
+
+    const input = screen.getByPlaceholderText(
+      "Ask a question about your data..."
+    ) as HTMLInputElement;
+    await waitFor(() => {
+      expect(document.activeElement).toBe(input);
+    });
+  });
 });

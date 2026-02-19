@@ -5,6 +5,8 @@
 
 This document describes the frontend architecture, current state, and roadmap for the DataChat web UI.
 
+For operator/end-user instructions, see `docs/UI_HOWTO.md`.
+
 ---
 
 ## Technology Stack

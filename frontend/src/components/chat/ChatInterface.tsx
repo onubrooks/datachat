@@ -207,17 +207,23 @@ export function ChatInterface() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const sqlEditorRef = useRef<HTMLTextAreaElement>(null);
+  const composerModeRef = useRef<"nl" | "sql">(composerMode);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const shortcutsCloseButtonRef = useRef<HTMLButtonElement>(null);
   const toolApprovalApproveButtonRef = useRef<HTMLButtonElement>(null);
-  const restoreInputFocus = useCallback(() => {
+  const restoreInputFocus = useCallback((targetMode?: "nl" | "sql") => {
+    const mode = targetMode || composerModeRef.current;
     window.requestAnimationFrame(() => {
-      if (composerMode === "sql") {
+      if (mode === "sql") {
         sqlEditorRef.current?.focus();
         return;
       }
       inputRef.current?.focus();
     });
+  }, []);
+
+  useEffect(() => {
+    composerModeRef.current = composerMode;
   }, [composerMode]);
 
   const serializeMessages = (items: ChatStoreMessage[]): SerializedMessage[] =>
@@ -750,23 +756,15 @@ export function ChatInterface() {
     if (lastFailedQuery.startsWith("__sql__")) {
       setComposerMode("sql");
       setSqlDraft(lastFailedQuery.replace("__sql__", ""));
-    } else if (lastFailedQuery.includes("```sql")) {
-      const extracted = lastFailedQuery.match(/```sql\s*([\s\S]*?)```/i)?.[1]?.trim();
-      if (extracted) {
-        setComposerMode("sql");
-        setSqlDraft(extracted);
-      } else {
-        setInput(lastFailedQuery);
-        setComposerMode("nl");
-      }
+      restoreInputFocus("sql");
     } else {
       setInput(lastFailedQuery);
       setComposerMode("nl");
+      restoreInputFocus("nl");
     }
     setError(null);
     setErrorCategory(null);
     setLastFailedQuery(null);
-    restoreInputFocus();
   };
 
   const handleApplyTemplate = (templateId: string) => {
@@ -776,7 +774,7 @@ export function ChatInterface() {
     }
     setComposerMode("nl");
     setInput(template.build(selectedSchemaTable));
-    restoreInputFocus();
+    restoreInputFocus("nl");
   };
 
   const handleOpenSqlEditor = (sql: string) => {
@@ -785,7 +783,7 @@ export function ChatInterface() {
     setError(null);
     setErrorCategory(null);
     setLastFailedQuery(null);
-    restoreInputFocus();
+    restoreInputFocus("sql");
   };
 
   const handleStartNewConversation = () => {
@@ -801,7 +799,7 @@ export function ChatInterface() {
     setErrorCategory(null);
     setLastFailedQuery(null);
     setRetryCount(0);
-    restoreInputFocus();
+    restoreInputFocus("nl");
   };
 
   const handleLoadConversation = (snapshot: ConversationSnapshot) => {
@@ -822,7 +820,7 @@ export function ChatInterface() {
     setErrorCategory(null);
     setLastFailedQuery(null);
     setRetryCount(0);
-    restoreInputFocus();
+    restoreInputFocus("nl");
   };
 
   const handleDeleteConversation = (sessionId: string) => {
@@ -1303,7 +1301,7 @@ export function ChatInterface() {
                   onClarifyingAnswer={(question) => {
                     setComposerMode("nl");
                     setInput(`Regarding "${question}": `);
-                    inputRef.current?.focus();
+                    restoreInputFocus("nl");
                   }}
                 />
               ))}

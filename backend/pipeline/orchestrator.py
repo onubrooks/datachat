@@ -999,7 +999,23 @@ class DataChatPipeline:
 
         except Exception as e:
             logger.error(f"ContextAnswerAgent failed: {e}")
-            state["error"] = f"Context answer failed: {e}"
+            # Fallback to SQL path when context answer generation fails so the
+            # pipeline can still attempt deterministic/semantic SQL execution.
+            state["context_needs_sql"] = True
+            state["clarification_needed"] = False
+            state["clarifying_questions"] = []
+            state["natural_language_answer"] = None
+            state["answer_source"] = None
+            state["answer_confidence"] = None
+            state["evidence"] = []
+            state["context_preface"] = (
+                "I couldn't answer from context alone, so I'll query the database directly."
+            )
+            state["context_evidence"] = []
+            state["generated_sql"] = None
+            state["validated_sql"] = None
+            state["query_result"] = None
+            state["visualization_hint"] = None
 
         return state
 

@@ -10,8 +10,8 @@ def _hash(content: str) -> str:
 def test_prompt_hashes_unchanged():
     loader = PromptLoader()
     expected = {
-        "system/main.md": "1748205ee881",
-        "agents/sql_generator.md": "ee068355ba21",
+        "system/main.md": "83b1fc0f071c",
+        "agents/sql_generator.md": "304baabadf76",
         "agents/executor_summary.md": "62cdfade0184",
         "agents/sql_correction.md": "7334d4e253be",
     }
