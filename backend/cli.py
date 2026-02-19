@@ -40,6 +40,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import click
 import httpx
@@ -67,6 +68,33 @@ from backend.tools.base import ToolContext
 console = Console()
 API_BASE_URL = os.getenv("DATA_CHAT_API_URL", "http://localhost:8000")
 ENV_DATABASE_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada"
+CLI_SESSION_LIMIT = 50
+CLI_SESSION_HISTORY_LIMIT = 120
+READ_ONLY_SQL_PREFIXES = ("select", "with", "show", "describe", "desc", "explain")
+MUTATING_SQL_KEYWORDS = (
+    "insert",
+    "update",
+    "delete",
+    "drop",
+    "alter",
+    "truncate",
+    "create",
+    "grant",
+    "revoke",
+    "merge",
+    "call",
+    "copy",
+)
+QUERY_TEMPLATES: dict[str, str] = {
+    "list-tables": "List all available tables.",
+    "show-columns": "Show columns for {table}.",
+    "sample-rows": "Show first 100 rows from {table}.",
+    "row-count": "How many rows are in {table}?",
+    "top-10": "Show the top 10 records from {table} by the most relevant numeric metric.",
+    "trend": "Show a monthly trend from {table} for the last 12 months.",
+    "breakdown": "Give me a category breakdown from {table}.",
+}
+DEFAULT_TEMPLATE_TABLE = "public.grocery_sales_transactions"
 
 
 def configure_cli_logging() -> None:
@@ -94,6 +122,7 @@ class CLIState:
         """Refresh config paths (useful when HOME changes in tests)."""
         self.config_dir = Path.home() / ".datachat"
         self.config_file = self.config_dir / "config.json"
+        self.sessions_file = self.config_dir / "sessions.json"
         self.config_dir.mkdir(exist_ok=True, mode=0o700)
 
     def ensure_paths(self) -> None:
@@ -147,6 +176,58 @@ class CLIState:
         config = self.load_config()
         config["system_database_url"] = system_database_url
         self.save_config(config)
+
+    def load_sessions(self) -> list[dict[str, Any]]:
+        """Load persisted CLI chat sessions."""
+        if not self.sessions_file.exists():
+            return []
+        try:
+            with open(self.sessions_file, encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception:
+            return []
+        return raw if isinstance(raw, list) else []
+
+    def save_sessions(self, sessions: list[dict[str, Any]]) -> None:
+        """Persist CLI chat sessions."""
+        self.ensure_paths()
+        trimmed = sessions[:CLI_SESSION_LIMIT]
+        with open(self.sessions_file, "w", encoding="utf-8") as f:
+            json.dump(trimmed, f, indent=2)
+        try:
+            self.sessions_file.chmod(0o600)
+        except OSError:
+            pass
+
+    def upsert_session(self, payload: dict[str, Any]) -> None:
+        """Insert/update a persisted chat session by session_id."""
+        session_id = str(payload.get("session_id") or "").strip()
+        if not session_id:
+            return
+        sessions = self.load_sessions()
+        sessions = [item for item in sessions if item.get("session_id") != session_id]
+        sessions.insert(0, payload)
+        self.save_sessions(sessions)
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        """Fetch a session snapshot by id."""
+        for item in self.load_sessions():
+            if str(item.get("session_id")) == session_id:
+                return item
+        return None
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete one session by id."""
+        sessions = self.load_sessions()
+        filtered = [item for item in sessions if str(item.get("session_id")) != session_id]
+        if len(filtered) == len(sessions):
+            return False
+        self.save_sessions(filtered)
+        return True
+
+    def clear_sessions(self) -> None:
+        """Remove all persisted sessions."""
+        self.save_sessions([])
 
 
 state = CLIState()
@@ -454,7 +535,11 @@ async def _clear_demo_tables_for_database(
         await connector.execute(statement)
 
 
-async def create_pipeline_from_config() -> DataChatPipeline:
+async def create_pipeline_from_config(
+    *,
+    database_type: str | None = None,
+    database_url: str | None = None,
+) -> DataChatPipeline:
     """Create pipeline from configuration."""
     apply_config_defaults()
     settings = get_settings()
@@ -475,7 +560,8 @@ async def create_pipeline_from_config() -> DataChatPipeline:
     # Initialize connector
     # Prefer .env / settings over persisted CLI state so local project config wins.
     connection_string, _ = _resolve_target_database_url(settings)
-    if not connection_string:
+    effective_database_url = database_url or connection_string
+    if not effective_database_url:
         console.print("[red]No target database configured.[/red]")
         console.print(
             "[yellow]Hint: Set DATABASE_URL in .env, use 'datachat connect', "
@@ -484,9 +570,10 @@ async def create_pipeline_from_config() -> DataChatPipeline:
         raise click.ClickException("Missing target database")
 
     runtime_db_type, runtime_db_url = _resolve_runtime_database_context(settings)
+    effective_database_type = database_type or runtime_db_type
     connector = create_connector(
-        database_url=runtime_db_url or connection_string,
-        database_type=runtime_db_type,
+        database_url=effective_database_url or runtime_db_url or connection_string,
+        database_type=effective_database_type,
         pool_size=settings.database.pool_size,
     )
 
@@ -535,11 +622,218 @@ async def create_pipeline_from_config() -> DataChatPipeline:
     return pipeline
 
 
+def _is_read_only_sql(sql_query: str) -> bool:
+    """Validate SQL editor input as a single read-only statement."""
+    compact = sql_query.strip()
+    if not compact:
+        return False
+    statements = [part.strip() for part in compact.split(";") if part.strip()]
+    if len(statements) != 1:
+        return False
+    statement = statements[0].lower()
+    if not statement.startswith(READ_ONLY_SQL_PREFIXES):
+        return False
+    return not any(re.search(rf"\b{keyword}\b", statement) for keyword in MUTATING_SQL_KEYWORDS)
+
+
+def _sanitize_table_reference(table: str) -> str:
+    """Allow only simple table identifiers for CLI schema/sample shortcuts."""
+    candidate = table.strip().strip('"').strip("`")
+    if not re.fullmatch(r"[A-Za-z0-9_.]+", candidate):
+        raise click.ClickException(
+            "Invalid table reference. Use simple schema.table identifiers only."
+        )
+    return candidate
+
+
+def _apply_display_pagination(
+    data: dict[str, list] | None,
+    *,
+    page: int,
+    page_size: int,
+) -> tuple[dict[str, list] | None, dict[str, int] | None]:
+    """Slice columnar result data for terminal display pagination."""
+    if not data or not isinstance(data, dict):
+        return data, None
+    normalized_page_size = max(1, page_size)
+    normalized_page = max(1, page)
+    total_rows = len(next(iter(data.values()), []))
+    if total_rows == 0:
+        return data, {"total_rows": 0, "page": 1, "page_size": normalized_page_size}
+    total_pages = (total_rows + normalized_page_size - 1) // normalized_page_size
+    bounded_page = min(normalized_page, max(1, total_pages))
+    start = (bounded_page - 1) * normalized_page_size
+    end = min(start + normalized_page_size, total_rows)
+    paged_data = {key: value[start:end] for key, value in data.items()}
+    return paged_data, {
+        "total_rows": total_rows,
+        "page": bounded_page,
+        "page_size": normalized_page_size,
+        "start_row": start + 1,
+        "end_row": end,
+        "total_pages": total_pages,
+    }
+
+
+def _render_template_query(template_id: str, table: str | None = None) -> str:
+    """Build a natural-language query from a CLI template id."""
+    if template_id not in QUERY_TEMPLATES:
+        supported = ", ".join(sorted(QUERY_TEMPLATES))
+        raise click.ClickException(
+            f"Unknown template '{template_id}'. Supported templates: {supported}."
+        )
+    pattern = QUERY_TEMPLATES[template_id]
+    if "{table}" in pattern:
+        return pattern.format(table=(table or DEFAULT_TEMPLATE_TABLE))
+    return pattern
+
+
+def _derive_selected_table(
+    explicit_table: str | None,
+    selected_schema_table: str | None,
+) -> str | None:
+    if explicit_table and explicit_table.strip():
+        return explicit_table.strip()
+    if selected_schema_table and selected_schema_table.strip():
+        return selected_schema_table.strip()
+    return None
+
+
+def _session_title_from_history(conversation_history: list[dict[str, str]]) -> str:
+    first_user = next(
+        (
+            item.get("content", "").strip()
+            for item in conversation_history
+            if item.get("role") == "user" and item.get("content")
+        ),
+        "",
+    )
+    if not first_user:
+        return "Untitled session"
+    compact = re.sub(r"\s+", " ", first_user)
+    return f"{compact[:77]}..." if len(compact) > 80 else compact
+
+
+def _persist_cli_session(
+    *,
+    session_id: str,
+    conversation_history: list[dict[str, str]],
+    session_summary: str | None,
+    session_state: dict[str, Any] | None,
+    target_connection_id: str | None,
+    database_type: str,
+) -> None:
+    """Persist session state for resume/list flows."""
+    if not conversation_history:
+        return
+    payload = {
+        "session_id": session_id,
+        "title": _session_title_from_history(conversation_history),
+        "updated_at": datetime.now(UTC).isoformat(),
+        "target_connection_id": target_connection_id,
+        "database_type": database_type,
+        "conversation_history": conversation_history[-CLI_SESSION_HISTORY_LIMIT:],
+        "session_summary": session_summary,
+        "session_state": session_state or {},
+    }
+    state.upsert_session(payload)
+
+
+async def _resolve_target_database_context(
+    settings: Any,
+    *,
+    target_database: str | None,
+) -> tuple[str, str | None, str | None]:
+    """Resolve DB type/url and optional connection id for per-query targeting."""
+    default_type, default_url = _resolve_runtime_database_context(settings)
+    if not target_database:
+        return default_type, default_url, None
+
+    requested = target_database.strip()
+    if requested == ENV_DATABASE_CONNECTION_ID:
+        if not default_url:
+            raise click.ClickException(
+                "Environment target requested but DATABASE_URL is not configured."
+            )
+        resolved_type = infer_database_type(default_url)
+        return resolved_type, default_url, requested
+
+    system_url, _ = _resolve_system_database_url(settings)
+    if not system_url:
+        raise click.ClickException(
+            "--target-database requires SYSTEM_DATABASE_URL and a registered connection."
+        )
+
+    manager = DatabaseConnectionManager(system_database_url=system_url)
+    try:
+        await manager.initialize()
+        connection = await manager.get_connection(requested)
+    except KeyError as exc:
+        raise click.ClickException(f"Database connection not found: {requested}") from exc
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        try:
+            await manager.close()
+        except Exception:
+            pass
+
+    return (
+        connection.database_type,
+        connection.database_url.get_secret_value(),
+        str(connection.connection_id),
+    )
+
+
+async def _run_direct_sql_query(
+    *,
+    sql_query: str,
+    database_type: str,
+    database_url: str | None,
+) -> dict[str, Any]:
+    """Execute a read-only SQL query directly via connector."""
+    if not database_url:
+        raise click.ClickException("No active database URL available for SQL execution.")
+    if not _is_read_only_sql(sql_query):
+        raise click.ClickException(
+            "Direct SQL mode accepts one read-only statement "
+            "(SELECT/WITH/SHOW/DESCRIBE/EXPLAIN)."
+        )
+    connector = create_connector(
+        database_type=database_type,
+        database_url=database_url,
+    )
+    await connector.connect()
+    try:
+        result = await connector.execute(sql_query)
+    finally:
+        await connector.close()
+    return {
+        "natural_language_answer": (
+            f"Executed SQL query successfully. Returned {result.row_count} row(s)."
+        ),
+        "validated_sql": sql_query,
+        "generated_sql": sql_query,
+        "query_result": {
+            "rows": result.rows,
+            "columns": result.columns,
+            "row_count": result.row_count,
+            "execution_time_ms": result.execution_time_ms,
+        },
+        "answer_source": "sql",
+        "answer_confidence": 1.0,
+        "clarifying_questions": [],
+        "llm_calls": 0,
+        "retry_count": 0,
+    }
+
+
 def format_answer(
     answer: str,
     sql: str | None = None,
     data: dict | None = None,
     visualization_note: str | None = None,
+    pagination: dict[str, int] | None = None,
 ) -> None:
     """Format and display answer."""
     # Display answer
@@ -574,6 +868,14 @@ def format_answer(
                 table.add_row(*row)
 
         console.print(table)
+        if pagination and pagination.get("total_rows", 0) > pagination.get("page_size", 0):
+            console.print(
+                "[dim]"
+                f"Showing rows {pagination['start_row']}-{pagination['end_row']} "
+                f"of {pagination['total_rows']} "
+                f"(page {pagination['page']}/{pagination['total_pages']})."
+                "[/dim]"
+            )
 
     if visualization_note:
         console.print(f"\n[bold yellow]Visualization note:[/bold yellow] {visualization_note}")
@@ -629,9 +931,18 @@ def _emit_query_output(
     result: dict[str, Any],
     evidence: bool,
     show_metrics: bool,
+    page: int,
+    page_size: int,
 ) -> None:
+    paged_data, pagination = _apply_display_pagination(data, page=page, page_size=page_size)
     console.print()
-    format_answer(answer, sql, data, result.get("visualization_note"))
+    format_answer(
+        answer,
+        sql,
+        paged_data,
+        result.get("visualization_note"),
+        pagination=pagination,
+    )
     console.print()
 
     footer = _format_source_footer(result)
@@ -671,12 +982,32 @@ def _print_query_output(
     evidence: bool,
     show_metrics: bool,
     pager: bool,
+    page: int,
+    page_size: int,
 ) -> None:
     if pager:
         with console.pager():
-            _emit_query_output(answer, sql, data, result, evidence, show_metrics)
+            _emit_query_output(
+                answer,
+                sql,
+                data,
+                result,
+                evidence,
+                show_metrics,
+                page,
+                page_size,
+            )
     else:
-        _emit_query_output(answer, sql, data, result, evidence, show_metrics)
+        _emit_query_output(
+            answer,
+            sql,
+            data,
+            result,
+            evidence,
+            show_metrics,
+            page,
+            page_size,
+        )
 
 
 def _compose_clarification_answer(questions: list[str]) -> str:
@@ -846,63 +1177,215 @@ def cli():
     default=None,
     help="Override response synthesis for simple SQL answers.",
 )
+@click.option(
+    "--target-database",
+    default=None,
+    help="Target database connection UUID for this chat session.",
+)
+@click.option(
+    "--execution-mode",
+    type=click.Choice(["natural_language", "direct_sql"]),
+    default="natural_language",
+    show_default=True,
+    help="Start chat in natural-language or direct SQL mode.",
+)
+@click.option(
+    "--session-id",
+    default=None,
+    help="Resume a persisted CLI session by id (or create under this id).",
+)
+@click.option(
+    "--page-size",
+    default=10,
+    show_default=True,
+    type=int,
+    help="Rows to display per result page in terminal output.",
+)
+@click.option(
+    "--row-limit",
+    default=100,
+    show_default=True,
+    type=int,
+    help="Default SQL row limit policy for generated queries.",
+)
+@click.option(
+    "--auto-approve-tools/--prompt-tool-approval",
+    default=False,
+    show_default=True,
+    help="Auto-approve tool plans when routing requires tool execution.",
+)
 def chat(
     evidence: bool,
     pager: bool,
     max_clarifications: int,
     synthesize_simple_sql: bool | None,
+    target_database: str | None,
+    execution_mode: str,
+    session_id: str | None,
+    page_size: int,
+    row_limit: int,
+    auto_approve_tools: bool,
 ):
     """Interactive REPL mode for conversations."""
+    normalized_page_size = max(1, page_size)
+    normalized_row_limit = max(1, min(row_limit, 1000))
+    session_identifier = session_id or f"cli_{uuid4().hex[:12]}"
+    saved_session = state.get_session(session_identifier) if session_id else None
+
     console.print(
         Panel.fit(
             "[bold green]DataChat Interactive Mode[/bold green]\n"
-            "Ask questions in natural language. Type 'exit' or 'quit' to leave.",
+            "Ask questions in natural language or SQL.\n"
+            "Type '/mode sql' or '/mode nl' to switch modes. Type 'exit' or 'quit' to leave.",
             border_style="green",
         )
     )
 
-    conversation_history = []
-    conversation_id = None
+    conversation_history: list[dict[str, str]] = []
     session_summary: str | None = None
     session_state: dict[str, Any] | None = None
+    if saved_session:
+        conversation_history = list(saved_session.get("conversation_history") or [])
+        session_summary = saved_session.get("session_summary")
+        session_state = saved_session.get("session_state") or {}
+        console.print(
+            f"[green]✓ Resumed session {session_identifier}[/green] "
+            f"({saved_session.get('title', 'Untitled session')})"
+        )
+    session_target_database = target_database or (
+        str(saved_session.get("target_connection_id")) if saved_session else None
+    )
+
+    mode = execution_mode.lower().strip()
+    if mode not in {"natural_language", "direct_sql"}:
+        raise click.ClickException("Unsupported --execution-mode value.")
 
     async def run_chat():
-        nonlocal conversation_id, session_summary, session_state
+        nonlocal session_summary, session_state, mode
         clarification_attempts = 0
         max_clarifications_limit = max(0, max_clarifications)
         settings = get_settings()
-        database_type, database_url = _resolve_runtime_database_context(settings)
+        database_type, database_url, target_connection_id = await _resolve_target_database_context(
+            settings,
+            target_database=session_target_database,
+        )
 
         pipeline = None
         try:
             while True:
                 try:
                     # Get user input
-                    query = console.input("[bold cyan]You:[/bold cyan] ")
+                    prompt_label = "SQL" if mode == "direct_sql" else "You"
+                    query = console.input(f"[bold cyan]{prompt_label}:[/bold cyan] ")
 
                     if not query.strip():
+                        continue
+
+                    command_text = query.strip()
+                    command_lower = command_text.lower()
+                    if command_lower in {"/mode sql", ":mode sql"}:
+                        mode = "direct_sql"
+                        console.print("[green]Switched to direct SQL mode.[/green]")
+                        continue
+                    if command_lower in {"/mode nl", "/mode natural", ":mode nl"}:
+                        mode = "natural_language"
+                        console.print("[green]Switched to natural-language mode.[/green]")
+                        continue
+                    if command_lower.startswith("/template "):
+                        _, _, template_payload = command_text.partition(" ")
+                        template_parts = [part for part in template_payload.split() if part]
+                        if not template_parts:
+                            raise click.ClickException("Usage: /template <template-id> [table]")
+                        template_id = template_parts[0]
+                        template_table = template_parts[1] if len(template_parts) > 1 else None
+                        query = _render_template_query(template_id, table=template_table)
+                        mode = "natural_language"
+                        console.print(f"[dim]Applied template '{template_id}'.[/dim]")
+                    elif command_lower in {"/templates", ":templates"}:
+                        table = Table(title="Query Templates", show_header=True, header_style="bold cyan")
+                        table.add_column("Template ID")
+                        table.add_column("Example")
+                        for template_key in sorted(QUERY_TEMPLATES):
+                            table.add_row(
+                                template_key,
+                                _render_template_query(template_key, table=DEFAULT_TEMPLATE_TABLE),
+                            )
+                        console.print(table)
                         continue
 
                     if _should_exit_chat(query):
                         console.print("\n[yellow]Goodbye![/yellow]")
                         break
 
-                    if pipeline is None:
-                        pipeline = await create_pipeline_from_config()
-                        pipeline.max_clarifications = max(0, max_clarifications)
-                        console.print("[green]✓ Pipeline initialized[/green]\n")
+                    if mode == "direct_sql":
+                        with console.status("[cyan]Executing SQL...[/cyan]", spinner="dots"):
+                            result = await _run_direct_sql_query(
+                                sql_query=query,
+                                database_type=database_type,
+                                database_url=database_url,
+                            )
+                    else:
+                        if pipeline is None:
+                            pipeline = await create_pipeline_from_config(
+                                database_type=database_type,
+                                database_url=database_url,
+                            )
+                            pipeline.max_clarifications = max(0, max_clarifications)
+                            if hasattr(pipeline, "sql"):
+                                pipeline.sql._default_row_limit = normalized_row_limit
+                                pipeline.sql._max_safe_row_limit = max(100, normalized_row_limit)
+                            console.print("[green]✓ Pipeline initialized[/green]\n")
 
-                    # Show loading indicator
-                    with console.status("[cyan]Processing...[/cyan]", spinner="dots"):
-                        result = await pipeline.run(
-                            query=query,
-                            conversation_history=conversation_history,
-                            session_summary=session_summary,
-                            session_state=session_state,
-                            database_type=database_type,
-                            database_url=database_url,
-                            synthesize_simple_sql=synthesize_simple_sql,
-                        )
+                        # Show loading indicator
+                        with console.status("[cyan]Processing...[/cyan]", spinner="dots"):
+                            result = await pipeline.run(
+                                query=query,
+                                conversation_history=conversation_history,
+                                session_summary=session_summary,
+                                session_state=session_state,
+                                database_type=database_type,
+                                database_url=database_url,
+                                target_connection_id=target_connection_id,
+                                synthesize_simple_sql=synthesize_simple_sql,
+                                tool_approved=auto_approve_tools,
+                            )
+                        if result.get("tool_approval_required") and not auto_approve_tools:
+                            approval_calls = result.get("tool_approval_calls") or []
+                            if approval_calls:
+                                call_table = Table(
+                                    title="Tool Approval Required",
+                                    show_header=True,
+                                    header_style="bold yellow",
+                                )
+                                call_table.add_column("Tool")
+                                call_table.add_column("Arguments")
+                                for call in approval_calls:
+                                    call_table.add_row(
+                                        str(call.get("name", "unknown")),
+                                        json.dumps(call.get("arguments", {}), sort_keys=True),
+                                    )
+                                console.print(call_table)
+                            approved = click.confirm(
+                                "Approve tool execution for this query?",
+                                default=False,
+                                show_default=True,
+                            )
+                            if approved:
+                                with console.status(
+                                    "[cyan]Executing approved tool plan...[/cyan]",
+                                    spinner="dots",
+                                ):
+                                    result = await pipeline.run(
+                                        query=query,
+                                        conversation_history=conversation_history,
+                                        session_summary=session_summary,
+                                        session_state=session_state,
+                                        database_type=database_type,
+                                        database_url=database_url,
+                                        target_connection_id=target_connection_id,
+                                        synthesize_simple_sql=synthesize_simple_sql,
+                                        tool_approved=True,
+                                    )
 
                     # Extract results
                     clarifying_questions = result.get("clarifying_questions") or []
@@ -940,6 +1423,8 @@ def chat(
                         evidence=evidence,
                         show_metrics=True,
                         pager=pager or evidence,
+                        page=1,
+                        page_size=normalized_page_size,
                     )
 
                     # Update conversation history
@@ -947,6 +1432,14 @@ def chat(
                     conversation_history.append({"role": "assistant", "content": answer})
                     session_summary = result.get("session_summary")
                     session_state = result.get("session_state")
+                    _persist_cli_session(
+                        session_id=session_identifier,
+                        conversation_history=conversation_history,
+                        session_summary=session_summary,
+                        session_state=session_state,
+                        target_connection_id=target_connection_id,
+                        database_type=database_type,
+                    )
 
                 except KeyboardInterrupt:
                     console.print("\n[yellow]Interrupted. Type 'exit' to quit.[/yellow]")
@@ -970,7 +1463,7 @@ def chat(
 
 
 @cli.command()
-@click.argument("query")
+@click.argument("query", required=False)
 @click.option("--evidence", is_flag=True, help="Show DataPoint evidence details")
 @click.option(
     "--pager/--no-pager",
@@ -989,20 +1482,115 @@ def chat(
     default=None,
     help="Override response synthesis for simple SQL answers.",
 )
+@click.option(
+    "--target-database",
+    default=None,
+    help="Target database connection UUID for this request.",
+)
+@click.option(
+    "--execution-mode",
+    type=click.Choice(["natural_language", "direct_sql"]),
+    default="natural_language",
+    show_default=True,
+    help="Run in natural-language mode or direct SQL mode.",
+)
+@click.option(
+    "--template",
+    "query_template",
+    default=None,
+    help="Apply a built-in query template instead of writing the prompt manually.",
+)
+@click.option(
+    "--table",
+    "template_table",
+    default=None,
+    help="Optional table used by templates that require one.",
+)
+@click.option(
+    "--list-templates",
+    is_flag=True,
+    help="List built-in query templates and exit.",
+)
+@click.option(
+    "--session-id",
+    default=None,
+    help="Persist this ask flow under a CLI session id.",
+)
+@click.option(
+    "--page",
+    default=1,
+    show_default=True,
+    type=int,
+    help="Result page number to display.",
+)
+@click.option(
+    "--page-size",
+    default=10,
+    show_default=True,
+    type=int,
+    help="Rows to display per result page.",
+)
+@click.option(
+    "--row-limit",
+    default=100,
+    show_default=True,
+    type=int,
+    help="Default SQL row limit policy for generated queries.",
+)
+@click.option(
+    "--auto-approve-tools/--prompt-tool-approval",
+    default=False,
+    show_default=True,
+    help="Auto-approve tool plans when routing requires tool execution.",
+)
 def ask(
-    query: str,
+    query: str | None,
     evidence: bool,
     pager: bool,
     max_clarifications: int,
     synthesize_simple_sql: bool | None,
+    target_database: str | None,
+    execution_mode: str,
+    query_template: str | None,
+    template_table: str | None,
+    list_templates: bool,
+    session_id: str | None,
+    page: int,
+    page_size: int,
+    row_limit: int,
+    auto_approve_tools: bool,
 ):
     """Ask a single question and exit."""
+    if list_templates:
+        table = Table(title="Query Templates", show_header=True, header_style="bold cyan")
+        table.add_column("Template ID")
+        table.add_column("Example")
+        for template_key in sorted(QUERY_TEMPLATES):
+            table.add_row(
+                template_key,
+                _render_template_query(template_key, table=DEFAULT_TEMPLATE_TABLE),
+            )
+        console.print(table)
+        return
+
+    if query and query_template:
+        raise click.ClickException("Provide either QUERY or --template, not both.")
+    if not query and not query_template:
+        raise click.ClickException("Provide QUERY or use --template.")
+    effective_query = query.strip() if query else _render_template_query(query_template or "", template_table)
+    session_identifier = session_id.strip() if session_id else None
+    normalized_page = max(1, page)
+    normalized_page_size = max(1, page_size)
+    normalized_row_limit = max(1, min(row_limit, 1000))
 
     async def run_query():
         settings = get_settings()
-        database_type, database_url = _resolve_runtime_database_context(settings)
-        local_response = _maybe_local_intent_response(query)
-        if local_response:
+        database_type, database_url, target_connection_id = await _resolve_target_database_context(
+            settings,
+            target_database=target_database,
+        )
+        local_response = _maybe_local_intent_response(effective_query)
+        if execution_mode == "natural_language" and local_response:
             answer, source, confidence = local_response
             _print_query_output(
                 answer=answer,
@@ -1016,31 +1604,88 @@ def ask(
                 evidence=evidence,
                 show_metrics=False,
                 pager=pager or evidence,
+                page=normalized_page,
+                page_size=normalized_page_size,
             )
             return
 
+        conversation_history: list[dict[str, str]] = []
+        session_summary: str | None = None
+        session_state: dict[str, Any] | None = None
         try:
-            pipeline = await create_pipeline_from_config()
-            pipeline.max_clarifications = max(0, max_clarifications)
-            conversation_history = []
-            session_summary: str | None = None
-            session_state: dict[str, Any] | None = None
-            current_query = query
+            pipeline = None
+            current_query = effective_query
             clarification_attempts = 0
             max_clarifications_limit = max(0, max_clarifications)
 
             while True:
-                # Show loading with progress
-                with console.status("[cyan]Processing query...[/cyan]", spinner="dots"):
-                    result = await pipeline.run(
-                        query=current_query,
-                        conversation_history=conversation_history,
-                        session_summary=session_summary,
-                        session_state=session_state,
-                        database_type=database_type,
-                        database_url=database_url,
-                        synthesize_simple_sql=synthesize_simple_sql,
-                    )
+                if execution_mode == "direct_sql":
+                    with console.status("[cyan]Executing SQL...[/cyan]", spinner="dots"):
+                        result = await _run_direct_sql_query(
+                            sql_query=current_query,
+                            database_type=database_type,
+                            database_url=database_url,
+                        )
+                else:
+                    if pipeline is None:
+                        pipeline = await create_pipeline_from_config(
+                            database_type=database_type,
+                            database_url=database_url,
+                        )
+                        pipeline.max_clarifications = max(0, max_clarifications)
+                        if hasattr(pipeline, "sql"):
+                            pipeline.sql._default_row_limit = normalized_row_limit
+                            pipeline.sql._max_safe_row_limit = max(100, normalized_row_limit)
+                    # Show loading with progress
+                    with console.status("[cyan]Processing query...[/cyan]", spinner="dots"):
+                        result = await pipeline.run(
+                            query=current_query,
+                            conversation_history=conversation_history,
+                            session_summary=session_summary,
+                            session_state=session_state,
+                            database_type=database_type,
+                            database_url=database_url,
+                            target_connection_id=target_connection_id,
+                            synthesize_simple_sql=synthesize_simple_sql,
+                            tool_approved=auto_approve_tools,
+                        )
+                    if result.get("tool_approval_required") and not auto_approve_tools:
+                        approval_calls = result.get("tool_approval_calls") or []
+                        if approval_calls:
+                            call_table = Table(
+                                title="Tool Approval Required",
+                                show_header=True,
+                                header_style="bold yellow",
+                            )
+                            call_table.add_column("Tool")
+                            call_table.add_column("Arguments")
+                            for call in approval_calls:
+                                call_table.add_row(
+                                    str(call.get("name", "unknown")),
+                                    json.dumps(call.get("arguments", {}), sort_keys=True),
+                                )
+                            console.print(call_table)
+                        approved = click.confirm(
+                            "Approve tool execution for this query?",
+                            default=False,
+                            show_default=True,
+                        )
+                        if approved:
+                            with console.status(
+                                "[cyan]Executing approved tool plan...[/cyan]",
+                                spinner="dots",
+                            ):
+                                result = await pipeline.run(
+                                    query=current_query,
+                                    conversation_history=conversation_history,
+                                    session_summary=session_summary,
+                                    session_state=session_state,
+                                    database_type=database_type,
+                                    database_url=database_url,
+                                    target_connection_id=target_connection_id,
+                                    synthesize_simple_sql=synthesize_simple_sql,
+                                    tool_approved=True,
+                                )
 
                 # Extract results
                 clarifying_questions = result.get("clarifying_questions") or []
@@ -1074,8 +1719,30 @@ def ask(
                     evidence=evidence,
                     show_metrics=False,
                     pager=pager or evidence,
+                    page=normalized_page,
+                    page_size=normalized_page_size,
                 )
 
+                conversation_history.extend(
+                    [
+                        {"role": "user", "content": current_query},
+                        {"role": "assistant", "content": answer},
+                    ]
+                )
+                session_summary = result.get("session_summary")
+                session_state = result.get("session_state")
+                if session_identifier:
+                    _persist_cli_session(
+                        session_id=session_identifier,
+                        conversation_history=conversation_history,
+                        session_summary=session_summary,
+                        session_state=session_state,
+                        target_connection_id=target_connection_id,
+                        database_type=database_type,
+                    )
+
+                if execution_mode == "direct_sql":
+                    break
                 if not clarifying_questions or clarification_attempts >= max_clarifications_limit:
                     break
 
@@ -1086,14 +1753,6 @@ def ask(
                     console.print("[yellow]Goodbye![/yellow]")
                     break
 
-                conversation_history.extend(
-                    [
-                        {"role": "user", "content": current_query},
-                        {"role": "assistant", "content": answer},
-                    ]
-                )
-                session_summary = result.get("session_summary")
-                session_state = result.get("session_state")
                 current_query = followup
                 clarification_attempts += 1
 
@@ -1101,13 +1760,313 @@ def ask(
             console.print(f"[red]Error: {e}[/red]")
             sys.exit(1)
         finally:
-            if "pipeline" in locals():
+            if "pipeline" in locals() and pipeline is not None:
                 try:
                     await pipeline.connector.close()
                 except Exception:
                     pass
 
     asyncio.run(run_query())
+
+
+@cli.group(name="template")
+def template():
+    """Manage built-in query templates."""
+    pass
+
+
+@template.command(name="list")
+def list_templates() -> None:
+    """List built-in CLI query templates."""
+    table = Table(title="Query Templates", show_header=True, header_style="bold cyan")
+    table.add_column("Template ID")
+    table.add_column("Example")
+    for template_key in sorted(QUERY_TEMPLATES):
+        table.add_row(
+            template_key,
+            _render_template_query(template_key, table=DEFAULT_TEMPLATE_TABLE),
+        )
+    console.print(table)
+
+
+@cli.group(name="schema")
+def schema() -> None:
+    """Browse live database schema and sample rows."""
+    pass
+
+
+@schema.command(name="tables")
+@click.option("--target-database", default=None, help="Target database connection UUID.")
+@click.option("--search", default="", help="Filter tables by schema/table substring.")
+@click.option("--schema-name", default=None, help="Schema name to inspect (defaults to all).")
+@click.option("--limit", default=200, show_default=True, type=int)
+def schema_tables(
+    target_database: str | None,
+    search: str,
+    schema_name: str | None,
+    limit: int,
+) -> None:
+    """List tables for the active or selected database."""
+
+    async def run_tables() -> None:
+        settings = get_settings()
+        database_type, database_url, _ = await _resolve_target_database_context(
+            settings,
+            target_database=target_database,
+        )
+        if not database_url:
+            raise click.ClickException("No target database configured.")
+        connector = create_connector(database_type=database_type, database_url=database_url)
+        await connector.connect()
+        try:
+            tables = await connector.get_schema(schema_name=schema_name)
+        finally:
+            await connector.close()
+
+        term = search.strip().lower()
+        filtered = []
+        for item in tables:
+            qualified = f"{item.schema_name}.{item.table_name}"
+            if term and term not in qualified.lower():
+                continue
+            filtered.append(item)
+        filtered = sorted(filtered, key=lambda item: (item.schema_name, item.table_name))
+        if limit > 0:
+            filtered = filtered[:limit]
+        if not filtered:
+            console.print("[yellow]No tables found for this selection.[/yellow]")
+            return
+
+        table = Table(title="Schema Tables", show_header=True, header_style="bold cyan")
+        table.add_column("Table")
+        table.add_column("Type")
+        table.add_column("Columns", justify="right")
+        table.add_column("Rows", justify="right")
+        for item in filtered:
+            table.add_row(
+                f"{item.schema_name}.{item.table_name}",
+                item.table_type,
+                str(len(item.columns)),
+                str(item.row_count) if item.row_count is not None else "-",
+            )
+        console.print(table)
+
+    asyncio.run(run_tables())
+
+
+@schema.command(name="columns")
+@click.argument("table")
+@click.option("--target-database", default=None, help="Target database connection UUID.")
+@click.option("--schema-name", default=None, help="Schema override when TABLE is unqualified.")
+def schema_columns(table: str, target_database: str | None, schema_name: str | None) -> None:
+    """List columns for a table."""
+
+    async def run_columns() -> None:
+        settings = get_settings()
+        database_type, database_url, _ = await _resolve_target_database_context(
+            settings,
+            target_database=target_database,
+        )
+        if not database_url:
+            raise click.ClickException("No target database configured.")
+
+        qualified = _sanitize_table_reference(table)
+        if "." in qualified:
+            requested_schema, requested_table = qualified.split(".", 1)
+        else:
+            requested_schema = schema_name or "public"
+            requested_table = qualified
+
+        connector = create_connector(database_type=database_type, database_url=database_url)
+        await connector.connect()
+        try:
+            tables = await connector.get_schema(schema_name=requested_schema)
+        finally:
+            await connector.close()
+        match = next(
+            (
+                item
+                for item in tables
+                if item.table_name == requested_table and item.schema_name == requested_schema
+            ),
+            None,
+        )
+        if match is None:
+            raise click.ClickException(
+                f"Table not found: {requested_schema}.{requested_table}"
+            )
+
+        columns = Table(
+            title=f"Columns: {requested_schema}.{requested_table}",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        columns.add_column("Column")
+        columns.add_column("Type")
+        columns.add_column("Nullable")
+        columns.add_column("PK")
+        columns.add_column("FK")
+        for column in match.columns:
+            fk_ref = (
+                f"{column.foreign_table}.{column.foreign_column}"
+                if column.foreign_table and column.foreign_column
+                else ""
+            )
+            columns.add_row(
+                column.name,
+                column.data_type,
+                "yes" if column.is_nullable else "no",
+                "yes" if column.is_primary_key else "no",
+                fk_ref,
+            )
+        console.print(columns)
+
+    asyncio.run(run_columns())
+
+
+@schema.command(name="sample")
+@click.argument("table")
+@click.option("--target-database", default=None, help="Target database connection UUID.")
+@click.option("--rows", default=10, show_default=True, type=int)
+@click.option("--offset", default=0, show_default=True, type=int)
+@click.option("--page-size", default=10, show_default=True, type=int)
+def schema_sample(
+    table: str,
+    target_database: str | None,
+    rows: int,
+    offset: int,
+    page_size: int,
+) -> None:
+    """Sample rows from a table."""
+
+    async def run_sample() -> None:
+        settings = get_settings()
+        database_type, database_url, _ = await _resolve_target_database_context(
+            settings,
+            target_database=target_database,
+        )
+        if not database_url:
+            raise click.ClickException("No target database configured.")
+        table_ref = _sanitize_table_reference(table)
+        bounded_rows = max(1, min(rows, 1000))
+        bounded_offset = max(0, offset)
+        sql = f"SELECT * FROM {table_ref} LIMIT {bounded_rows} OFFSET {bounded_offset}"
+
+        result = await _run_direct_sql_query(
+            sql_query=sql,
+            database_type=database_type,
+            database_url=database_url,
+        )
+        data = _build_columnar_data(result.get("query_result"))
+        _print_query_output(
+            answer=result.get("natural_language_answer", ""),
+            sql=result.get("validated_sql"),
+            data=data,
+            result=result,
+            evidence=False,
+            show_metrics=False,
+            pager=False,
+            page=1,
+            page_size=max(1, page_size),
+        )
+
+    asyncio.run(run_sample())
+
+
+@cli.group(name="session")
+def session() -> None:
+    """Manage persisted CLI chat sessions."""
+    pass
+
+
+@session.command(name="list")
+@click.option("--search", default="", help="Filter sessions by title text.")
+@click.option("--limit", default=20, show_default=True, type=int)
+def list_sessions(search: str, limit: int) -> None:
+    """List saved CLI sessions."""
+    sessions = state.load_sessions()
+    term = search.strip().lower()
+    if term:
+        sessions = [item for item in sessions if term in str(item.get("title", "")).lower()]
+    if limit > 0:
+        sessions = sessions[:limit]
+    if not sessions:
+        console.print("[yellow]No saved CLI sessions found.[/yellow]")
+        return
+    table = Table(title="CLI Sessions", show_header=True, header_style="bold cyan")
+    table.add_column("Session ID")
+    table.add_column("Title")
+    table.add_column("Updated")
+    table.add_column("Target DB")
+    table.add_column("Turns", justify="right")
+    for item in sessions:
+        history = item.get("conversation_history") or []
+        table.add_row(
+            str(item.get("session_id", "")),
+            str(item.get("title", "Untitled session")),
+            str(item.get("updated_at", "")),
+            str(item.get("target_connection_id") or "-"),
+            str(max(0, len(history) // 2)),
+        )
+    console.print(table)
+
+
+@session.command(name="clear")
+@click.argument("session_id", required=False)
+@click.option("--all", "clear_all", is_flag=True, help="Delete all saved sessions.")
+def clear_session(session_id: str | None, clear_all: bool) -> None:
+    """Delete one saved session or all sessions."""
+    if clear_all:
+        state.clear_sessions()
+        console.print("[green]✓ Cleared all CLI sessions.[/green]")
+        return
+    if not session_id:
+        raise click.ClickException("Provide SESSION_ID or use --all.")
+    deleted = state.delete_session(session_id.strip())
+    if not deleted:
+        raise click.ClickException(f"Session not found: {session_id}")
+    console.print(f"[green]✓ Cleared session {session_id}.[/green]")
+
+
+@session.command(name="resume")
+@click.pass_context
+@click.argument("session_id")
+@click.option("--target-database", default=None, help="Override target database connection UUID.")
+@click.option("--execution-mode", type=click.Choice(["natural_language", "direct_sql"]), default="natural_language")
+@click.option("--pager/--no-pager", default=False)
+@click.option("--evidence", is_flag=True)
+@click.option("--max-clarifications", default=3, type=int, show_default=True)
+@click.option("--page-size", default=10, type=int, show_default=True)
+@click.option("--row-limit", default=100, type=int, show_default=True)
+def resume_session(
+    ctx: click.Context,
+    session_id: str,
+    target_database: str | None,
+    execution_mode: str,
+    pager: bool,
+    evidence: bool,
+    max_clarifications: int,
+    page_size: int,
+    row_limit: int,
+) -> None:
+    """Resume a saved CLI session in interactive chat mode."""
+    snapshot = state.get_session(session_id.strip())
+    if snapshot is None:
+        raise click.ClickException(f"Session not found: {session_id}")
+    effective_target = target_database or snapshot.get("target_connection_id")
+    ctx.invoke(
+        chat,
+        evidence=evidence,
+        pager=pager,
+        max_clarifications=max_clarifications,
+        synthesize_simple_sql=None,
+        target_database=effective_target,
+        execution_mode=execution_mode,
+        session_id=session_id.strip(),
+        page_size=page_size,
+        row_limit=row_limit,
+        auto_approve_tools=False,
+    )
 
 
 @cli.command()

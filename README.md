@@ -121,6 +121,23 @@ datachat chat
 # Single question
 datachat ask "show first 5 rows from public.users"
 
+# Built-in templates
+datachat ask --list-templates
+datachat ask --template sample-rows --table public.users
+
+# Direct SQL mode (read-only)
+datachat ask --execution-mode direct_sql "SELECT * FROM public.users LIMIT 10"
+
+# Schema explorer commands
+datachat schema tables --search users
+datachat schema columns public.users
+datachat schema sample public.users --rows 10
+
+# Session management
+datachat chat --session-id onboarding
+datachat session list
+datachat session resume onboarding
+
 # Setup helper
 datachat setup
 

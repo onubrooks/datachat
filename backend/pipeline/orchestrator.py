@@ -3053,6 +3053,7 @@ class DataChatPipeline:
         target_connection_id: str | None,
         synthesize_simple_sql: bool | None,
         correlation_prefix: str,
+        tool_approved: bool = False,
         preplanned_sql: dict[str, Any] | None = None,
     ) -> PipelineState:
         return {
@@ -3066,7 +3067,7 @@ class DataChatPipeline:
             "target_connection_id": target_connection_id,
             "user_id": "anonymous",
             "correlation_id": f"{correlation_prefix}-{int(time.time() * 1000)}",
-            "tool_approved": False,
+            "tool_approved": tool_approved,
             "intent_gate": None,
             "intent_summary": None,
             "clarification_turn_count": 0,
@@ -3179,6 +3180,7 @@ class DataChatPipeline:
         database_url: str | None = None,
         target_connection_id: str | None = None,
         synthesize_simple_sql: bool | None = None,
+        tool_approved: bool = False,
         preplanned_sql: dict[str, Any] | None = None,
     ) -> PipelineState:
         initial_state = self._build_initial_state(
@@ -3190,6 +3192,7 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            tool_approved=tool_approved,
             correlation_prefix="local",
             preplanned_sql=preplanned_sql,
         )
@@ -3391,6 +3394,7 @@ class DataChatPipeline:
         database_url: str | None,
         target_connection_id: str | None,
         synthesize_simple_sql: bool | None,
+        tool_approved: bool,
         extra_llm_calls: int = 0,
         extra_agent_timings: dict[str, float] | None = None,
     ) -> PipelineState:
@@ -3403,6 +3407,7 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            tool_approved=tool_approved,
             correlation_prefix="local",
         )
         merged["sub_answers"] = sub_answers
@@ -3603,6 +3608,7 @@ class DataChatPipeline:
         database_url: str | None = None,
         target_connection_id: str | None = None,
         synthesize_simple_sql: bool | None = None,
+        tool_approved: bool = False,
     ) -> PipelineState:
         """
         Run pipeline synchronously (wait for completion).
@@ -3629,6 +3635,7 @@ class DataChatPipeline:
                 database_url=database_url,
                 target_connection_id=target_connection_id,
                 synthesize_simple_sql=synthesize_simple_sql,
+                tool_approved=tool_approved,
             )
 
         (
@@ -3653,6 +3660,7 @@ class DataChatPipeline:
                 database_url=database_url,
                 target_connection_id=target_connection_id,
                 synthesize_simple_sql=synthesize_simple_sql,
+                tool_approved=tool_approved,
                 preplanned_sql=planned_sql_map.get(index),
             )
             sub_results.append(result)
@@ -3669,6 +3677,7 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            tool_approved=tool_approved,
             extra_llm_calls=planner_llm_calls,
             extra_agent_timings={"multi_sql_planner": planner_duration_ms},
         )
@@ -3683,6 +3692,7 @@ class DataChatPipeline:
         database_url: str | None = None,
         target_connection_id: str | None = None,
         synthesize_simple_sql: bool | None = None,
+        tool_approved: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         """
         Run pipeline with streaming updates.
@@ -3711,6 +3721,7 @@ class DataChatPipeline:
                 database_url=database_url,
                 target_connection_id=target_connection_id,
                 synthesize_simple_sql=synthesize_simple_sql,
+                tool_approved=tool_approved,
             )
             yield {
                 "node": "MultiQueryAggregator",
@@ -3729,6 +3740,7 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            tool_approved=tool_approved,
             correlation_prefix="stream",
         )
 
@@ -3758,6 +3770,7 @@ class DataChatPipeline:
         database_url: str | None,
         target_connection_id: str | None,
         synthesize_simple_sql: bool | None,
+        tool_approved: bool = False,
         event_callback: Any = None,
         correlation_prefix: str = "stream",
         preplanned_sql: dict[str, Any] | None = None,
@@ -3774,6 +3787,7 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            tool_approved=tool_approved,
             correlation_prefix=correlation_prefix,
             preplanned_sql=preplanned_sql,
         )
@@ -3885,6 +3899,7 @@ class DataChatPipeline:
         database_url: str | None = None,
         target_connection_id: str | None = None,
         synthesize_simple_sql: bool | None = None,
+        tool_approved: bool = False,
         event_callback: Any = None,
     ) -> PipelineState:
         """
@@ -3963,6 +3978,7 @@ class DataChatPipeline:
                     database_url=database_url,
                     target_connection_id=target_connection_id,
                     synthesize_simple_sql=synthesize_simple_sql,
+                    tool_approved=tool_approved,
                     event_callback=event_callback,
                     correlation_prefix=f"stream-q{index}",
                     preplanned_sql=planned_sql_map.get(index),
@@ -3981,6 +3997,7 @@ class DataChatPipeline:
                 database_url=database_url,
                 target_connection_id=target_connection_id,
                 synthesize_simple_sql=synthesize_simple_sql,
+                tool_approved=tool_approved,
                 extra_llm_calls=planner_llm_calls,
                 extra_agent_timings={"multi_sql_planner": planner_duration_ms},
             )
@@ -3994,6 +4011,7 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            tool_approved=tool_approved,
             event_callback=event_callback,
             correlation_prefix="stream",
         )
