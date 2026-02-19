@@ -567,16 +567,6 @@ export function ChatInterface() {
     });
   };
 
-  const buildSqlExecutionPrompt = (sql: string) =>
-    [
-      "Execute this SQL query exactly as written and return the results.",
-      "If it fails, explain the error and suggest a corrected SQL query.",
-      "",
-      "```sql",
-      sql.trim(),
-      "```",
-    ].join("\n");
-
   // Handle send message
   const handleSend = async () => {
     const naturalLanguageQuery = input.trim();
@@ -591,7 +581,7 @@ export function ChatInterface() {
         : naturalLanguageQuery;
     const requestMessage =
       composerMode === "sql"
-        ? buildSqlExecutionPrompt(sqlQuery)
+        ? sqlQuery
         : naturalLanguageQuery;
     const requestDatabaseId = targetDatabaseId || null;
     const canReuseConversation =
@@ -640,6 +630,12 @@ export function ChatInterface() {
           session_summary: canReuseConversation ? sessionSummary : undefined,
           session_state: canReuseConversation ? sessionState : undefined,
           synthesize_simple_sql: synthesizeSimpleSql,
+          ...(composerMode === "sql"
+            ? {
+                execution_mode: "direct_sql" as const,
+                sql: sqlQuery,
+              }
+            : {}),
         },
         {
           onOpen: () => {
@@ -1475,7 +1471,7 @@ export function ChatInterface() {
                     value={sqlDraft}
                     onChange={(event) => setSqlDraft(event.target.value)}
                     onKeyDown={handleSqlEditorKeyPress}
-                    placeholder="SELECT * FROM your_table LIMIT 50;"
+                    placeholder="SELECT * FROM your_table LIMIT 10;"
                     disabled={isLoading || !isInitialized}
                     className="min-h-[120px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                     aria-label="SQL editor input"
@@ -1503,7 +1499,7 @@ export function ChatInterface() {
               <p className="mt-2 text-xs text-muted-foreground">
                 {composerMode === "nl"
                   ? "Press Enter to send"
-                  : "SQL editor sends your query as a deterministic execution request."}
+                  : "SQL editor runs your SQL directly (read-only)."}
               </p>
               {conversationId &&
                 conversationDatabaseId &&

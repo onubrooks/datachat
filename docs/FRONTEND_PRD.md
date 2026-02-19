@@ -31,7 +31,7 @@ This document describes the frontend architecture, current state, and roadmap fo
 | Message Display | User/assistant messages with formatting | ✅ Implemented |
 | SQL Code Blocks | Syntax display with copy button | ✅ Implemented |
 | Data Tables | Result tables with expand/collapse | ✅ Implemented |
-| Table Pagination | 50 rows/page with navigation controls | ✅ Implemented |
+| Table Pagination | Default 10 rows/page with navigation controls and user-settable page size | ✅ Implemented |
 | Visualizations | Bar, line, scatter, pie charts (SVG) | ✅ Implemented |
 | Clarifying Questions | Interactive question prompts | ✅ Implemented |
 | Multi-Question Support | Sub-answers with Q1/Q2 selector | ✅ Implemented |
@@ -133,7 +133,7 @@ This document describes the frontend architecture, current state, and roadmap fo
 | Feature | Description | Effort |
 |---------|-------------|--------|
 | ✅ **Query Templates** | Pre-defined patterns (Top N, trends, breakdown) | Delivered |
-| ✅ **SQL Editor Mode** | Edit SQL before execution and run deterministic SQL requests | Delivered |
+| ✅ **SQL Editor Mode** | Edit SQL before execution and run direct read-only SQL requests | Delivered |
 | ✅ **Keyboard Shortcuts** | Cmd/Ctrl+K, Cmd/Ctrl+H, Cmd/Ctrl+/, Esc | Delivered |
 | ✅ **Dark Mode Toggle** | Manual light/dark/system theme override in Settings | Delivered |
 
@@ -308,7 +308,7 @@ frontend/src/components/visualizations/
 | Task | Effort | Priority | Status |
 |------|--------|----------|--------|
 | Add conversation persistence (localStorage) | 8h | P1 | ✅ Done |
-| Add table pagination (50 rows/page) | 4h | P1 | ✅ Done |
+| Add table pagination (default 10 rows/page + user-settable page size) | 4h | P1 | ✅ Done |
 | Add retry button for errors | 4h | P1 | ✅ Done |
 | Add schema browser sidebar | 12h | P1 | ✅ Done |
 

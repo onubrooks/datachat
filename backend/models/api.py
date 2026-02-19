@@ -4,7 +4,7 @@ API Request/Response Models
 Pydantic models for FastAPI endpoints.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,14 @@ class ChatRequest(BaseModel):
     """Request model for chat endpoint."""
 
     message: str = Field(..., min_length=1, description="User's natural language query")
+    execution_mode: Literal["natural_language", "direct_sql"] = Field(
+        default="natural_language",
+        description="Execution mode for the request.",
+    )
+    sql: str | None = Field(
+        default=None,
+        description="Raw SQL query to execute directly when execution_mode is direct_sql.",
+    )
     conversation_id: str | None = Field(None, description="Optional conversation ID for context")
     target_database: str | None = Field(
         None, description="Optional database connection ID to target"
@@ -49,6 +57,8 @@ class ChatRequest(BaseModel):
         "json_schema_extra": {
             "example": {
                 "message": "What's the total revenue?",
+                "execution_mode": "natural_language",
+                "sql": None,
                 "conversation_id": "conv_123",
                 "target_database": "3a1f2d3e-4b5c-6d7e-8f90-1234567890ab",
                 "conversation_history": [],

@@ -10,6 +10,8 @@ from backend.api.database_context import (
 )
 from backend.connectors.base import (
     ConnectionError as ConnectorConnectionError,
+)
+from backend.connectors.base import (
     SchemaError as ConnectorSchemaError,
 )
 from backend.connectors.factory import create_connector
@@ -17,11 +19,11 @@ from backend.database.manager import DatabaseConnectionManager
 from backend.models.database import (
     DatabaseConnection,
     DatabaseConnectionCreate,
+    DatabaseConnectionUpdate,
+    DatabaseConnectionUpdateDefault,
     DatabaseSchemaColumn,
     DatabaseSchemaResponse,
     DatabaseSchemaTable,
-    DatabaseConnectionUpdate,
-    DatabaseConnectionUpdateDefault,
 )
 
 router = APIRouter()

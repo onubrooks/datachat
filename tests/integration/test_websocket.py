@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
+from backend.initialization.initializer import SystemStatus
 
 
 @pytest.mark.integration
@@ -276,6 +277,57 @@ class TestWebSocketStreaming:
                         break
         kwargs = mock_pipeline.run_with_streaming.call_args.kwargs
         assert kwargs["synthesize_simple_sql"] is False
+
+    def test_websocket_executes_direct_sql_mode_without_pipeline(self, client):
+        connector = AsyncMock()
+        connector.connect = AsyncMock(return_value=None)
+        connector.execute = AsyncMock(
+            return_value=SimpleNamespace(
+                rows=[{"item_id": 1}],
+                columns=["item_id"],
+                execution_time_ms=4.2,
+            )
+        )
+        connector.close = AsyncMock(return_value=None)
+
+        with (
+            patch("backend.api.websocket.create_connector", return_value=connector),
+            patch(
+                "backend.api.websocket.resolve_database_type_and_url",
+                new=AsyncMock(
+                    return_value=("postgresql", "postgresql://user:pass@localhost:5432/db")
+                ),
+            ),
+            patch(
+                "backend.api.websocket.SystemInitializer.status",
+                new=AsyncMock(
+                    return_value=SystemStatus(
+                        is_initialized=True,
+                        has_databases=True,
+                        has_system_database=True,
+                        has_datapoints=True,
+                        setup_required=[],
+                    )
+                ),
+            ),
+            patch("backend.api.main.app_state", {"pipeline": None, "database_manager": None}),
+        ):
+            with client.websocket_connect("/ws/chat") as websocket:
+                websocket.send_json(
+                    {
+                        "message": "SELECT item_id FROM public.items LIMIT 1",
+                        "execution_mode": "direct_sql",
+                        "sql": "SELECT item_id FROM public.items LIMIT 1",
+                    }
+                )
+                event = websocket.receive_json()
+
+        assert event["event"] == "complete"
+        assert event["sql"] == "SELECT item_id FROM public.items LIMIT 1"
+        assert event["answer_source"] == "sql"
+        assert event["data"]["item_id"] == [1]
+        assert event["metrics"]["llm_calls"] == 0
+        connector.execute.assert_awaited_once_with("SELECT item_id FROM public.items LIMIT 1")
 
     def test_websocket_forwards_session_memory(self, client):
         mock_pipeline = AsyncMock()

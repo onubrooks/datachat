@@ -263,6 +263,7 @@ export function Message({
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [selectedSubAnswerIndex, setSelectedSubAnswerIndex] = useState<number>(0);
   const [tablePage, setTablePage] = useState<number>(0);
+  const [rowsPerPage, setRowsPerPage] = useState<number>(10);
   const [showChartSettings, setShowChartSettings] = useState(false);
   const [chartTooltip, setChartTooltip] = useState<ChartTooltipState | null>(null);
   const [hiddenPieLabels, setHiddenPieLabels] = useState<string[]>([]);
@@ -302,7 +303,6 @@ export function Message({
   const tabButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const tabListId = `message-tablist-${message.id}`;
   const activeTabPanelId = `${message.id}-panel-${activeTab}`;
-  const ROWS_PER_PAGE = 50;
 
   const subAnswers = message.sub_answers || [];
   const activeSubAnswer =
@@ -329,6 +329,7 @@ export function Message({
 
   useEffect(() => {
     setTablePage(0);
+    setRowsPerPage(10);
   }, [message.id, selectedSubAnswerIndex]);
 
   useEffect(() => {
@@ -347,9 +348,9 @@ export function Message({
       : 0;
 
   useEffect(() => {
-    const totalPages = Math.max(1, Math.ceil(rowCount / ROWS_PER_PAGE));
+    const totalPages = Math.max(1, Math.ceil(rowCount / rowsPerPage));
     setTablePage((page) => Math.min(page, totalPages - 1));
-  }, [rowCount]);
+  }, [rowCount, rowsPerPage]);
 
   const rows = useMemo(
     () =>
@@ -670,9 +671,9 @@ export function Message({
       );
     }
 
-    const totalPages = Math.ceil(rowCount / ROWS_PER_PAGE);
-    const startRow = tablePage * ROWS_PER_PAGE;
-    const endRow = Math.min(startRow + ROWS_PER_PAGE, rowCount);
+    const totalPages = Math.ceil(rowCount / rowsPerPage);
+    const startRow = tablePage * rowsPerPage;
+    const endRow = Math.min(startRow + rowsPerPage, rowCount);
     const pageRows = rows.slice(startRow, endRow);
 
     const handlePrevPage = () => {
@@ -731,9 +732,29 @@ export function Message({
             </div>
             {totalPages > 1 && (
               <div className="flex items-center justify-between mt-3 pt-3 border-t">
-                <p className="text-xs text-muted-foreground">
-                  Showing {startRow + 1}-{endRow} of {rowCount} rows
-                </p>
+                <div className="flex items-center gap-3">
+                  <p className="text-xs text-muted-foreground">
+                    Showing {startRow + 1}-{endRow} of {rowCount} rows
+                  </p>
+                  <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                    Rows per page
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={rowsPerPage}
+                      onChange={(event) => {
+                        const value = Number(event.target.value);
+                        if (!Number.isFinite(value) || value < 1) {
+                          return;
+                        }
+                        setRowsPerPage(Math.floor(value));
+                      }}
+                      className="h-7 w-20 rounded border border-input bg-background px-2 text-xs"
+                      aria-label="Rows per page"
+                    />
+                  </label>
+                </div>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
@@ -762,9 +783,29 @@ export function Message({
               </div>
             )}
             {totalPages === 1 && rowCount > 0 && (
-              <p className="text-xs text-muted-foreground mt-2">
-                Showing {rowCount} rows
-              </p>
+              <div className="mt-2 flex items-center gap-3">
+                <p className="text-xs text-muted-foreground">
+                  Showing {rowCount} rows
+                </p>
+                <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                  Rows per page
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={rowsPerPage}
+                    onChange={(event) => {
+                      const value = Number(event.target.value);
+                      if (!Number.isFinite(value) || value < 1) {
+                        return;
+                      }
+                      setRowsPerPage(Math.floor(value));
+                    }}
+                    className="h-7 w-20 rounded border border-input bg-background px-2 text-xs"
+                    aria-label="Rows per page"
+                  />
+                </label>
+              </div>
             )}
           </CardContent>
         </details>

@@ -5,6 +5,8 @@ FastAPI endpoints for natural language chat interface.
 """
 
 import logging
+import re
+import time
 import uuid
 from typing import Any
 
@@ -13,6 +15,13 @@ from fastapi.responses import JSONResponse
 
 from backend.api.database_context import resolve_database_type_and_url
 from backend.config import get_settings
+from backend.connectors.base import (
+    ConnectionError as ConnectorConnectionError,
+)
+from backend.connectors.base import (
+    QueryError as ConnectorQueryError,
+)
+from backend.connectors.factory import create_connector
 from backend.initialization.initializer import SystemInitializer
 from backend.models.api import ChatMetrics, ChatRequest, ChatResponse, DataSource
 
@@ -22,6 +31,21 @@ router = APIRouter()
 LIVE_SCHEMA_MODE_NOTICE = (
     "Live schema mode: DataPoints are not loaded yet. "
     "Answers are generated from database metadata and query results only."
+)
+READ_ONLY_SQL_PREFIXES = ("select", "with", "show", "describe", "desc", "explain")
+MUTATING_SQL_KEYWORDS = (
+    "insert",
+    "update",
+    "delete",
+    "drop",
+    "alter",
+    "truncate",
+    "create",
+    "grant",
+    "revoke",
+    "merge",
+    "call",
+    "copy",
 )
 
 
@@ -92,6 +116,87 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
                 },
             )
 
+        conversation_id = chat_request.conversation_id or f"conv_{uuid.uuid4().hex[:12]}"
+        request_mode = (chat_request.execution_mode or "natural_language").lower()
+        if request_mode == "direct_sql":
+            sql_query = (chat_request.sql or chat_request.message or "").strip()
+            if not sql_query:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="SQL mode requires a non-empty SQL query.",
+                )
+            if not _is_read_only_sql(sql_query):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "SQL Editor accepts read-only SQL only "
+                        "(SELECT/WITH/SHOW/DESCRIBE/EXPLAIN)."
+                    ),
+                )
+            if not database_url:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="No active database URL available for SQL execution.",
+                )
+
+            started_at = time.perf_counter()
+            result = await _run_direct_sql_query(
+                sql_query=sql_query,
+                database_type=database_type,
+                database_url=database_url,
+                timeout_seconds=settings.database.pool_timeout,
+                pool_size=settings.database.pool_size,
+            )
+            row_count = len(result["rows"])
+            answer = f"Executed SQL query successfully. Returned {row_count} row(s)."
+            if not status_state.has_datapoints:
+                answer = _maybe_append_live_schema_notice(answer, has_datapoints=False)
+            total_latency_ms = (time.perf_counter() - started_at) * 1000
+            data = {
+                column: [row.get(column) for row in result["rows"]]
+                for column in result["columns"]
+            }
+            metrics = ChatMetrics(
+                total_latency_ms=total_latency_ms,
+                agent_timings={"direct_sql_execution": result["execution_time_ms"]},
+                llm_calls=0,
+                retry_count=0,
+            )
+            return ChatResponse(
+                answer=answer,
+                clarifying_questions=[],
+                sql=sql_query,
+                data=data,
+                visualization_hint="table",
+                visualization_metadata={
+                    "requested": "direct_sql",
+                    "deterministic": "table",
+                    "final": "table",
+                    "resolution_reason": "direct_sql_mode",
+                },
+                sources=[],
+                answer_source="sql",
+                answer_confidence=1.0,
+                evidence=[],
+                validation_errors=[],
+                validation_warnings=[],
+                tool_approval_required=False,
+                tool_approval_message=None,
+                tool_approval_calls=[],
+                metrics=metrics,
+                conversation_id=conversation_id,
+                session_summary=chat_request.session_summary,
+                session_state=chat_request.session_state,
+                sub_answers=[],
+                decision_trace=[
+                    {
+                        "stage": "execution_mode",
+                        "decision": "direct_sql",
+                        "reason": "user_selected_sql_editor_mode",
+                    }
+                ],
+            )
+
         pipeline = app_state.get("pipeline")
         if pipeline is None:
             raise RuntimeError("Pipeline not initialized")
@@ -150,9 +255,6 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
         # Build metrics
         metrics = _build_metrics(result)
 
-        # Generate or use conversation ID
-        conversation_id = chat_request.conversation_id or f"conv_{uuid.uuid4().hex[:12]}"
-
         response = ChatResponse(
             answer=answer,
             clarifying_questions=result.get("clarifying_questions", []),
@@ -194,12 +296,57 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Pipeline not initialized. Please try again later.",
         ) from e
+    except (ConnectorConnectionError, ConnectorQueryError) as e:
+        logger.error(f"Direct SQL execution failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
     except Exception as e:
         logger.error(f"Unexpected error in chat endpoint: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected error occurred: {str(e)}",
         ) from e
+
+
+def _is_read_only_sql(sql_query: str) -> bool:
+    compact = sql_query.strip()
+    if not compact:
+        return False
+    statements = [part.strip() for part in compact.split(";") if part.strip()]
+    if len(statements) != 1:
+        return False
+    statement = statements[0].lower()
+    if not statement.startswith(READ_ONLY_SQL_PREFIXES):
+        return False
+    return not any(re.search(rf"\b{keyword}\b", statement) for keyword in MUTATING_SQL_KEYWORDS)
+
+
+async def _run_direct_sql_query(
+    *,
+    sql_query: str,
+    database_type: str,
+    database_url: str,
+    timeout_seconds: int,
+    pool_size: int,
+) -> dict[str, Any]:
+    connector = create_connector(
+        database_type=database_type,
+        database_url=database_url,
+        timeout=timeout_seconds,
+        pool_size=pool_size,
+    )
+    try:
+        await connector.connect()
+        query_result = await connector.execute(sql_query)
+        return {
+            "rows": query_result.rows,
+            "columns": query_result.columns,
+            "execution_time_ms": query_result.execution_time_ms,
+        }
+    finally:
+        await connector.close()
 
 
 def _build_sources(result: dict[str, Any]) -> list[DataSource]:

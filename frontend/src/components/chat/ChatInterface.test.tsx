@@ -221,7 +221,7 @@ describe("ChatInterface target database", () => {
     expect(screen.queryByText("Inventory checks")).not.toBeInTheDocument();
   });
 
-  it("sends SQL editor content as deterministic execution prompt", async () => {
+  it("sends SQL editor content as direct SQL execution request", async () => {
     render(<ChatInterface />);
     await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
 
@@ -233,7 +233,8 @@ describe("ChatInterface target database", () => {
 
     await waitFor(() => expect(mockStreamChat).toHaveBeenCalledTimes(1));
     const request = mockStreamChat.mock.calls[0][0] as Record<string, unknown>;
-    expect(String(request.message)).toContain("Execute this SQL query exactly as written");
-    expect(String(request.message)).toContain("SELECT * FROM users LIMIT 10;");
+    expect(request.message).toBe("SELECT * FROM users LIMIT 10;");
+    expect(request.execution_mode).toBe("direct_sql");
+    expect(request.sql).toBe("SELECT * FROM users LIMIT 10;");
   });
 });
