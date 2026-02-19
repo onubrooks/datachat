@@ -14,7 +14,8 @@ Routes:
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable
+from typing import Any
 
 from backend.agents.query_analyzer import QueryAnalysis
 

@@ -1,18 +1,3 @@
-"""
-SQLAgent
-
-Generates SQL queries from natural language using LLM and retrieved context.
-Includes self-correction capability to fix syntax errors, missing columns, etc.
-
-The SQLAgent:
-1. Takes user query + InvestigationMemory from ContextAgent
-2. Builds a prompt with schema context, business rules, and examples
-3. Generates SQL using configured LLM (GPT-4o, Claude, etc.)
-4. Self-validates the generated SQL
-5. Self-corrects if issues are found (max 3 attempts)
-6. Returns GeneratedSQL with explanation and metadata
-"""
-
 import json
 import logging
 import re
@@ -177,6 +162,7 @@ class SQLAgent(BaseAgent):
 
     def _providers_are_equivalent(self, primary: Any, secondary: Any) -> bool:
         """Return True when two providers resolve to the same effective model endpoint."""
+
         def _stored_attr(obj: Any, name: str) -> Any:
             data = getattr(obj, "__dict__", {})
             if isinstance(data, dict) and name in data:
@@ -337,9 +323,9 @@ class SQLAgent(BaseAgent):
                     "correction_attempts": len(correction_attempts),
                     "needs_clarification": needs_clarification,
                     "confidence": generated_sql.confidence,
-                    "prompt_version": self.prompts.get_metadata(
-                        "agents/sql_generator.md"
-                    ).get("version"),
+                    "prompt_version": self.prompts.get_metadata("agents/sql_generator.md").get(
+                        "version"
+                    ),
                 },
             )
 
@@ -402,7 +388,11 @@ class SQLAgent(BaseAgent):
             )
             return self._apply_row_limit_policy(generated, input.query)
 
-        # Build prompt with context + compiled semantic plan
+        query_dp_sql = self._try_query_datapoint_template(input)
+        if query_dp_sql:
+            runtime_stats["query_datapoint_template"] = True
+            return self._apply_row_limit_policy(query_dp_sql, input.query)
+
         prompt, compiler_plan = await self._build_generation_prompt(
             input,
             runtime_stats=runtime_stats,
@@ -423,10 +413,9 @@ class SQLAgent(BaseAgent):
         )
 
         try:
-            use_two_stage = (
-                self._pipeline_flag("sql_two_stage_enabled", True)
-                and not self._providers_are_equivalent(self.fast_llm, self.llm)
-            )
+            use_two_stage = self._pipeline_flag(
+                "sql_two_stage_enabled", True
+            ) and not self._providers_are_equivalent(self.fast_llm, self.llm)
 
             if use_two_stage:
                 fast_generated = await self._request_sql_from_llm(
@@ -530,9 +519,7 @@ class SQLAgent(BaseAgent):
                 )
                 if recovered is not None:
                     return recovered
-                raise SQLClarificationNeeded(
-                    self._build_clarifying_questions(input.query)
-                ) from exc
+                raise SQLClarificationNeeded(self._build_clarifying_questions(input.query)) from exc
 
     def _should_accept_fast_sql(self, generated_sql: GeneratedSQL, input: SQLAgentInput) -> bool:
         if generated_sql.clarifying_questions:
@@ -607,7 +594,11 @@ class SQLAgent(BaseAgent):
             temperature=0.0,
             max_tokens=1200,
         )
-        provider = self.fast_llm if not self._providers_are_equivalent(self.fast_llm, self.llm) else self.llm
+        provider = (
+            self.fast_llm
+            if not self._providers_are_equivalent(self.fast_llm, self.llm)
+            else self.llm
+        )
         try:
             generated = await self._request_sql_from_llm(
                 provider=provider,
@@ -786,8 +777,8 @@ class SQLAgent(BaseAgent):
         issues: list[ValidationIssue] = []
         sql = generated_sql.sql.strip().upper()
         db_type = input.database_type or getattr(self.config.database, "db_type", "postgresql")
-        is_show_statement = sql.startswith("SHOW") or sql.startswith("DESCRIBE") or sql.startswith(
-            "DESC"
+        is_show_statement = (
+            sql.startswith("SHOW") or sql.startswith("DESCRIBE") or sql.startswith("DESC")
         )
 
         # Basic syntax checks
@@ -837,9 +828,7 @@ class SQLAgent(BaseAgent):
             for table in referenced_table_lowers
             if self._is_catalog_table(table, catalog_schemas, catalog_aliases)
         }
-        is_catalog_only = referenced_tables and len(catalog_tables) == len(
-            referenced_table_lowers
-        )
+        is_catalog_only = referenced_tables and len(catalog_tables) == len(referenced_table_lowers)
 
         # Get available tables from DataPoints
         available_tables = set()
@@ -1013,9 +1002,7 @@ class SQLAgent(BaseAgent):
             questions.append("Is there a specific date or time range I should use?")
         return questions
 
-    def _resolve_followup_query(
-        self, input: SQLAgentInput
-    ) -> tuple[str, str | None]:
+    def _resolve_followup_query(self, input: SQLAgentInput) -> tuple[str, str | None]:
         history = input.conversation_history or []
         if not history:
             return input.query, None
@@ -1223,8 +1210,7 @@ class SQLAgent(BaseAgent):
                 schema_context = live_context
             else:
                 schema_context = (
-                    f"{schema_context}\n\n**Live schema snapshot (authoritative):**\n"
-                    f"{live_context}"
+                    f"{schema_context}\n\n**Live schema snapshot (authoritative):**\n{live_context}"
                 )
 
         compiler_plan: QueryCompilerPlan | None = None
@@ -1260,9 +1246,7 @@ class SQLAgent(BaseAgent):
             max_chars = self._pipeline_int("sql_prompt_max_context_chars", 12000)
             schema_context = self._truncate_context(schema_context, max_chars)
         business_context = self._format_business_context(input.investigation_memory)
-        conversation_context = self._format_conversation_context(
-            input.conversation_history
-        )
+        conversation_context = self._format_conversation_context(input.conversation_history)
         prompt = self.prompts.render(
             "agents/sql_generator.md",
             user_query=resolved_query,
@@ -1352,10 +1336,9 @@ class SQLAgent(BaseAgent):
                             values.append(col_name)
         if not table_columns:
             if runtime_stats is not None:
-                runtime_stats["query_compiler_latency_ms"] = (
-                    runtime_stats.get("query_compiler_latency_ms", 0.0)
-                    + ((time.perf_counter() - started) * 1000.0)
-                )
+                runtime_stats["query_compiler_latency_ms"] = runtime_stats.get(
+                    "query_compiler_latency_ms", 0.0
+                ) + ((time.perf_counter() - started) * 1000.0)
             return None
 
         operator_matches = match_operator_templates(
@@ -1376,7 +1359,9 @@ class SQLAgent(BaseAgent):
         candidate_tables = ranked_tables[:8]
         selected_tables = self._pick_selected_tables(query, candidate_tables, scores)
         join_hypotheses = self._infer_join_hypotheses(table_columns, selected_tables)
-        column_hints = self._suggest_column_hints(query, table_columns, selected_tables, signal_tokens)
+        column_hints = self._suggest_column_hints(
+            query, table_columns, selected_tables, signal_tokens
+        )
         confidence = self._estimate_compiler_confidence(scores, candidate_tables, selected_tables)
 
         reason = "deterministic"
@@ -1395,22 +1380,23 @@ class SQLAgent(BaseAgent):
             )
             if refined:
                 selected_tables = refined.get("selected_tables", selected_tables) or selected_tables
-                candidate_tables = refined.get("candidate_tables", candidate_tables) or candidate_tables
+                candidate_tables = (
+                    refined.get("candidate_tables", candidate_tables) or candidate_tables
+                )
                 join_hypotheses = refined.get("join_hypotheses", join_hypotheses) or join_hypotheses
                 column_hints = refined.get("column_hints", column_hints) or column_hints
                 confidence = max(confidence, float(refined.get("confidence", confidence)))
                 reason = "llm_refined_ambiguous_candidates"
                 path = "llm_refined"
                 if runtime_stats is not None:
-                    runtime_stats["query_compiler_llm_refinements"] = int(
-                        runtime_stats.get("query_compiler_llm_refinements", 0)
-                    ) + 1
+                    runtime_stats["query_compiler_llm_refinements"] = (
+                        int(runtime_stats.get("query_compiler_llm_refinements", 0)) + 1
+                    )
 
         if runtime_stats is not None:
-            runtime_stats["query_compiler_latency_ms"] = (
-                runtime_stats.get("query_compiler_latency_ms", 0.0)
-                + ((time.perf_counter() - started) * 1000.0)
-            )
+            runtime_stats["query_compiler_latency_ms"] = runtime_stats.get(
+                "query_compiler_latency_ms", 0.0
+            ) + ((time.perf_counter() - started) * 1000.0)
         return QueryCompilerPlan(
             query=query,
             operators=operator_keys,
@@ -1444,7 +1430,9 @@ class SQLAgent(BaseAgent):
                     score += 2
                 if token in table_tokens:
                     score += 1
-            if table.lower().startswith("information_schema.") or table.lower().startswith("pg_catalog."):
+            if table.lower().startswith("information_schema.") or table.lower().startswith(
+                "pg_catalog."
+            ):
                 score -= 3
             scores[table] = score
         return scores
@@ -1512,8 +1500,10 @@ class SQLAgent(BaseAgent):
                         hint = f"{source}.{col} = {target}.{col}"
                         if hint not in hints:
                             hints.append(hint)
-                shared = {"store_id", "product_id", "customer_id", "account_id"} & set(source_cols) & set(
-                    target_cols
+                shared = (
+                    {"store_id", "product_id", "customer_id", "account_id"}
+                    & set(source_cols)
+                    & set(target_cols)
                 )
                 for col in sorted(shared):
                     hint = f"{source}.{col} = {target}.{col}"
@@ -1576,9 +1566,13 @@ class SQLAgent(BaseAgent):
             return False
         if len(candidate_tables) < 2:
             return False
-        if len(candidate_tables) > max(2, self._pipeline_int("query_compiler_llm_max_candidates", 10)):
+        if len(candidate_tables) > max(
+            2, self._pipeline_int("query_compiler_llm_max_candidates", 10)
+        ):
             return False
-        if self.catalog.is_list_tables_query(query.lower()) or self.catalog.is_list_columns_query(query.lower()):
+        if self.catalog.is_list_tables_query(query.lower()) or self.catalog.is_list_columns_query(
+            query.lower()
+        ):
             return False
         threshold = self._pipeline_float("query_compiler_confidence_threshold", 0.72)
         if confidence >= threshold and selected_tables:
@@ -1618,19 +1612,23 @@ class SQLAgent(BaseAgent):
             response = await self.fast_llm.generate(request)
             self._track_llm_call(tokens=self._safe_total_tokens(response))
             if runtime_stats is not None:
-                runtime_stats["query_compiler_llm_calls"] = int(
-                    runtime_stats.get("query_compiler_llm_calls", 0)
-                ) + 1
+                runtime_stats["query_compiler_llm_calls"] = (
+                    int(runtime_stats.get("query_compiler_llm_calls", 0)) + 1
+                )
             content = self._coerce_response_content(response.content)
             json_match = re.search(r"\{[\s\S]*\}", content)
             if not json_match:
                 return None
             payload = json.loads(json_match.group(0))
             selected_tables = [
-                str(item) for item in payload.get("selected_tables", []) if str(item) in candidate_tables
+                str(item)
+                for item in payload.get("selected_tables", [])
+                if str(item) in candidate_tables
             ]
             candidate = [
-                str(item) for item in payload.get("candidate_tables", []) if str(item) in candidate_tables
+                str(item)
+                for item in payload.get("candidate_tables", [])
+                if str(item) in candidate_tables
             ]
             joins = [str(item) for item in payload.get("join_hypotheses", []) if str(item).strip()]
             columns = [str(item) for item in payload.get("column_hints", []) if str(item).strip()]
@@ -1949,9 +1947,7 @@ class SQLAgent(BaseAgent):
             return "", focus_tables
 
         header = (
-            "**Columns (all tables):**"
-            if is_list_tables
-            else "**Columns (top matched tables):**"
+            "**Columns (all tables):**" if is_list_tables else "**Columns (top matched tables):**"
         )
         return f"\n{header}\n" + "\n".join(lines), focus_tables
 
@@ -2056,10 +2052,7 @@ class SQLAgent(BaseAgent):
                         target_column = "id"
                     elif f"{key}_id" in target_columns:
                         target_column = f"{key}_id"
-                    hint = (
-                        f"- {source_table}.{column} -> "
-                        f"{target_table}.{target_column or 'id'}"
-                    )
+                    hint = f"- {source_table}.{column} -> {target_table}.{target_column or 'id'}"
                     if hint not in seen:
                         seen.add(hint)
                         hints.append(hint)
@@ -2626,10 +2619,10 @@ class SQLAgent(BaseAgent):
         if not candidate:
             return ""
         try:
-            return json.loads(f"\"{candidate}\"")
+            return json.loads(f'"{candidate}"')
         except json.JSONDecodeError:
             # Best-effort unescape for partially malformed JSON strings.
-            return candidate.replace("\\n", " ").replace("\\t", " ").replace("\\\"", '"')
+            return candidate.replace("\\n", " ").replace("\\t", " ").replace('\\"', '"')
 
     def _looks_truncated_response(self, content: str, finish_reason: str | None) -> bool:
         normalized_reason = str(finish_reason or "").lower()
@@ -2641,7 +2634,7 @@ class SQLAgent(BaseAgent):
             return True
         if stripped.count("{") > stripped.count("}"):
             return True
-        if stripped.endswith(":") or stripped.endswith('\"sql\"'):
+        if stripped.endswith(":") or stripped.endswith('"sql"'):
             return True
         return False
 
@@ -2652,7 +2645,11 @@ class SQLAgent(BaseAgent):
             return generated
 
         sql_upper = sql.upper()
-        if sql_upper.startswith("SHOW") or sql_upper.startswith("DESCRIBE") or sql_upper.startswith("DESC"):
+        if (
+            sql_upper.startswith("SHOW")
+            or sql_upper.startswith("DESCRIBE")
+            or sql_upper.startswith("DESC")
+        ):
             return generated
         if not (sql_upper.startswith("SELECT") or sql_upper.startswith("WITH")):
             return generated
@@ -2665,7 +2662,9 @@ class SQLAgent(BaseAgent):
             force_limit = True
         else:
             target_limit = self._default_row_limit
-            if self.catalog.is_list_tables_query(query.lower()) or self._is_catalog_metadata_query(sql_upper):
+            if self.catalog.is_list_tables_query(query.lower()) or self._is_catalog_metadata_query(
+                sql_upper
+            ):
                 target_limit = self._max_safe_row_limit
             force_limit = False
 
@@ -2896,3 +2895,166 @@ class SQLAgent(BaseAgent):
                 message=f"Expected SQLAgentInput, got {type(input).__name__}",
                 context={"input_type": type(input).__name__},
             )
+
+    def _try_query_datapoint_template(
+        self,
+        input: SQLAgentInput,
+    ) -> GeneratedSQL | None:
+        """
+        Try to match user query against QueryDataPoints for template execution.
+
+        QueryDataPoints provide pre-validated SQL templates that can be
+        parameterized and executed directly, bypassing LLM generation.
+
+        Args:
+            input: SQLAgentInput with investigation memory
+
+        Returns:
+            GeneratedSQL if a matching QueryDataPoint is found, None otherwise
+        """
+        if not input.investigation_memory or not input.investigation_memory.datapoints:
+            return None
+
+        query_lower = input.query.lower()
+
+        for retrieved_dp in input.investigation_memory.datapoints:
+            if retrieved_dp.datapoint_type != "Query":
+                continue
+
+            metadata = retrieved_dp.metadata if isinstance(retrieved_dp.metadata, dict) else {}
+
+            sql_template = metadata.get("sql_template")
+            if not sql_template:
+                continue
+
+            description = metadata.get("query_description", retrieved_dp.name).lower()
+
+            name_lower = retrieved_dp.name.lower()
+            if not self._query_matches_template(query_lower, name_lower, description):
+                continue
+
+            db_type = input.database_type or getattr(self.config.database, "db_type", "postgresql")
+            backend_variants = metadata.get("backend_variants")
+            if isinstance(backend_variants, str):
+                try:
+                    backend_variants = json.loads(backend_variants)
+                except json.JSONDecodeError:
+                    backend_variants = None
+
+            sql = sql_template
+            if (
+                backend_variants
+                and isinstance(backend_variants, dict)
+                and db_type in backend_variants
+            ):
+                sql = backend_variants[db_type]
+
+            sql = self._fill_template_defaults(sql, metadata.get("parameters"))
+
+            logger.info(
+                f"Using QueryDataPoint template: {retrieved_dp.datapoint_id}",
+                extra={"datapoint": retrieved_dp.datapoint_id},
+            )
+
+            return GeneratedSQL(
+                sql=sql,
+                explanation=f"Using pre-defined query template: {retrieved_dp.name}",
+                used_datapoints=[retrieved_dp.datapoint_id],
+                confidence=0.95,
+                assumptions=["Using default parameter values from QueryDataPoint"],
+                clarifying_questions=[],
+            )
+
+        return None
+
+    def _query_matches_template(
+        self,
+        query_lower: str,
+        name_lower: str,
+        description_lower: str,
+    ) -> bool:
+        """
+        Check if query matches a QueryDataPoint template.
+
+        Simple keyword matching for now. Future versions could use
+        semantic similarity or intent classification.
+
+        Args:
+            query_lower: Lowercased user query
+            name_lower: Lowercased QueryDataPoint name
+            description_lower: Lowercased QueryDataPoint description
+
+        Returns:
+            True if the query appears to match the template
+        """
+        name_words = set(name_lower.split())
+        query_words = set(query_lower.split())
+
+        overlap = name_words & query_words
+        if len(overlap) >= 2:
+            return True
+
+        if len(name_words) >= 2:
+            if all(word in query_lower for word in name_words if len(word) > 3):
+                return True
+
+        desc_keywords = [w for w in description_lower.split() if len(w) > 4]
+        matching_keywords = sum(1 for k in desc_keywords[:10] if k in query_lower)
+        if matching_keywords >= 3:
+            return True
+
+        return False
+
+    def _fill_template_defaults(
+        self,
+        sql_template: str,
+        parameters: dict[str, Any] | str | None,
+    ) -> str:
+        """
+        Fill SQL template placeholders with default values.
+
+        Args:
+            sql_template: SQL template with {parameter} placeholders
+            parameters: Parameter definitions (dict or JSON string)
+
+        Returns:
+            SQL with defaults filled in
+        """
+        if not parameters:
+            return sql_template
+
+        if isinstance(parameters, str):
+            try:
+                parameters = json.loads(parameters)
+            except json.JSONDecodeError:
+                return sql_template
+
+        if not isinstance(parameters, dict):
+            return sql_template
+
+        sql = sql_template
+        for param_name, param_def in parameters.items():
+            placeholder = f"{{{param_name}}}"
+            if placeholder not in sql:
+                continue
+
+            if not isinstance(param_def, dict):
+                continue
+
+            default_value = param_def.get("default")
+            if default_value is None:
+                continue
+
+            param_type = param_def.get("type", "string")
+            if param_type in ("string", "timestamp", "enum"):
+                formatted_value = f"'{default_value}'"
+            elif param_type in ("integer", "float"):
+                formatted_value = str(default_value)
+            elif param_type == "boolean":
+                formatted_value = "TRUE" if default_value else "FALSE"
+            else:
+                formatted_value = str(default_value)
+
+            sql = sql.replace(placeholder, formatted_value)
+
+        return sql

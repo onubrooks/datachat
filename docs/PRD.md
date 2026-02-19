@@ -183,7 +183,8 @@ The YAML-based schema described in DATAPOINT_SCHEMA.md is the target architectur
 - [x] Update RetrievedDataPoint model to include Query type
 - [x] Add tests for QueryDataPoint model validation
 - [x] Add tests for QueryDataPoint contract validation
-- [ ] Integrate with SQLAgent for template use (optional optimization)
+- [x] Integrate with SQLAgent for template use (auto-use QueryDataPoint SQL templates)
+- [x] Add tests for SQLAgent QueryDataPoint template matching
 
 ### Phase 2.1: Routing Fixes ✅
 - [x] Fix P1: Add 'clarification' route to intent_gate check
