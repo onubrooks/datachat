@@ -12,6 +12,8 @@ export interface ChatMessage {
 
 export interface ChatRequest {
   message: string;
+  execution_mode?: "natural_language" | "direct_sql";
+  sql?: string;
   conversation_id?: string;
   target_database?: string;
   conversation_history?: ChatMessage[];

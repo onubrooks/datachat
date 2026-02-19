@@ -5,6 +5,8 @@
 
 This document describes the frontend architecture, current state, and roadmap for the DataChat web UI.
 
+For operator/end-user instructions, see `docs/UI_HOWTO.md`.
+
 ---
 
 ## Technology Stack
@@ -31,7 +33,7 @@ This document describes the frontend architecture, current state, and roadmap fo
 | Message Display | User/assistant messages with formatting | ✅ Implemented |
 | SQL Code Blocks | Syntax display with copy button | ✅ Implemented |
 | Data Tables | Result tables with expand/collapse | ✅ Implemented |
-| Table Pagination | 50 rows/page with navigation controls | ✅ Implemented |
+| Table Pagination | Default 10 rows/page with navigation controls and user-settable page size | ✅ Implemented |
 | Visualizations | Bar, line, scatter, pie charts (SVG) | ✅ Implemented |
 | Clarifying Questions | Interactive question prompts | ✅ Implemented |
 | Multi-Question Support | Sub-answers with Q1/Q2 selector | ✅ Implemented |
@@ -40,6 +42,8 @@ This document describes the frontend architecture, current state, and roadmap fo
 | Conversation History Sidebar | Resume prior local sessions | ✅ Implemented |
 | Schema Explorer Sidebar | Browse tables/columns with search | ✅ Implemented |
 | Query Templates | Quick-action buttons for common prompts | ✅ Implemented |
+| SQL Editor Mode | Edit and run SQL drafts from composer or generated responses | ✅ Implemented |
+| Theme Override | Light, dark, and system theme settings | ✅ Implemented |
 | Chart Interaction | Tooltips, zoom controls, legend toggles | ✅ Implemented |
 | Chart Configuration | Per-chart axis + display settings panel | ✅ Implemented |
 | Accessibility Labels | ARIA labels, dialog semantics, live regions | ✅ Implemented |
@@ -117,23 +121,27 @@ This document describes the frontend architecture, current state, and roadmap fo
 
 ---
 
-## Should Add ➕
+## Recently Delivered ✅
 
 ### P1: Essential Features
 
 | Feature | Description | Effort |
 |---------|-------------|--------|
-| **Conversation Sidebar** | List of past conversations with search | 16h |
-| **Schema Browser** | Interactive table/column explorer | 12h |
+| ✅ **Conversation Sidebar + Search** | List of past conversations with local search/filter | Delivered |
+| ✅ **Schema Browser** | Interactive table/column explorer with search + use-in-query actions | Delivered |
 
 ### P2: Productivity Features
 
 | Feature | Description | Effort |
 |---------|-------------|--------|
-| **Query Templates** | Pre-defined patterns (Top N, Trends) | 8h |
-| **SQL Editor Mode** | Edit SQL before execution | 12h |
-| **Keyboard Shortcuts** | Cmd+K, Cmd+H, Cmd+/, Esc | 4h |
-| **Dark Mode Toggle** | Manual theme override | 2h |
+| ✅ **Query Templates** | Pre-defined patterns (Top N, trends, breakdown) | Delivered |
+| ✅ **SQL Editor Mode** | Edit SQL before execution and run direct read-only SQL requests | Delivered |
+| ✅ **Keyboard Shortcuts** | Cmd/Ctrl+K, Cmd/Ctrl+H, Cmd/Ctrl+/, Esc | Delivered |
+| ✅ **Dark Mode Toggle** | Manual light/dark/system theme override in Settings | Delivered |
+
+---
+
+## Backlog ➕
 
 ### P3: Export & Sharing
 
@@ -302,7 +310,7 @@ frontend/src/components/visualizations/
 | Task | Effort | Priority | Status |
 |------|--------|----------|--------|
 | Add conversation persistence (localStorage) | 8h | P1 | ✅ Done |
-| Add table pagination (50 rows/page) | 4h | P1 | ✅ Done |
+| Add table pagination (default 10 rows/page + user-settable page size) | 4h | P1 | ✅ Done |
 | Add retry button for errors | 4h | P1 | ✅ Done |
 | Add schema browser sidebar | 12h | P1 | ✅ Done |
 

@@ -7,6 +7,8 @@ Real-time streaming WebSocket endpoint for chat with agent status updates.
 import asyncio
 import json
 import logging
+import re
+import time
 import uuid
 from typing import Any
 
@@ -15,6 +17,13 @@ from fastapi.encoders import jsonable_encoder
 
 from backend.api.database_context import resolve_database_type_and_url
 from backend.config import get_settings
+from backend.connectors.base import (
+    ConnectionError as ConnectorConnectionError,
+)
+from backend.connectors.base import (
+    QueryError as ConnectorQueryError,
+)
+from backend.connectors.factory import create_connector
 from backend.initialization.initializer import SystemInitializer
 
 logger = logging.getLogger(__name__)
@@ -24,6 +33,60 @@ LIVE_SCHEMA_MODE_NOTICE = (
     "Live schema mode: DataPoints are not loaded yet. "
     "Answers are generated from database metadata and query results only."
 )
+READ_ONLY_SQL_PREFIXES = ("select", "with", "show", "describe", "desc", "explain")
+MUTATING_SQL_KEYWORDS = (
+    "insert",
+    "update",
+    "delete",
+    "drop",
+    "alter",
+    "truncate",
+    "create",
+    "grant",
+    "revoke",
+    "merge",
+    "call",
+    "copy",
+)
+
+
+def _is_read_only_sql(sql_query: str) -> bool:
+    compact = sql_query.strip()
+    if not compact:
+        return False
+    statements = [part.strip() for part in compact.split(";") if part.strip()]
+    if len(statements) != 1:
+        return False
+    statement = statements[0].lower()
+    if not statement.startswith(READ_ONLY_SQL_PREFIXES):
+        return False
+    return not any(re.search(rf"\b{keyword}\b", statement) for keyword in MUTATING_SQL_KEYWORDS)
+
+
+async def _run_direct_sql_query(
+    *,
+    sql_query: str,
+    database_type: str,
+    database_url: str,
+    timeout_seconds: int,
+    pool_size: int,
+) -> dict[str, Any]:
+    connector = create_connector(
+        database_type=database_type,
+        database_url=database_url,
+        timeout=timeout_seconds,
+        pool_size=pool_size,
+    )
+    try:
+        await connector.connect()
+        query_result = await connector.execute(sql_query)
+        return {
+            "rows": query_result.rows,
+            "columns": query_result.columns,
+            "execution_time_ms": query_result.execution_time_ms,
+        }
+    finally:
+        await connector.close()
 
 
 def _thinking_note_for_event(event_type: str, event_data: dict[str, Any]) -> str | None:
@@ -179,19 +242,6 @@ async def websocket_chat(websocket: WebSocket) -> None:
         if resolved_url:
             database_url = resolved_url
 
-        # Get pipeline from app state
-        pipeline = app_state.get("pipeline")
-        if pipeline is None:
-            await websocket.send_json(
-                {
-                    "event": "error",
-                    "error": "service_unavailable",
-                    "message": "Pipeline not initialized. Please try again later.",
-                }
-            )
-            await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
-            return
-
         initializer = SystemInitializer(app_state)
         status_state = await initializer.status()
         if not status_state.has_databases:
@@ -224,6 +274,134 @@ async def websocket_chat(websocket: WebSocket) -> None:
         session_summary = data.get("session_summary")
         session_state = data.get("session_state")
         synthesize_simple_sql = data.get("synthesize_simple_sql")
+        execution_mode = str(data.get("execution_mode") or "natural_language").lower()
+
+        if execution_mode == "direct_sql":
+            sql_query = str(data.get("sql") or message).strip()
+            if not sql_query:
+                await websocket.send_json(
+                    {
+                        "event": "error",
+                        "error": "validation_error",
+                        "message": "SQL mode requires a non-empty SQL query.",
+                    }
+                )
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+            if not _is_read_only_sql(sql_query):
+                await websocket.send_json(
+                    {
+                        "event": "error",
+                        "error": "validation_error",
+                        "message": (
+                            "SQL Editor accepts read-only SQL only "
+                            "(SELECT/WITH/SHOW/DESCRIBE/EXPLAIN)."
+                        ),
+                    }
+                )
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+            if not database_url:
+                await websocket.send_json(
+                    {
+                        "event": "error",
+                        "error": "service_unavailable",
+                        "message": "No active database URL available for SQL execution.",
+                    }
+                )
+                await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+                return
+
+            try:
+                started_at = time.perf_counter()
+                direct_result = await _run_direct_sql_query(
+                    sql_query=sql_query,
+                    database_type=database_type,
+                    database_url=database_url,
+                    timeout_seconds=settings.database.pool_timeout,
+                    pool_size=settings.database.pool_size,
+                )
+                total_latency_ms = (time.perf_counter() - started_at) * 1000
+                row_count = len(direct_result["rows"])
+                answer = f"Executed SQL query successfully. Returned {row_count} row(s)."
+                if not status_state.has_datapoints:
+                    answer = f"{answer}\n\n{LIVE_SCHEMA_MODE_NOTICE}"
+                data_result = {
+                    column: [row.get(column) for row in direct_result["rows"]]
+                    for column in direct_result["columns"]
+                }
+                payload = {
+                    "event": "complete",
+                    "answer": answer,
+                    "clarifying_questions": [],
+                    "sub_answers": [],
+                    "sql": sql_query,
+                    "data": data_result,
+                    "visualization_hint": "table",
+                    "visualization_metadata": {
+                        "requested": "direct_sql",
+                        "deterministic": "table",
+                        "final": "table",
+                        "resolution_reason": "direct_sql_mode",
+                    },
+                    "sources": [],
+                    "answer_source": "sql",
+                    "answer_confidence": 1.0,
+                    "evidence": [],
+                    "validation_errors": [],
+                    "validation_warnings": [],
+                    "tool_approval_required": False,
+                    "tool_approval_message": None,
+                    "tool_approval_calls": [],
+                    "metrics": {
+                        "total_latency_ms": total_latency_ms,
+                        "agent_timings": {
+                            "direct_sql_execution": direct_result["execution_time_ms"]
+                        },
+                        "llm_calls": 0,
+                        "retry_count": 0,
+                        "sql_formatter_fallback_calls": 0,
+                        "sql_formatter_fallback_successes": 0,
+                        "query_compiler_llm_calls": 0,
+                        "query_compiler_llm_refinements": 0,
+                        "query_compiler_latency_ms": 0.0,
+                    },
+                    "conversation_id": conversation_id,
+                    "session_summary": session_summary,
+                    "session_state": session_state,
+                    "decision_trace": [
+                        {
+                            "stage": "execution_mode",
+                            "decision": "direct_sql",
+                            "reason": "user_selected_sql_editor_mode",
+                        }
+                    ],
+                }
+                await websocket.send_json(jsonable_encoder(payload))
+                return
+            except (ConnectorConnectionError, ConnectorQueryError) as exc:
+                await websocket.send_json(
+                    {
+                        "event": "error",
+                        "error": "query_error",
+                        "message": str(exc),
+                    }
+                )
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+
+        # Get pipeline from app state
+        pipeline = app_state.get("pipeline")
+        if pipeline is None:
+            await websocket.send_json(
+                {
+                    "event": "error",
+                    "error": "service_unavailable",
+                    "message": "Pipeline not initialized. Please try again later.",
+                }
+            )
+            await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+            return
 
         # Convert conversation history to pipeline format
         history = [

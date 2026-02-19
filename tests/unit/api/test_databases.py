@@ -12,8 +12,10 @@ from pydantic import SecretStr
 from backend.api.main import app
 from backend.connectors.base import (
     ColumnInfo,
-    ConnectionError as ConnectorConnectionError,
     TableInfo,
+)
+from backend.connectors.base import (
+    ConnectionError as ConnectorConnectionError,
 )
 from backend.models.database import DatabaseConnection
 

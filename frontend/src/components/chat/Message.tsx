@@ -38,6 +38,7 @@ interface MessageProps {
   displayMode?: ResultLayoutMode;
   showAgentTimingBreakdown?: boolean;
   onClarifyingAnswer?: (question: string) => void;
+  onEditSqlDraft?: (sql: string) => void;
 }
 
 type TabId = "answer" | "sql" | "table" | "visualization" | "sources" | "timing";
@@ -255,12 +256,14 @@ export function Message({
   displayMode = "stacked",
   showAgentTimingBreakdown = true,
   onClarifyingAnswer,
+  onEditSqlDraft,
 }: MessageProps) {
   const isUser = message.role === "user";
   const [activeTab, setActiveTab] = useState<TabId>("answer");
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [selectedSubAnswerIndex, setSelectedSubAnswerIndex] = useState<number>(0);
   const [tablePage, setTablePage] = useState<number>(0);
+  const [rowsPerPage, setRowsPerPage] = useState<number>(10);
   const [showChartSettings, setShowChartSettings] = useState(false);
   const [chartTooltip, setChartTooltip] = useState<ChartTooltipState | null>(null);
   const [hiddenPieLabels, setHiddenPieLabels] = useState<string[]>([]);
@@ -300,7 +303,6 @@ export function Message({
   const tabButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const tabListId = `message-tablist-${message.id}`;
   const activeTabPanelId = `${message.id}-panel-${activeTab}`;
-  const ROWS_PER_PAGE = 50;
 
   const subAnswers = message.sub_answers || [];
   const activeSubAnswer =
@@ -327,6 +329,7 @@ export function Message({
 
   useEffect(() => {
     setTablePage(0);
+    setRowsPerPage(10);
   }, [message.id, selectedSubAnswerIndex]);
 
   useEffect(() => {
@@ -345,9 +348,9 @@ export function Message({
       : 0;
 
   useEffect(() => {
-    const totalPages = Math.max(1, Math.ceil(rowCount / ROWS_PER_PAGE));
+    const totalPages = Math.max(1, Math.ceil(rowCount / rowsPerPage));
     setTablePage((page) => Math.min(page, totalPages - 1));
-  }, [rowCount]);
+  }, [rowCount, rowsPerPage]);
 
   const rows = useMemo(
     () =>
@@ -668,9 +671,9 @@ export function Message({
       );
     }
 
-    const totalPages = Math.ceil(rowCount / ROWS_PER_PAGE);
-    const startRow = tablePage * ROWS_PER_PAGE;
-    const endRow = Math.min(startRow + ROWS_PER_PAGE, rowCount);
+    const totalPages = Math.ceil(rowCount / rowsPerPage);
+    const startRow = tablePage * rowsPerPage;
+    const endRow = Math.min(startRow + rowsPerPage, rowCount);
     const pageRows = rows.slice(startRow, endRow);
 
     const handlePrevPage = () => {
@@ -729,9 +732,29 @@ export function Message({
             </div>
             {totalPages > 1 && (
               <div className="flex items-center justify-between mt-3 pt-3 border-t">
-                <p className="text-xs text-muted-foreground">
-                  Showing {startRow + 1}-{endRow} of {rowCount} rows
-                </p>
+                <div className="flex items-center gap-3">
+                  <p className="text-xs text-muted-foreground">
+                    Showing {startRow + 1}-{endRow} of {rowCount} rows
+                  </p>
+                  <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                    Rows per page
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={rowsPerPage}
+                      onChange={(event) => {
+                        const value = Number(event.target.value);
+                        if (!Number.isFinite(value) || value < 1) {
+                          return;
+                        }
+                        setRowsPerPage(Math.floor(value));
+                      }}
+                      className="h-7 w-20 rounded border border-input bg-background px-2 text-xs"
+                      aria-label="Rows per page"
+                    />
+                  </label>
+                </div>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
@@ -760,9 +783,29 @@ export function Message({
               </div>
             )}
             {totalPages === 1 && rowCount > 0 && (
-              <p className="text-xs text-muted-foreground mt-2">
-                Showing {rowCount} rows
-              </p>
+              <div className="mt-2 flex items-center gap-3">
+                <p className="text-xs text-muted-foreground">
+                  Showing {rowCount} rows
+                </p>
+                <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                  Rows per page
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={rowsPerPage}
+                    onChange={(event) => {
+                      const value = Number(event.target.value);
+                      if (!Number.isFinite(value) || value < 1) {
+                        return;
+                      }
+                      setRowsPerPage(Math.floor(value));
+                    }}
+                    className="h-7 w-20 rounded border border-input bg-background px-2 text-xs"
+                    aria-label="Rows per page"
+                  />
+                </label>
+              </div>
             )}
           </CardContent>
         </details>
@@ -2186,11 +2229,13 @@ export function Message({
         </div>
       )}
 
-      <div className={cn("flex-1 max-w-3xl", isUser && "flex justify-end")}>
+      <div className={cn("flex-1 max-w-4xl", isUser && "flex justify-end")}>
         <div
           className={cn(
-            "rounded-lg px-4 py-3",
-            isUser ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+            "rounded-xl px-4 py-3",
+            isUser
+              ? "bg-primary/90 text-primary-foreground shadow-sm"
+              : "border border-border/70 bg-card text-foreground shadow-sm"
           )}
         >
           {assistantMeta && (
@@ -2222,6 +2267,17 @@ export function Message({
                 >
                   <Copy size={12} />
                   Copy SQL
+                </button>
+              )}
+              {activeSql && onEditSqlDraft && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-secondary"
+                  onClick={() => onEditSqlDraft(activeSql)}
+                  aria-label="Edit SQL draft"
+                >
+                  <Code size={12} />
+                  Edit SQL
                 </button>
               )}
               {hasTable && (

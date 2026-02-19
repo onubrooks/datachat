@@ -23,6 +23,7 @@ Planned (not yet implemented as full product features):
 - `../GETTING_STARTED.md` - setup paths and first-run flow.
 - `ARCHITECTURE.md` - system architecture and engineering design guide.
 - `API.md` - API endpoints and payloads.
+- `UI_HOWTO.md` - step-by-step user guide for chat UI workflows (ask mode, SQL mode, sidebars, charts, pagination, shortcuts).
 - `CREDENTIALS_ONLY_MODE.md` - capabilities/limits for credentials-only mode.
 - `MULTI_DATABASE.md` - connection registry and per-request routing.
 - `LEVELS.md` - maturity model with implementation status.

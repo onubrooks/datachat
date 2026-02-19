@@ -178,4 +178,117 @@ describe("ChatInterface target database", () => {
       ).not.toBeInTheDocument()
     );
   });
+
+  it("filters conversation history from sidebar search", async () => {
+    window.localStorage.setItem(
+      "datachat.conversation.history.v1",
+      JSON.stringify([
+        {
+          frontendSessionId: "session-a",
+          title: "Sales trend review",
+          targetDatabaseId: "db_mysql",
+          conversationId: "conv_a",
+          sessionSummary: null,
+          sessionState: null,
+          updatedAt: new Date().toISOString(),
+          messages: [],
+        },
+        {
+          frontendSessionId: "session-b",
+          title: "Inventory checks",
+          targetDatabaseId: "db_pg",
+          conversationId: "conv_b",
+          sessionSummary: null,
+          sessionState: null,
+          updatedAt: new Date().toISOString(),
+          messages: [],
+        },
+      ])
+    );
+
+    render(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockGetDatabaseSchema).toHaveBeenCalled());
+
+    expect(screen.getByText("Sales trend review")).toBeInTheDocument();
+    expect(screen.getByText("Inventory checks")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Search saved conversations"), {
+      target: { value: "sales" },
+    });
+
+    expect(screen.getByText("Sales trend review")).toBeInTheDocument();
+    expect(screen.queryByText("Inventory checks")).not.toBeInTheDocument();
+  });
+
+  it("sends SQL editor content as direct SQL execution request", async () => {
+    render(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: /SQL Editor/i }));
+    fireEvent.change(screen.getByLabelText("SQL editor input"), {
+      target: { value: "SELECT * FROM users LIMIT 10;" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run SQL draft" }));
+
+    await waitFor(() => expect(mockStreamChat).toHaveBeenCalledTimes(1));
+    const request = mockStreamChat.mock.calls[0][0] as Record<string, unknown>;
+    expect(request.message).toBe("SELECT * FROM users LIMIT 10;");
+    expect(request.execution_mode).toBe("direct_sql");
+    expect(request.sql).toBe("SELECT * FROM users LIMIT 10;");
+  });
+
+  it("keeps natural-language retry payload unchanged when it contains SQL fences", async () => {
+    let handlers:
+      | {
+          onError?: (message: string) => void;
+        }
+      | undefined;
+
+    mockStreamChat.mockImplementation((_request, callbacks) => {
+      handlers = callbacks;
+    });
+
+    render(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+
+    const prompt =
+      "Explain why this query fails: ```sql SELECT * FROM users LIMIT 10 ```";
+    const input = screen.getByPlaceholderText(
+      "Ask a question about your data..."
+    ) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: prompt } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => expect(mockStreamChat).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      handlers?.onError?.("request failed");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry Query" }));
+
+    const restoredInput = screen.getByPlaceholderText(
+      "Ask a question about your data..."
+    ) as HTMLInputElement;
+    expect(restoredInput.value).toBe(prompt);
+    expect(screen.queryByLabelText("SQL editor input")).not.toBeInTheDocument();
+  });
+
+  it("restores focus to natural-language input after switching from SQL mode via template", async () => {
+    render(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: /SQL Editor/i }));
+    const sqlEditor = screen.getByLabelText("SQL editor input");
+    expect(sqlEditor).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "List Tables" }));
+
+    const input = screen.getByPlaceholderText(
+      "Ask a question about your data..."
+    ) as HTMLInputElement;
+    await waitFor(() => {
+      expect(document.activeElement).toBe(input);
+    });
+  });
 });

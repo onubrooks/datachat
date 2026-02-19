@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { vi } from "vitest";
 
 import { Message } from "@/components/chat/Message";
 
@@ -59,6 +60,25 @@ describe("Message", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
     expect(screen.getByText("Bar Chart")).toBeInTheDocument();
+  });
+
+  it("opens SQL draft editor callback from message actions", () => {
+    const onEditSqlDraft = vi.fn();
+    render(
+      <Message
+        message={{
+          id: "msg-edit-sql",
+          role: "assistant",
+          content: "SQL is ready.",
+          sql: "SELECT id, name FROM users LIMIT 5",
+          timestamp: new Date(),
+        }}
+        onEditSqlDraft={onEditSqlDraft}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit SQL draft" }));
+    expect(onEditSqlDraft).toHaveBeenCalledWith("SELECT id, name FROM users LIMIT 5");
   });
 
   it("renders axis and legend metadata for line visualization", () => {
@@ -297,11 +317,39 @@ describe("Message", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Next/i }));
     fireEvent.click(screen.getByRole("button", { name: /Next/i }));
-    expect(screen.getByText("Page 3 of 3")).toBeInTheDocument();
+    expect(screen.getByText("Page 3 of 12")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Q2" }));
     fireEvent.click(screen.getByText("Results (1 rows)"));
 
     expect(screen.getByText("only-row")).toBeInTheDocument();
+  });
+
+  it("allows changing result table rows per page", () => {
+    const manyRows = Array.from({ length: 120 }, (_, index) => `row-${index + 1}`);
+
+    render(
+      <Message
+        message={{
+          id: "msg-8",
+          role: "assistant",
+          content: "Pagination size test",
+          data: {
+            item: manyRows,
+          },
+          timestamp: new Date(),
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByText("Results (120 rows)"));
+    expect(screen.getByText("Page 1 of 12")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Rows per page"), {
+      target: { value: "25" },
+    });
+
+    expect(screen.getByText("Page 1 of 5")).toBeInTheDocument();
+    expect(screen.getByText("Showing 1-25 of 120 rows")).toBeInTheDocument();
   });
 });
