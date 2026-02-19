@@ -23,10 +23,9 @@ from backend.llm.models import LLMMessage, LLMRequest
 from backend.models.agent import (
     AgentMetadata,
     ExtractedEntity,
-    LLMError,
 )
-from backend.utils.pattern_matcher import QueryPatternMatcher, QueryPatternType
 from backend.prompts.loader import PromptLoader
+from backend.utils.pattern_matcher import QueryPatternMatcher, QueryPatternType
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +193,6 @@ class QueryAnalyzerAgent(BaseAgent):
 
         try:
             query = input.query.strip()
-            query_lower = query.lower()
 
             primary_pattern = self.pattern_matcher.get_primary_pattern(query)
 
@@ -473,27 +471,11 @@ class QueryAnalyzerAgent(BaseAgent):
 
     def _build_followup_analysis(self, query: str, input: QueryAnalyzerInput) -> QueryAnalysis:
         """Build analysis for clarification followup."""
-        last_goal = None
         table_hint = None
-
-        if input.conversation_history:
-            for msg in reversed(input.conversation_history):
-                role = msg.get("role", "") if isinstance(msg, dict) else getattr(msg, "role", "")
-                if role == "user":
-                    last_goal = (
-                        msg.get("content", "")
-                        if isinstance(msg, dict)
-                        else getattr(msg, "content", "")
-                    )
-                    break
 
         cleaned_hint = self._clean_hint(query)
         if cleaned_hint:
             table_hint = cleaned_hint
-
-        resolved_query = None
-        if last_goal and table_hint:
-            resolved_query = f"{last_goal} Use table {table_hint}."
 
         return QueryAnalysis(
             intent="data_query",
@@ -591,11 +573,24 @@ class QueryAnalyzerAgent(BaseAgent):
    - datapoint_help: Questions about DataPoints
 
 2. route: One of: sql, context, clarification, tool, end
-   - sql: Query needs database execution
+   - sql: Query needs database execution (DEFAULT for data queries - even without explicit table)
    - context: Query can be answered from context/DataPoints
-   - clarification: Query is ambiguous, needs more info
+   - clarification: ONLY for truly ambiguous cases where no reasonable table can be inferred
    - tool: Query requires a tool action (profiling, etc.)
    - end: Session should end
+
+IMPORTANT: Prefer route="sql" over route="clarification" for data queries. The system will:
+- Deduce tables from schema and DataPoints automatically
+- Try multiple table candidates before asking user
+- Only ask for clarification if SQL generation truly fails
+
+Use route="clarification" ONLY when:
+- Query is completely vague ("show me data" with no context)
+- Query mentions mutually exclusive concepts with no way to choose
+- Session history provides no relevant context
+
+Do NOT use route="clarification" just because a table isn't explicitly mentioned.
+Most data queries should route to "sql" and let the system figure out the table.
 
 3. entities: Array of extracted entities with type (table, column, metric, time_reference, filter, other), value, and confidence
 

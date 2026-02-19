@@ -8,6 +8,7 @@ DataPoint types:
     - Schema: Table and column metadata
     - Business: Metrics, calculations, and business glossary
     - Process: ETL processes, data freshness, and dependencies
+    - Query: Reusable SQL templates with parameters (Level 2.5)
 
 Usage:
     from backend.models.datapoint import DataPoint, SchemaDataPoint
@@ -22,7 +23,7 @@ Usage:
 """
 
 import re
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -97,7 +98,7 @@ class BaseDataPoint(BaseModel):
         min_length=1,
         max_length=100,
     )
-    type: Literal["Schema", "Business", "Process"] = Field(
+    type: Literal["Schema", "Business", "Process", "Query"] = Field(
         ..., description="DataPoint type for discriminated union"
     )
     name: str = Field(..., description="Human-readable name", min_length=1, max_length=200)
@@ -217,7 +218,7 @@ class SchemaDataPoint(BaseDataPoint):
                 "freshness": "T-1",
                 "owner": "data-team@company.com",
             }
-        }
+        },
     )
 
 
@@ -322,12 +323,102 @@ class ProcessDataPoint(BaseDataPoint):
 
 
 # ============================================================================
+# Query DataPoint (Level 2.5)
+# ============================================================================
+
+
+class QueryParameter(BaseModel):
+    """Parameter definition for a QueryDataPoint SQL template."""
+
+    type: Literal["string", "integer", "float", "timestamp", "enum", "boolean"] = Field(
+        ..., description="Parameter data type"
+    )
+    required: bool = Field(default=False, description="Whether parameter is required")
+    default: str | int | float | bool | None = Field(
+        None, description="Default value if not provided"
+    )
+    description: str | None = Field(None, description="Parameter description")
+    values: list[str] | None = Field(None, description="Allowed values for enum type")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "type": "integer",
+                "required": False,
+                "default": 10,
+                "description": "Number of results to return",
+            }
+        }
+    )
+
+
+class QueryDataPoint(BaseDataPoint):
+    """
+    DataPoint representing a reusable SQL template.
+
+    QueryDataPoints enable:
+    - Pre-validated SQL templates for common queries
+    - Parameterized execution with validation
+    - Backend-specific SQL variants
+    - Skip SQL generation for known patterns (faster, more consistent)
+
+    This is a Level 2.5 feature.
+    """
+
+    type: Literal["Query"] = Field(
+        default="Query", description="Type discriminator for Query DataPoints"
+    )
+    sql_template: str = Field(
+        ..., description="SQL template with {parameter} placeholders", min_length=10
+    )
+    parameters: dict[str, QueryParameter] = Field(
+        default_factory=dict, description="Parameter definitions for the template"
+    )
+    description: str = Field(
+        ..., description="What this query does and when to use it", min_length=10
+    )
+    backend_variants: dict[str, str] | None = Field(
+        None, description="Backend-specific SQL variants (e.g., {'clickhouse': '...'})"
+    )
+    validation: dict[str, Any] | None = Field(
+        None, description="Result validation rules (expected_columns, max_rows, etc.)"
+    )
+    related_tables: list[str] = Field(default_factory=list, description="Tables used in this query")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "datapoint_id": "query_top_customers_001",
+                "type": "Query",
+                "name": "Top Customers by Revenue",
+                "sql_template": "SELECT customer_id, SUM(amount) as revenue FROM transactions WHERE status = 'completed' AND transaction_time >= {start_time} GROUP BY customer_id ORDER BY revenue DESC LIMIT {limit}",
+                "parameters": {
+                    "limit": {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "Number of customers",
+                    },
+                    "start_time": {"type": "timestamp", "required": True},
+                },
+                "description": "Returns top customers by total revenue for a given time period",
+                "backend_variants": {
+                    "clickhouse": "SELECT customer_id, SUM(amount) as revenue FROM transactions WHERE status = 'completed' AND transaction_time >= {start_time} GROUP BY customer_id ORDER BY revenue DESC LIMIT {limit}"
+                },
+                "related_tables": ["transactions"],
+                "owner": "sales-team@company.com",
+            }
+        }
+    )
+
+
+# ============================================================================
 # Discriminated Union
 # ============================================================================
 
 
 DataPoint = Annotated[
-    SchemaDataPoint | BusinessDataPoint | ProcessDataPoint, Field(discriminator="type")
+    SchemaDataPoint | BusinessDataPoint | ProcessDataPoint | QueryDataPoint,
+    Field(discriminator="type"),
 ]
 """
 Discriminated union of all DataPoint types.
