@@ -14,7 +14,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Send, Trash2, AlertCircle, Loader2 } from "lucide-react";
+import { Send, Trash2, AlertCircle, Loader2, RefreshCw, Wifi, Clock, Database, AlertTriangle } from "lucide-react";
 import { Message } from "./Message";
 import { AgentStatus } from "../agents/AgentStatus";
 import { Button } from "../ui/button";
@@ -65,6 +65,9 @@ export function ChatInterface() {
 
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [errorCategory, setErrorCategory] = useState<"network" | "timeout" | "validation" | "database" | "unknown" | null>(null);
+  const [lastFailedQuery, setLastFailedQuery] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const [setupSteps, setSetupSteps] = useState<SetupStep[]>([]);
   const [isInitialized, setIsInitialized] = useState(true);
   const [setupError, setSetupError] = useState<string | null>(null);
@@ -96,6 +99,76 @@ export function ChatInterface() {
     window.requestAnimationFrame(() => {
       inputRef.current?.focus();
     });
+  };
+
+  const categorizeError = (errorMessage: string): "network" | "timeout" | "validation" | "database" | "unknown" => {
+    const lower = errorMessage.toLowerCase();
+    if (
+      lower.includes("network") ||
+      lower.includes("connection") ||
+      lower.includes("econnrefused") ||
+      lower.includes("enotfound") ||
+      lower.includes("fetch failed") ||
+      lower.includes("websocket")
+    ) {
+      return "network";
+    }
+    if (
+      lower.includes("timeout") ||
+      lower.includes("timed out") ||
+      lower.includes("deadline exceeded")
+    ) {
+      return "timeout";
+    }
+    if (
+      lower.includes("validation") ||
+      lower.includes("invalid") ||
+      lower.includes("syntax") ||
+      lower.includes("required")
+    ) {
+      return "validation";
+    }
+    if (
+      lower.includes("database") ||
+      lower.includes("sql") ||
+      lower.includes("table") ||
+      lower.includes("column") ||
+      lower.includes("schema") ||
+      lower.includes("query")
+    ) {
+      return "database";
+    }
+    return "unknown";
+  };
+
+  const getErrorIcon = (category: "network" | "timeout" | "validation" | "database" | "unknown") => {
+    switch (category) {
+      case "network":
+        return Wifi;
+      case "timeout":
+        return Clock;
+      case "database":
+        return Database;
+      case "validation":
+        return AlertTriangle;
+      default:
+        return AlertCircle;
+    }
+  };
+
+  const getErrorSuggestion = (category: "network" | "timeout" | "validation" | "database" | "unknown"): string => {
+    switch (category) {
+      case "network":
+        return "Check your internet connection and try again.";
+      case "timeout":
+        return "The request took too long. Try simplifying your query.";
+      case "validation":
+        return "Please check your input and try again.";
+      case "database":
+        return "There was an issue with the database. Try rephrasing your query.";
+      default:
+        return "An unexpected error occurred. Please try again.";
+    }
   };
 
   // Auto-scroll to bottom when new messages arrive
@@ -200,6 +273,8 @@ export function ChatInterface() {
 
     setInput("");
     setError(null);
+    setErrorCategory(null);
+    setLastFailedQuery(null);
     setLoading(true);
     setThinkingNotes([]);
     resetAgentStatus();
@@ -290,6 +365,9 @@ export function ChatInterface() {
           },
           onError: (message) => {
             setError(message);
+            setErrorCategory(categorizeError(message));
+            setLastFailedQuery(query);
+            setRetryCount((c) => c + 1);
             setLoading(false);
             setThinkingNotes([]);
             resetAgentStatus();
@@ -308,13 +386,24 @@ export function ChatInterface() {
       );
     } catch (err) {
       console.error("Chat error:", err);
-      setError(
-        err instanceof Error ? err.message : "Failed to send message"
-      );
+      const errorMessage = err instanceof Error ? err.message : "Failed to send message";
+      setError(errorMessage);
+      setErrorCategory(categorizeError(errorMessage));
+      setLastFailedQuery(query);
+      setRetryCount((c) => c + 1);
       setLoading(false);
       resetAgentStatus();
       restoreInputFocus();
     }
+  };
+
+  const handleRetry = () => {
+    if (!lastFailedQuery || isLoading) return;
+    setInput(lastFailedQuery);
+    setError(null);
+    setErrorCategory(null);
+    setLastFailedQuery(null);
+    inputRef.current?.focus();
   };
 
   const handleApproveTools = async () => {
@@ -576,15 +665,55 @@ export function ChatInterface() {
         )}
 
         {/* Error Display */}
-        {error && (
+        {error && errorCategory && (
           <Card className="mb-4 border-destructive bg-destructive/10">
-            <div className="p-4 flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <p className="text-sm font-medium text-destructive">
-                  Error
-                </p>
-                <p className="text-sm text-muted-foreground">{error}</p>
+            <div className="p-4">
+              <div className="flex items-start gap-3">
+                {(() => {
+                  const Icon = getErrorIcon(errorCategory);
+                  return <Icon className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />;
+                })()}
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-sm font-medium text-destructive">
+                      {errorCategory.charAt(0).toUpperCase() + errorCategory.slice(1)} Error
+                    </p>
+                    {retryCount > 0 && (
+                      <span className="text-xs text-muted-foreground">
+                        (attempt {retryCount})
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-muted-foreground">{error}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {getErrorSuggestion(errorCategory)}
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRetry}
+                  disabled={isLoading || !lastFailedQuery}
+                  className="text-xs"
+                >
+                  <RefreshCw size={14} className="mr-1" />
+                  Retry Query
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setError(null);
+                    setErrorCategory(null);
+                    setLastFailedQuery(null);
+                    setRetryCount(0);
+                  }}
+                  className="text-xs text-muted-foreground"
+                >
+                  Dismiss
+                </Button>
               </div>
             </div>
           </Card>

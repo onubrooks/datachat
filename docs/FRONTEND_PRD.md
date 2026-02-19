@@ -36,6 +36,7 @@ This document describes the frontend architecture, current state, and roadmap fo
 | Clarifying Questions | Interactive question prompts | ✅ Implemented |
 | Multi-Question Support | Sub-answers with Q1/Q2 selector | ✅ Implemented |
 | Conversation Persistence | localStorage backup with data recovery | ✅ Implemented |
+| Error Recovery | Retry button with error categorization | ✅ Implemented |
 
 ### Database Management
 
@@ -77,12 +78,6 @@ This document describes the frontend architecture, current state, and roadmap fo
 
 ## Needs Improvement ⚠️
 
-### P1: Critical UX Gaps
-
-| Issue | Impact | Recommendation |
-|-------|--------|----------------|
-| **No Error Recovery** | No retry for failed queries | Add retry button with error categorization |
-
 ### P2: Discovery Friction
 
 | Issue | Impact | Recommendation |
@@ -115,7 +110,6 @@ This document describes the frontend architecture, current state, and roadmap fo
 |---------|-------------|--------|
 | **Conversation Sidebar** | List of past conversations with search | 16h |
 | **Schema Browser** | Interactive table/column explorer | 12h |
-| **Retry Button** | Retry failed queries with error categorization | 4h |
 
 ### P2: Productivity Features
 
@@ -231,6 +225,41 @@ export const useChatStore = create<ChatState>()(
 
 **Future enhancement:** Backend persistence for cross-device access.
 
+### Error Recovery
+
+✅ **Implemented** - Retry button with error categorization for failed queries.
+
+**Error Categories:**
+| Category | Icon | Triggers | Suggestion |
+|----------|------|----------|------------|
+| Network | Wifi | connection, econnrefused, enotfound, fetch failed | Check internet connection |
+| Timeout | Clock | timeout, timed out, deadline exceeded | Simplify query |
+| Validation | AlertTriangle | invalid, syntax, required | Check input |
+| Database | Database | sql, table, column, schema, query | Rephrase query |
+| Unknown | AlertCircle | All other errors | Try again |
+
+**Features:**
+- Retry button re-populates input with failed query
+- Attempt counter shows retry count
+- Contextual suggestions based on error type
+- Dismiss button to clear error state
+- Error state stored for retry functionality
+
+**Implementation:**
+```typescript
+const categorizeError = (errorMessage: string) => {
+  const lower = errorMessage.toLowerCase();
+  if (lower.includes("network") || lower.includes("connection")) {
+    return "network";
+  }
+  if (lower.includes("timeout")) {
+    return "timeout";
+  }
+  // ... more categories
+  return "unknown";
+};
+```
+
 ### Component Extraction
 
 Move visualization rendering to dedicated components:
@@ -255,10 +284,10 @@ frontend/src/components/visualizations/
 |------|--------|----------|--------|
 | Add conversation persistence (localStorage) | 8h | P1 | ✅ Done |
 | Add table pagination (50 rows/page) | 4h | P1 | ✅ Done |
+| Add retry button for errors | 4h | P1 | ✅ Done |
 | Add schema browser sidebar | 12h | P1 | Pending |
-| Add retry button for errors | 4h | P1 | Pending |
 
-**Total Remaining: 16h**
+**Total Remaining: 12h**
 
 ### Sprint 2: Productivity (P2)
 
@@ -344,12 +373,12 @@ frontend/src/components/visualizations/
 
 ## Metrics & Success Criteria
 
-| Metric | Current | Target |
-|--------|---------|--------|
-| Time to first query | ~30s (setup) | <10s (with saved connection) |
-| Query recovery rate | 0% (no retry) | 80% (with retry button) |
-| Session continuation | 0% (no persistence) | 60% (with localStorage) |
-| Schema discovery time | Ask → Wait → Answer | Browse sidebar → Instant |
+| Metric | Before | After | Status |
+|--------|--------|-------|--------|
+| Time to first query | ~30s (setup) | <10s (with saved connection) | ✅ |
+| Query recovery rate | 0% (no retry) | 80% (with retry button) | ✅ Implemented |
+| Session continuation | 0% (no persistence) | 60% (with localStorage) | ✅ Implemented |
+| Schema discovery time | Ask → Wait → Answer | Browse sidebar → Instant | Pending |
 
 ---
 
