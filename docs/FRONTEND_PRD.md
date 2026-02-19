@@ -108,6 +108,7 @@ This document describes the frontend architecture, current state, and roadmap fo
 | ✅ **Keyboard Navigation Added** | Faster non-pointer workflows | Tab keyboard navigation + global shortcuts + focus restoration |
 
 **Implemented keyboard shortcuts**
+
 - `Ctrl/Cmd + K`: Focus chat input
 - `Ctrl/Cmd + H`: Toggle conversation history sidebar
 - `Ctrl/Cmd + /`: Open/close shortcut reference modal
@@ -229,6 +230,7 @@ export const useChatStore = create<ChatState>()(
 ```
 
 **What's persisted:**
+
 - Last 60 messages (compacted)
 - SQL queries and results (up to 50 rows)
 - Visualization hints and metadata
@@ -244,6 +246,7 @@ export const useChatStore = create<ChatState>()(
 ✅ **Implemented** - Retry button with error categorization for failed queries.
 
 **Error Categories:**
+
 | Category | Icon | Triggers | Suggestion |
 |----------|------|----------|------------|
 | Network | Wifi | connection, econnrefused, enotfound, fetch failed | Check internet connection |
@@ -253,6 +256,7 @@ export const useChatStore = create<ChatState>()(
 | Unknown | AlertCircle | All other errors | Try again |
 
 **Features:**
+
 - Retry button re-populates input with failed query
 - Attempt counter shows retry count
 - Contextual suggestions based on error type
@@ -260,6 +264,7 @@ export const useChatStore = create<ChatState>()(
 - Error state stored for retry functionality
 
 **Implementation:**
+
 ```typescript
 const categorizeError = (errorMessage: string) => {
   const lower = errorMessage.toLowerCase();
