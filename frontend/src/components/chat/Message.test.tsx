@@ -232,4 +232,50 @@ describe("Message", () => {
     expect(screen.getByText(/average delay in days/i)).toBeInTheDocument();
     expect(screen.getByText(/avg_delay_days/)).toBeInTheDocument();
   });
+
+  it("resets table pagination when switching to a different sub-answer", () => {
+    const manyRows = Array.from({ length: 120 }, (_, index) => `row-${index + 1}`);
+
+    render(
+      <Message
+        displayMode="tabbed"
+        message={{
+          id: "msg-7",
+          role: "assistant",
+          content: "Pagination test",
+          sub_answers: [
+            {
+              index: 1,
+              query: "First query",
+              answer: "Lots of rows",
+              data: {
+                item: manyRows,
+              },
+            },
+            {
+              index: 2,
+              query: "Second query",
+              answer: "One row",
+              data: {
+                item: ["only-row"],
+              },
+            },
+          ],
+          timestamp: new Date(),
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Table" }));
+    fireEvent.click(screen.getByText("Results (120 rows)"));
+
+    fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+    expect(screen.getByText("Page 3 of 3")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Q2" }));
+    fireEvent.click(screen.getByText("Results (1 rows)"));
+
+    expect(screen.getByText("only-row")).toBeInTheDocument();
+  });
 });

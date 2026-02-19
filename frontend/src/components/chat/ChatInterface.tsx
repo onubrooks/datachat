@@ -11,20 +11,40 @@
 
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Send, Trash2, AlertCircle, Loader2, RefreshCw, Wifi, Clock, Database, AlertTriangle } from "lucide-react";
+import {
+  Send,
+  Trash2,
+  AlertCircle,
+  Loader2,
+  RefreshCw,
+  Wifi,
+  Clock,
+  Database,
+  AlertTriangle,
+  PanelLeftOpen,
+  PanelLeftClose,
+  PanelRightOpen,
+  PanelRightClose,
+  ChevronDown,
+  ChevronRight,
+  History,
+  Plus,
+  Table2,
+} from "lucide-react";
 import { Message } from "./Message";
 import { AgentStatus } from "../agents/AgentStatus";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Card } from "../ui/card";
-import { useChatStore } from "@/lib/stores/chat";
+import { useChatStore, type Message as ChatStoreMessage } from "@/lib/stores/chat";
 import {
   apiClient,
   wsClient,
   type DatabaseConnection,
+  type DatabaseSchemaTable,
   type SetupStep,
 } from "@/lib/api";
 import { SystemSetup } from "../system/SystemSetup";
@@ -39,12 +59,64 @@ import {
 } from "@/lib/settings";
 import { formatWaitingChipLabel } from "./loadingUx";
 
+const ACTIVE_DATABASE_STORAGE_KEY = "datachat.active_connection_id";
+const CONVERSATION_HISTORY_STORAGE_KEY = "datachat.conversation.history.v1";
+const MAX_CONVERSATION_HISTORY = 20;
+const MAX_CONVERSATION_MESSAGES = 80;
+
+type SerializedMessage = Omit<ChatStoreMessage, "timestamp"> & {
+  timestamp: string;
+};
+
+interface ConversationSnapshot {
+  frontendSessionId: string;
+  title: string;
+  targetDatabaseId: string | null;
+  conversationId: string | null;
+  sessionSummary: string | null;
+  sessionState: Record<string, unknown> | null;
+  updatedAt: string;
+  messages: SerializedMessage[];
+}
+
+const QUERY_TEMPLATES: Array<{ id: string; label: string; build: (selectedTable?: string | null) => string }> = [
+  {
+    id: "list-tables",
+    label: "List Tables",
+    build: () => "List all available tables.",
+  },
+  {
+    id: "show-columns",
+    label: "Show Columns",
+    build: (selectedTable) =>
+      selectedTable
+        ? `Show columns for ${selectedTable}.`
+        : "Show columns for the table grocery_sales_transactions.",
+  },
+  {
+    id: "sample-rows",
+    label: "Sample 100 Rows",
+    build: (selectedTable) =>
+      selectedTable
+        ? `Show first 100 rows from ${selectedTable}.`
+        : "Show first 100 rows from grocery_sales_transactions.",
+  },
+  {
+    id: "row-count",
+    label: "Count Rows",
+    build: (selectedTable) =>
+      selectedTable
+        ? `How many rows are in ${selectedTable}?`
+        : "How many rows are in each table?",
+  },
+];
+
 export function ChatInterface() {
-  const ACTIVE_DATABASE_STORAGE_KEY = "datachat.active_connection_id";
   const router = useRouter();
   const {
     messages,
     conversationId,
+    frontendSessionId,
     sessionSummary,
     sessionState,
     isLoading,
@@ -60,6 +132,7 @@ export function ChatInterface() {
     updateLastMessage,
     setConversationId,
     setSessionMemory,
+    loadSession,
     appendToLastMessage,
   } = useChatStore();
 
@@ -93,11 +166,102 @@ export function ChatInterface() {
   const [toolApprovalMessage, setToolApprovalMessage] = useState<string | null>(null);
   const [toolApprovalRunning, setToolApprovalRunning] = useState(false);
   const [toolApprovalError, setToolApprovalError] = useState<string | null>(null);
+  const [isHistorySidebarOpen, setIsHistorySidebarOpen] = useState(true);
+  const [isSchemaSidebarOpen, setIsSchemaSidebarOpen] = useState(true);
+  const [conversationHistory, setConversationHistory] = useState<ConversationSnapshot[]>([]);
+  const [schemaTables, setSchemaTables] = useState<DatabaseSchemaTable[]>([]);
+  const [schemaLoading, setSchemaLoading] = useState(false);
+  const [schemaError, setSchemaError] = useState<string | null>(null);
+  const [schemaSearch, setSchemaSearch] = useState("");
+  const [selectedSchemaTable, setSelectedSchemaTable] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const restoreInputFocus = () => {
     window.requestAnimationFrame(() => {
       inputRef.current?.focus();
+    });
+  };
+
+  const serializeMessages = (items: ChatStoreMessage[]): SerializedMessage[] =>
+    items.slice(-MAX_CONVERSATION_MESSAGES).map((message) => ({
+      ...message,
+      timestamp:
+        message.timestamp instanceof Date
+          ? message.timestamp.toISOString()
+          : new Date(message.timestamp).toISOString(),
+    }));
+
+  const deserializeMessages = (items: SerializedMessage[]): ChatStoreMessage[] =>
+    items.map((message) => ({
+      ...message,
+      timestamp: new Date(message.timestamp),
+    }));
+
+  const buildConversationTitle = (items: ChatStoreMessage[]): string => {
+    const firstUserMessage = items.find((message) => message.role === "user")?.content?.trim();
+    if (!firstUserMessage) {
+      return "Untitled conversation";
+    }
+    const compact = firstUserMessage.replace(/\s+/g, " ");
+    return compact.length > 70 ? `${compact.slice(0, 67)}...` : compact;
+  };
+
+  const persistConversationHistory = (items: ConversationSnapshot[]) => {
+    window.localStorage.setItem(
+      CONVERSATION_HISTORY_STORAGE_KEY,
+      JSON.stringify(items)
+    );
+    setConversationHistory(items);
+  };
+
+  const upsertConversationSnapshot = (
+    override: {
+      frontendSessionId?: string;
+      messages?: ChatStoreMessage[];
+      conversationId?: string | null;
+      sessionSummary?: string | null;
+      sessionState?: Record<string, unknown> | null;
+      targetDatabaseId?: string | null;
+    } = {}
+  ) => {
+    const snapshotMessages = override.messages || messages;
+    if (!snapshotMessages.some((message) => message.role === "user")) {
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    const snapshot: ConversationSnapshot = {
+      frontendSessionId: override.frontendSessionId || frontendSessionId,
+      title: buildConversationTitle(snapshotMessages),
+      targetDatabaseId:
+        override.targetDatabaseId === undefined
+          ? targetDatabaseId
+          : override.targetDatabaseId,
+      conversationId:
+        override.conversationId === undefined
+          ? conversationId
+          : override.conversationId,
+      sessionSummary:
+        override.sessionSummary === undefined
+          ? sessionSummary
+          : override.sessionSummary,
+      sessionState:
+        override.sessionState === undefined ? sessionState : override.sessionState,
+      updatedAt: nowIso,
+      messages: serializeMessages(snapshotMessages),
+    };
+
+    setConversationHistory((previous) => {
+      const merged = [
+        snapshot,
+        ...previous.filter(
+          (entry) => entry.frontendSessionId !== snapshot.frontendSessionId
+        ),
+      ].slice(0, MAX_CONVERSATION_HISTORY);
+      window.localStorage.setItem(
+        CONVERSATION_HISTORY_STORAGE_KEY,
+        JSON.stringify(merged)
+      );
+      return merged;
     });
   };
 
@@ -177,6 +341,26 @@ export function ChatInterface() {
   }, [messages]);
 
   useEffect(() => {
+    const raw = window.localStorage.getItem(CONVERSATION_HISTORY_STORAGE_KEY);
+    if (!raw) {
+      setConversationHistory([]);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as ConversationSnapshot[];
+      if (Array.isArray(parsed)) {
+        setConversationHistory(
+          parsed
+            .filter((entry) => entry && Array.isArray(entry.messages))
+            .slice(0, MAX_CONVERSATION_HISTORY)
+        );
+      }
+    } catch {
+      setConversationHistory([]);
+    }
+  }, []);
+
+  useEffect(() => {
     let isMounted = true;
     Promise.all([apiClient.systemStatus(), apiClient.listDatabases().catch(() => [])])
       .then(([status, dbs]) => {
@@ -210,6 +394,52 @@ export function ChatInterface() {
       return;
     }
     window.localStorage.setItem(ACTIVE_DATABASE_STORAGE_KEY, targetDatabaseId);
+  }, [targetDatabaseId]);
+
+  useEffect(() => {
+    if (!conversationId || !targetDatabaseId || conversationDatabaseId) {
+      return;
+    }
+    setConversationDatabaseId(targetDatabaseId);
+  }, [conversationId, targetDatabaseId, conversationDatabaseId]);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (!targetDatabaseId) {
+      setSchemaTables([]);
+      setSchemaError(null);
+      setSelectedSchemaTable(null);
+      return;
+    }
+
+    setSchemaLoading(true);
+    setSchemaError(null);
+    apiClient
+      .getDatabaseSchema(targetDatabaseId)
+      .then((response) => {
+        if (!isMounted) return;
+        setSchemaTables(response.tables || []);
+        setSelectedSchemaTable((prev) => {
+          if (!prev) return null;
+          const stillExists = (response.tables || []).some(
+            (table) => `${table.schema_name}.${table.table_name}` === prev
+          );
+          return stillExists ? prev : null;
+        });
+      })
+      .catch((err) => {
+        if (!isMounted) return;
+        setSchemaTables([]);
+        setSchemaError(err instanceof Error ? err.message : "Failed to load schema");
+      })
+      .finally(() => {
+        if (!isMounted) return;
+        setSchemaLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, [targetDatabaseId]);
 
   useEffect(() => {
@@ -253,6 +483,42 @@ export function ChatInterface() {
     if (agentStatus === "idle") return;
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [agentHistory.length, agentStatus, isLoading]);
+
+  const filteredSchemaTables = useMemo(() => {
+    const search = schemaSearch.trim().toLowerCase();
+    if (!search) {
+      return schemaTables;
+    }
+    return schemaTables.filter((table) => {
+      const fullName = `${table.schema_name}.${table.table_name}`.toLowerCase();
+      if (fullName.includes(search)) {
+        return true;
+      }
+      return table.columns.some((column) => column.name.toLowerCase().includes(search));
+    });
+  }, [schemaSearch, schemaTables]);
+
+  const sortedConversationHistory = useMemo(
+    () =>
+      [...conversationHistory].sort(
+        (a, b) =>
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      ),
+    [conversationHistory]
+  );
+
+  const formatSnapshotTime = (value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+    return date.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  };
 
   // Handle send message
   const handleSend = async () => {
@@ -329,6 +595,9 @@ export function ChatInterface() {
             appendToLastMessage(chunk);
           },
           onComplete: (response) => {
+            const nextConversationId = response.conversation_id || conversationId || null;
+            const nextSummary = response.session_summary || null;
+            const nextState = response.session_state || null;
             updateLastMessage({
               content: response.answer,
               clarifying_questions: response.clarifying_questions,
@@ -348,8 +617,16 @@ export function ChatInterface() {
             if (response.conversation_id) {
               setConversationId(response.conversation_id);
             }
-            setSessionMemory(response.session_summary || null, response.session_state || null);
+            setSessionMemory(nextSummary, nextState);
             setConversationDatabaseId(requestDatabaseId);
+            const currentMessages = useChatStore.getState().messages;
+            upsertConversationSnapshot({
+              messages: currentMessages,
+              conversationId: nextConversationId,
+              sessionSummary: nextSummary,
+              sessionState: nextState,
+              targetDatabaseId: requestDatabaseId,
+            });
             if (response.tool_approval_required && response.tool_approval_calls?.length) {
               setToolApprovalCalls(response.tool_approval_calls);
               setToolApprovalMessage(
@@ -404,6 +681,55 @@ export function ChatInterface() {
     setErrorCategory(null);
     setLastFailedQuery(null);
     inputRef.current?.focus();
+  };
+
+  const handleApplyTemplate = (templateId: string) => {
+    const template = QUERY_TEMPLATES.find((item) => item.id === templateId);
+    if (!template) {
+      return;
+    }
+    setInput(template.build(selectedSchemaTable));
+    restoreInputFocus();
+  };
+
+  const handleStartNewConversation = () => {
+    upsertConversationSnapshot();
+    clearMessages();
+    setConversationDatabaseId(null);
+    setConversationId(null);
+    setSessionMemory(null, null);
+    setInput("");
+    setError(null);
+    setErrorCategory(null);
+    setLastFailedQuery(null);
+    setRetryCount(0);
+    restoreInputFocus();
+  };
+
+  const handleLoadConversation = (snapshot: ConversationSnapshot) => {
+    const restoredMessages = deserializeMessages(snapshot.messages);
+    loadSession({
+      frontendSessionId: snapshot.frontendSessionId,
+      messages: restoredMessages,
+      conversationId: snapshot.conversationId,
+      sessionSummary: snapshot.sessionSummary,
+      sessionState: snapshot.sessionState,
+    });
+    setConversationDatabaseId(snapshot.targetDatabaseId);
+    setTargetDatabaseId(snapshot.targetDatabaseId);
+    setInput("");
+    setError(null);
+    setErrorCategory(null);
+    setLastFailedQuery(null);
+    setRetryCount(0);
+    restoreInputFocus();
+  };
+
+  const handleDeleteConversation = (sessionId: string) => {
+    const remaining = conversationHistory.filter(
+      (entry) => entry.frontendSessionId !== sessionId
+    );
+    persistConversationHistory(remaining);
   };
 
   const handleApproveTools = async () => {
@@ -474,7 +800,9 @@ export function ChatInterface() {
   // Handle clear conversation
   const handleClear = () => {
     if (confirm("Clear all messages?")) {
+      upsertConversationSnapshot();
       clearMessages();
+      setConversationDatabaseId(null);
       setError(null);
     }
   };
@@ -513,246 +841,499 @@ export function ChatInterface() {
   };
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex-shrink-0 border-b p-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">DataChat</h1>
-          <p className="text-sm text-muted-foreground">
-            Ask questions in natural language
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {connections.length > 0 && (
-            <select
-              value={targetDatabaseId ?? ""}
-              onChange={(event) => {
-                const nextId = event.target.value || null;
-                if (nextId !== targetDatabaseId) {
-                  setConversationId(null);
-                  setConversationDatabaseId(null);
-                  resetAgentStatus();
-                }
-                setTargetDatabaseId(nextId);
-              }}
-              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-              disabled={isLoading}
-              aria-label="Target database"
-            >
-              {connections.map((connection) => (
-                <option key={connection.connection_id} value={connection.connection_id}>
-                  {connection.name}
-                  {` (${connection.database_type})`}
-                  {connection.tags?.includes("env") ? " (env)" : ""}
-                  {connection.is_default ? " (default)" : ""}
-                </option>
-              ))}
-            </select>
-          )}
-          <Button asChild variant="ghost" size="sm">
-            <Link href="/settings">Settings</Link>
+    <div className="flex h-full min-h-0">
+      <aside
+        className={`hidden border-r bg-muted/20 transition-all duration-200 lg:flex lg:flex-col ${
+          isHistorySidebarOpen ? "w-72" : "w-14"
+        }`}
+      >
+        <div className="flex items-center justify-between border-b px-2 py-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setIsHistorySidebarOpen((prev) => !prev)}
+            aria-label="Toggle conversation history sidebar"
+          >
+            {isHistorySidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
           </Button>
-          <Button asChild variant="secondary" size="sm">
-            <Link href="/databases">Manage DataPoints</Link>
-          </Button>
-          {/* Connection status indicator */}
-          <div className="flex items-center gap-2 text-xs">
-            <div
-              className={`w-2 h-2 rounded-full ${
-                isConnected || isBackendReachable ? "bg-green-500" : "bg-red-500"
-              }`}
-            />
-            {isLoading && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
-            <span className="text-muted-foreground">
-              {isLoading
-                ? formatWaitingChipLabel(loadingElapsedSeconds)
-                : isConnected
-                  ? "Streaming"
-                  : isBackendReachable
-                    ? "Ready"
-                    : "Disconnected"}
-            </span>
-          </div>
-
-          {/* Clear button */}
-          {messages.length > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleClear}
-              disabled={isLoading}
-            >
-              <Trash2 size={16} />
-              Clear
-            </Button>
+          {isHistorySidebarOpen && (
+            <>
+              <div className="text-xs font-medium">Conversations</div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleStartNewConversation}
+                aria-label="Start new conversation"
+              >
+                <Plus size={15} />
+              </Button>
+            </>
           )}
         </div>
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4">
-        {!isInitialized && !setupCompleted && (
-          <SystemSetup
-            steps={setupSteps}
-            onInitialize={handleInitialize}
-            isSubmitting={isInitializing}
-            error={setupError}
-            notice={setupNotice}
-          />
-        )}
-        {!isInitialized && setupCompleted && (
-          <div className="mb-4 rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-            Setup saved. Add DataPoints from{" "}
-            <Link href="/databases" className="underline">
-              Database Manager
-            </Link>{" "}
-            (or run <strong>datachat demo</strong>) to enable chat.
-          </div>
-        )}
-        {messages.length === 0 && (
-          <div className="flex items-center justify-center h-full text-muted-foreground">
-            <div className="text-center">
-              <p className="text-lg mb-2">Welcome to DataChat!</p>
-              <p className="text-sm">
-                Ask a question about your data to get started.
-              </p>
-              <p className="text-xs text-muted-foreground mt-2">
-                New here? Run <strong>datachat demo</strong> to load sample data.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {messages.map((message) => (
-          <Message
-            key={message.id}
-            message={message}
-            displayMode={resultLayoutMode}
-            showAgentTimingBreakdown={showAgentTimingBreakdown}
-            onClarifyingAnswer={(question) => {
-              setInput(`Regarding "${question}": `);
-              inputRef.current?.focus();
-            }}
-          />
-        ))}
-
-        {/* Agent Status */}
-        {isLoading && showLiveReasoning && (
-          <Card className="mb-4 border-primary/20 bg-primary/5">
-            <div className="p-3">
-              <div className="mb-2 text-xs font-medium text-primary">Working...</div>
-              <ul className="space-y-1 text-xs text-muted-foreground">
-                {(thinkingNotes.length ? thinkingNotes : ["Understanding your request..."]).map(
-                  (note, idx) => (
-                    <li key={`${idx}-${note}`} className="flex items-start gap-2">
-                      <span className="mt-1 inline-block h-1.5 w-1.5 rounded-full bg-primary/70" />
-                      <span>{note}</span>
-                    </li>
-                  )
-                )}
-              </ul>
-            </div>
-          </Card>
-        )}
-        <AgentStatus mode={waitingMode} />
-        {isLoading && (
-          <div className="mb-4 flex items-center justify-center">
-            <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/5 px-3 py-1 text-xs text-primary">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              <span>{formatWaitingChipLabel(loadingElapsedSeconds)}</span>
-            </div>
-          </div>
-        )}
-
-        {/* Error Display */}
-        {error && errorCategory && (
-          <Card className="mb-4 border-destructive bg-destructive/10">
-            <div className="p-4">
-              <div className="flex items-start gap-3">
-                {(() => {
-                  const Icon = getErrorIcon(errorCategory);
-                  return <Icon className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />;
-                })()}
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="text-sm font-medium text-destructive">
-                      {errorCategory.charAt(0).toUpperCase() + errorCategory.slice(1)} Error
-                    </p>
-                    {retryCount > 0 && (
-                      <span className="text-xs text-muted-foreground">
-                        (attempt {retryCount})
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-sm text-muted-foreground">{error}</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {getErrorSuggestion(errorCategory)}
-                  </p>
-                </div>
+        {isHistorySidebarOpen ? (
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            {sortedConversationHistory.length === 0 ? (
+              <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
+                No saved conversations yet.
               </div>
-              <div className="mt-3 flex items-center gap-2">
+            ) : (
+              <div className="space-y-2">
+                {sortedConversationHistory.map((snapshot) => {
+                  const isActive = snapshot.frontendSessionId === frontendSessionId;
+                  return (
+                    <div
+                      key={snapshot.frontendSessionId}
+                      className={`rounded border ${
+                        isActive ? "border-primary/50 bg-primary/5" : "border-border"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleLoadConversation(snapshot)}
+                        className="w-full px-2 py-2 text-left"
+                      >
+                        <p className="truncate text-xs font-medium">{snapshot.title}</p>
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          {formatSnapshotTime(snapshot.updatedAt)}
+                        </p>
+                        {snapshot.targetDatabaseId && (
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            DB: {snapshot.targetDatabaseId}
+                          </p>
+                        )}
+                      </button>
+                      <div className="flex justify-end border-t px-1 py-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-[11px]"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleDeleteConversation(snapshot.frontendSessionId);
+                          }}
+                        >
+                          <Trash2 size={12} />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-1 items-center justify-center text-muted-foreground">
+            <History size={16} />
+          </div>
+        )}
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex-shrink-0 border-b p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="hidden lg:inline-flex"
+                onClick={() => setIsHistorySidebarOpen((prev) => !prev)}
+                aria-label="Toggle conversation sidebar"
+              >
+                {isHistorySidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+              </Button>
+              <div>
+                <h1 className="text-2xl font-bold">DataChat</h1>
+                <p className="text-sm text-muted-foreground">
+                  Ask questions in natural language
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {connections.length > 0 && (
+                <select
+                  value={targetDatabaseId ?? ""}
+                  onChange={(event) => {
+                    const nextId = event.target.value || null;
+                    if (nextId !== targetDatabaseId) {
+                      setConversationId(null);
+                      setConversationDatabaseId(null);
+                      resetAgentStatus();
+                    }
+                    setTargetDatabaseId(nextId);
+                  }}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                  disabled={isLoading}
+                  aria-label="Target database"
+                >
+                  {connections.map((connection) => (
+                    <option key={connection.connection_id} value={connection.connection_id}>
+                      {connection.name}
+                      {` (${connection.database_type})`}
+                      {connection.tags?.includes("env") ? " (env)" : ""}
+                      {connection.is_default ? " (default)" : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleStartNewConversation}
+                disabled={isLoading}
+              >
+                <Plus size={14} />
+                New
+              </Button>
+              <Button asChild variant="ghost" size="sm">
+                <Link href="/settings">Settings</Link>
+              </Button>
+              <Button asChild variant="secondary" size="sm">
+                <Link href="/databases">Manage DataPoints</Link>
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="hidden xl:inline-flex"
+                onClick={() => setIsSchemaSidebarOpen((prev) => !prev)}
+                aria-label="Toggle schema sidebar"
+              >
+                {isSchemaSidebarOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+              </Button>
+              <div className="flex items-center gap-2 text-xs">
+                <div
+                  className={`h-2 w-2 rounded-full ${
+                    isConnected || isBackendReachable ? "bg-green-500" : "bg-red-500"
+                  }`}
+                />
+                {isLoading && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+                <span className="text-muted-foreground">
+                  {isLoading
+                    ? formatWaitingChipLabel(loadingElapsedSeconds)
+                    : isConnected
+                      ? "Streaming"
+                      : isBackendReachable
+                        ? "Ready"
+                        : "Disconnected"}
+                </span>
+              </div>
+              {messages.length > 0 && (
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={handleRetry}
-                  disabled={isLoading || !lastFailedQuery}
-                  className="text-xs"
+                  onClick={handleClear}
+                  disabled={isLoading}
                 >
-                  <RefreshCw size={14} className="mr-1" />
-                  Retry Query
+                  <Trash2 size={14} />
+                  Clear
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setError(null);
-                    setErrorCategory(null);
-                    setLastFailedQuery(null);
-                    setRetryCount(0);
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-1">
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="flex-1 overflow-y-auto p-4">
+              {!isInitialized && !setupCompleted && (
+                <SystemSetup
+                  steps={setupSteps}
+                  onInitialize={handleInitialize}
+                  isSubmitting={isInitializing}
+                  error={setupError}
+                  notice={setupNotice}
+                />
+              )}
+              {!isInitialized && setupCompleted && (
+                <div className="mb-4 rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  Setup saved. Add DataPoints from{" "}
+                  <Link href="/databases" className="underline">
+                    Database Manager
+                  </Link>{" "}
+                  (or run <strong>datachat demo</strong>) to enable chat.
+                </div>
+              )}
+              {messages.length === 0 && (
+                <div className="flex h-full items-center justify-center text-muted-foreground">
+                  <div className="text-center">
+                    <p className="mb-2 text-lg">Welcome to DataChat!</p>
+                    <p className="text-sm">
+                      Ask a question about your data to get started.
+                    </p>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      New here? Run <strong>datachat demo</strong> to load sample data.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {messages.map((message) => (
+                <Message
+                  key={message.id}
+                  message={message}
+                  displayMode={resultLayoutMode}
+                  showAgentTimingBreakdown={showAgentTimingBreakdown}
+                  onClarifyingAnswer={(question) => {
+                    setInput(`Regarding "${question}": `);
+                    inputRef.current?.focus();
                   }}
-                  className="text-xs text-muted-foreground"
+                />
+              ))}
+
+              {isLoading && showLiveReasoning && (
+                <Card className="mb-4 border-primary/20 bg-primary/5">
+                  <div className="p-3">
+                    <div className="mb-2 text-xs font-medium text-primary">Working...</div>
+                    <ul className="space-y-1 text-xs text-muted-foreground">
+                      {(thinkingNotes.length
+                        ? thinkingNotes
+                        : ["Understanding your request..."]).map((note, idx) => (
+                        <li key={`${idx}-${note}`} className="flex items-start gap-2">
+                          <span className="mt-1 inline-block h-1.5 w-1.5 rounded-full bg-primary/70" />
+                          <span>{note}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </Card>
+              )}
+
+              <AgentStatus mode={waitingMode} />
+              {isLoading && (
+                <div className="mb-4 flex items-center justify-center">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/5 px-3 py-1 text-xs text-primary">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>{formatWaitingChipLabel(loadingElapsedSeconds)}</span>
+                  </div>
+                </div>
+              )}
+
+              {error && errorCategory && (
+                <Card className="mb-4 border-destructive bg-destructive/10">
+                  <div className="p-4">
+                    <div className="flex items-start gap-3">
+                      {(() => {
+                        const Icon = getErrorIcon(errorCategory);
+                        return (
+                          <Icon className="mt-0.5 h-5 w-5 flex-shrink-0 text-destructive" />
+                        );
+                      })()}
+                      <div className="flex-1">
+                        <div className="mb-1 flex items-center gap-2">
+                          <p className="text-sm font-medium text-destructive">
+                            {errorCategory.charAt(0).toUpperCase() + errorCategory.slice(1)} Error
+                          </p>
+                          {retryCount > 0 && (
+                            <span className="text-xs text-muted-foreground">
+                              (attempt {retryCount})
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-muted-foreground">{error}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {getErrorSuggestion(errorCategory)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRetry}
+                        disabled={isLoading || !lastFailedQuery}
+                        className="text-xs"
+                      >
+                        <RefreshCw size={14} className="mr-1" />
+                        Retry Query
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setError(null);
+                          setErrorCategory(null);
+                          setLastFailedQuery(null);
+                          setRetryCount(0);
+                        }}
+                        className="text-xs text-muted-foreground"
+                      >
+                        Dismiss
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            <div className="flex-shrink-0 border-t p-4">
+              <div className="mb-2 flex flex-wrap gap-2">
+                {QUERY_TEMPLATES.map((template) => (
+                  <button
+                    key={template.id}
+                    type="button"
+                    onClick={() => handleApplyTemplate(template.id)}
+                    className="rounded-full border border-border bg-background px-3 py-1 text-xs hover:bg-muted"
+                    disabled={isLoading || !isInitialized}
+                  >
+                    {template.label}
+                  </button>
+                ))}
+                {selectedSchemaTable && (
+                  <span className="inline-flex items-center rounded-full bg-primary/10 px-3 py-1 text-xs text-primary">
+                    Table: {selectedSchemaTable}
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyPress}
+                  placeholder="Ask a question about your data..."
+                  disabled={isLoading || !isInitialized}
+                  className="flex-1"
+                />
+                <Button
+                  onClick={handleSend}
+                  disabled={!input.trim() || isLoading || !isInitialized}
+                  size="icon"
                 >
-                  Dismiss
+                  {isLoading ? (
+                    <Loader2 size={18} className="animate-spin" />
+                  ) : (
+                    <Send size={18} />
+                  )}
                 </Button>
               </div>
+              <p className="mt-2 text-xs text-muted-foreground">Press Enter to send</p>
+              {conversationId &&
+                conversationDatabaseId &&
+                targetDatabaseId &&
+                conversationDatabaseId !== targetDatabaseId && (
+                  <p className="mt-1 text-xs text-amber-700">
+                    Data source changed. Next query starts a fresh conversation context.
+                  </p>
+                )}
             </div>
-          </Card>
-        )}
+          </div>
 
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input */}
-      <div className="flex-shrink-0 border-t p-4">
-        <div className="flex gap-2">
-          <Input
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyPress}
-            placeholder="Ask a question about your data..."
-            disabled={isLoading || !isInitialized}
-            className="flex-1"
-          />
-          <Button
-            onClick={handleSend}
-            disabled={!input.trim() || isLoading || !isInitialized}
-            size="icon"
+          <aside
+            className={`hidden border-l bg-muted/20 transition-all duration-200 xl:flex xl:flex-col ${
+              isSchemaSidebarOpen ? "w-80" : "w-14"
+            }`}
           >
-            {isLoading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-          </Button>
+            <div className="flex items-center justify-between border-b px-2 py-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsSchemaSidebarOpen((prev) => !prev)}
+                aria-label="Toggle schema sidebar"
+              >
+                {isSchemaSidebarOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+              </Button>
+              {isSchemaSidebarOpen && <div className="text-xs font-medium">Schema Explorer</div>}
+            </div>
+            {isSchemaSidebarOpen ? (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="border-b p-2">
+                  <Input
+                    value={schemaSearch}
+                    onChange={(event) => setSchemaSearch(event.target.value)}
+                    placeholder="Search table or column..."
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                  {schemaLoading && (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Loading schema...
+                    </div>
+                  )}
+                  {!schemaLoading && schemaError && (
+                    <div className="rounded border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
+                      {schemaError}
+                    </div>
+                  )}
+                  {!schemaLoading && !schemaError && filteredSchemaTables.length === 0 && (
+                    <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
+                      No tables matched your search.
+                    </div>
+                  )}
+                  <div className="space-y-2">
+                    {filteredSchemaTables.map((table) => {
+                      const fullName = `${table.schema_name}.${table.table_name}`;
+                      const isSelected = selectedSchemaTable === fullName;
+                      return (
+                        <details key={fullName} className="rounded border border-border bg-background">
+                          <summary
+                            className={`cursor-pointer list-none px-2 py-2 text-xs ${
+                              isSelected ? "bg-primary/5" : ""
+                            }`}
+                            onClick={() => setSelectedSchemaTable(fullName)}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="truncate font-medium">{fullName}</div>
+                                <div className="text-[11px] text-muted-foreground">
+                                  {table.table_type}
+                                  {typeof table.row_count === "number"
+                                    ? ` · ~${table.row_count} rows`
+                                    : ""}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1 text-muted-foreground">
+                                <ChevronDown size={12} />
+                                <ChevronRight size={12} />
+                              </div>
+                            </div>
+                          </summary>
+                          <div className="border-t px-2 py-2">
+                            <button
+                              type="button"
+                              className="mb-2 inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] hover:bg-muted"
+                              onClick={() => {
+                                setSelectedSchemaTable(fullName);
+                                setInput(`Show first 100 rows from ${fullName}.`);
+                                restoreInputFocus();
+                              }}
+                            >
+                              <Table2 size={12} />
+                              Use In Query
+                            </button>
+                            <ul className="space-y-1 text-[11px]">
+                              {table.columns.map((column) => (
+                                <li key={`${fullName}.${column.name}`} className="flex flex-wrap gap-1">
+                                  <span className="font-medium">{column.name}</span>
+                                  <span className="text-muted-foreground">({column.data_type})</span>
+                                  {column.is_primary_key && (
+                                    <span className="rounded bg-blue-100 px-1 text-[10px] text-blue-800">
+                                      PK
+                                    </span>
+                                  )}
+                                  {column.is_foreign_key && (
+                                    <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-900">
+                                      FK
+                                    </span>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        </details>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-1 items-center justify-center text-muted-foreground">
+                <Database size={16} />
+              </div>
+            )}
+          </aside>
         </div>
-        <p className="text-xs text-muted-foreground mt-2">
-          Press Enter to send
-        </p>
-        {conversationId &&
-          conversationDatabaseId &&
-          targetDatabaseId &&
-          conversationDatabaseId !== targetDatabaseId && (
-            <p className="text-xs text-amber-700 mt-1">
-              Data source changed. Next query starts a fresh conversation context.
-            </p>
-          )}
       </div>
       {toolApprovalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">

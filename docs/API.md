@@ -96,6 +96,7 @@ Response fields (selected):
 - `POST /databases` - Create a connection.
 - `GET /databases` - List connections.
 - `GET /databases/{id}` - Fetch a single connection.
+- `GET /databases/{id}/schema` - Introspect tables/columns for schema explorer.
 - `PUT /databases/{id}/default` - Set default connection.
 - `DELETE /databases/{id}` - Remove a connection.
 
@@ -105,6 +106,8 @@ Notes:
   `Environment Database` entry (read-only in registry endpoints).
 - `POST /databases` validates that `database_type` matches the URL scheme
   (`postgresql://`, `mysql://`, `clickhouse://`) and returns `400` on mismatch.
+- `GET /databases/{id}/schema` opens a read-only connector, introspects live
+  schema metadata, and returns table + column details (including PK/FK flags).
 
 ## Profiling and DataPoint Generation
 

@@ -198,6 +198,13 @@ interface ChatState {
   setLoading: (loading: boolean) => void;
   setConnected: (connected: boolean) => void;
   clearMessages: () => void;
+  loadSession: (session: {
+    frontendSessionId: string;
+    messages: Message[];
+    conversationId: string | null;
+    sessionSummary: string | null;
+    sessionState: Record<string, unknown> | null;
+  }) => void;
   addChatResponse: (query: string, response: ChatResponse) => void;
   appendToLastMessage: (content: string) => void;
 }
@@ -286,6 +293,22 @@ export const useChatStore = create<ChatState>()(
       agentMessage: null,
       agentError: null,
       agentHistory: [],
+    }),
+
+  loadSession: (session) =>
+    set({
+      messages: session.messages,
+      conversationId: session.conversationId,
+      sessionSummary: session.sessionSummary,
+      sessionState: session.sessionState,
+      frontendSessionId: session.frontendSessionId,
+      currentAgent: null,
+      agentStatus: "idle",
+      agentMessage: null,
+      agentError: null,
+      agentHistory: [],
+      isLoading: false,
+      isConnected: false,
     }),
 
   addChatResponse: (query, response) =>

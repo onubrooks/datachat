@@ -37,6 +37,9 @@ This document describes the frontend architecture, current state, and roadmap fo
 | Multi-Question Support | Sub-answers with Q1/Q2 selector | ✅ Implemented |
 | Conversation Persistence | localStorage backup with data recovery | ✅ Implemented |
 | Error Recovery | Retry button with error categorization | ✅ Implemented |
+| Conversation History Sidebar | Resume prior local sessions | ✅ Implemented |
+| Schema Explorer Sidebar | Browse tables/columns with search | ✅ Implemented |
+| Query Templates | Quick-action buttons for common prompts | ✅ Implemented |
 
 ### Database Management
 
@@ -82,9 +85,9 @@ This document describes the frontend architecture, current state, and roadmap fo
 
 | Issue | Impact | Recommendation |
 |-------|--------|----------------|
-| **No Schema Explorer** | Users must ask to discover tables | Add collapsible schema browser sidebar |
-| **No Conversation History** | Can't resume past sessions | Add conversation list sidebar |
-| **No Query Templates** | Re-typing common patterns | Add quick-action buttons for common queries |
+| ✅ **Schema Explorer Added** | Users can inspect tables/columns directly | Collapsible schema browser sidebar with search |
+| ✅ **Conversation History Added** | Users can resume past sessions | Collapsible conversation list sidebar with local restore |
+| ✅ **Query Templates Added** | Faster repeated workflows | Quick-action buttons for common query patterns |
 
 ### P3: Visualization Polish
 
@@ -285,20 +288,20 @@ frontend/src/components/visualizations/
 | Add conversation persistence (localStorage) | 8h | P1 | ✅ Done |
 | Add table pagination (50 rows/page) | 4h | P1 | ✅ Done |
 | Add retry button for errors | 4h | P1 | ✅ Done |
-| Add schema browser sidebar | 12h | P1 | Pending |
+| Add schema browser sidebar | 12h | P1 | ✅ Done |
 
-**Total Remaining: 12h**
+**Total Remaining: 0h**
 
 ### Sprint 2: Productivity (P2)
 
-| Task | Effort | Priority |
-|------|--------|----------|
-| Add conversation history sidebar | 16h | P2 |
-| Add query templates | 8h | P2 |
-| Add keyboard shortcuts | 4h | P2 |
-| Add dark mode toggle | 2h | P2 |
+| Task | Effort | Priority | Status |
+|------|--------|----------|--------|
+| Add conversation history sidebar | 16h | P2 | ✅ Done |
+| Add query templates | 8h | P2 | ✅ Done |
+| Add keyboard shortcuts | 4h | P2 | Pending |
+| Add dark mode toggle | 2h | P2 | Pending |
 
-**Total: 30h**
+**Total Remaining: 6h**
 
 ### Sprint 3: Polish (P3)
 

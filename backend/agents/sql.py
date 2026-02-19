@@ -131,8 +131,8 @@ class SQLAgent(BaseAgent):
         self._live_schema_snapshot_cache: dict[str, dict[str, Any]] = {}
         self._live_schema_tables_cache: dict[str, set[str]] = {}
         self._live_profile_cache: dict[str, dict[str, dict[str, object]]] = {}
-        self._max_safe_row_limit = 10
-        self._default_row_limit = 5
+        self._max_safe_row_limit = 100
+        self._default_row_limit = 100
 
     def _pipeline_flag(self, name: str, default: bool) -> bool:
         pipeline_cfg = getattr(self.config, "pipeline", None)
@@ -583,7 +583,7 @@ class SQLAgent(BaseAgent):
             f"PREFERRED_TABLES: {', '.join(preferred_tables)}\n"
             f"JOIN_HINTS: {', '.join(join_hints) if join_hints else 'None'}\n"
             f"COLUMN_HINTS: {', '.join(column_hints) if column_hints else 'None'}\n"
-            "DEFAULT_LIMIT: 10 rows for list outputs."
+            "DEFAULT_LIMIT: 100 rows for list outputs."
         )
         llm_request = LLMRequest(
             messages=[
@@ -1254,7 +1254,7 @@ class SQLAgent(BaseAgent):
             business_context=business_context,
             conversation_context=conversation_context,
             backend=db_type,
-            user_preferences={"default_limit": 10},
+            user_preferences={"default_limit": 100},
         )
         if return_plan:
             return prompt, compiler_plan

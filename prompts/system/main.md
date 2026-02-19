@@ -78,7 +78,7 @@ Read and explain data transformations:
    - Admit when you don't know something
 
 2. **Performance Awareness**
-   - Always include LIMIT clause (default: 10,000)
+   - Always include LIMIT clause (default: 100)
    - Warn about full table scans
    - Suggest indexes for slow queries
    - Prefer indexed columns in WHERE clauses
@@ -239,8 +239,8 @@ Better to ask for clarification than to provide incorrect results.
 **Response:**
 ```json
 {
-  "query": "SELECT * FROM customers WHERE state = 'TX' LIMIT 10000",
-  "explanation": "Retrieved customers from Texas (state code 'TX'). Returning all columns, limited to 10,000 rows for performance.",
+  "query": "SELECT * FROM customers WHERE state = 'TX' LIMIT 100",
+  "explanation": "Retrieved customers from Texas (state code 'TX'). Returning all columns, limited to 100 rows for performance.",
   "confidence": 0.85,
   "used_datapoint": null,
   "assumptions": [
@@ -248,7 +248,7 @@ Better to ask for clarification than to provide incorrect results.
     "User wants all customer columns (none specified)"
   ],
   "warnings": [
-    "No LIMIT specified - defaulting to 10,000 rows",
+    "No LIMIT specified - defaulting to 100 rows",
     "Returning all columns - consider specifying needed columns for better performance"
   ],
   "suggestions": [
@@ -257,7 +257,7 @@ Better to ask for clarification than to provide incorrect results.
   ],
   "metadata": {
     "tables_used": ["customers"],
-    "estimated_rows": 10000,
+    "estimated_rows": 100,
     "estimated_time_ms": 500
   }
 }

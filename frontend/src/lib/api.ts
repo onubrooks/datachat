@@ -247,6 +247,31 @@ export interface DatabaseConnectionUpdate {
   description?: string | null;
 }
 
+export interface DatabaseSchemaColumn {
+  name: string;
+  data_type: string;
+  is_nullable: boolean;
+  is_primary_key: boolean;
+  is_foreign_key: boolean;
+  foreign_table?: string | null;
+  foreign_column?: string | null;
+}
+
+export interface DatabaseSchemaTable {
+  schema_name: string;
+  table_name: string;
+  row_count?: number | null;
+  table_type: string;
+  columns: DatabaseSchemaColumn[];
+}
+
+export interface DatabaseSchemaResponse {
+  connection_id: string;
+  database_type: "postgresql" | "clickhouse" | "mysql";
+  fetched_at: string;
+  tables: DatabaseSchemaTable[];
+}
+
 export interface ProfilingProgress {
   total_tables: number;
   tables_completed: number;
@@ -495,6 +520,19 @@ export class DataChatAPI {
         error.message || error.detail || response.statusText || `HTTP ${response.status}`;
       throw new Error(message);
     }
+  }
+
+  async getDatabaseSchema(connectionId: string): Promise<DatabaseSchemaResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/databases/${connectionId}/schema`
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      const message =
+        error.message || error.detail || response.statusText || `HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return response.json();
   }
 
   async startProfiling(

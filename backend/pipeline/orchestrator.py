@@ -1513,7 +1513,7 @@ class DataChatPipeline:
                 validated_sql=validated_sql,
                 database_type=state.get("database_type", "postgresql"),
                 database_url=state.get("database_url"),
-                max_rows=10,
+                max_rows=100,
                 timeout_seconds=30,
                 source_datapoints=state.get("used_datapoints", []),
             )

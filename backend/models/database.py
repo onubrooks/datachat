@@ -59,3 +59,38 @@ class DatabaseConnectionUpdateDefault(BaseModel):
     """Payload for setting the default connection."""
 
     is_default: bool = Field(default=True, description="Set connection as default")
+
+
+class DatabaseSchemaColumn(BaseModel):
+    """Schema metadata for a single column."""
+
+    name: str = Field(..., description="Column name")
+    data_type: str = Field(..., description="Column SQL type")
+    is_nullable: bool = Field(..., description="Whether the column allows NULL")
+    is_primary_key: bool = Field(default=False, description="Whether this column is a PK")
+    is_foreign_key: bool = Field(default=False, description="Whether this column is an FK")
+    foreign_table: str | None = Field(None, description="Referenced table for FK")
+    foreign_column: str | None = Field(None, description="Referenced column for FK")
+
+
+class DatabaseSchemaTable(BaseModel):
+    """Schema metadata for a single table."""
+
+    schema_name: str = Field(..., description="Database schema name")
+    table_name: str = Field(..., description="Table name")
+    row_count: int | None = Field(None, description="Approximate row count")
+    table_type: str = Field(..., description="Table type (TABLE, VIEW, etc.)")
+    columns: list[DatabaseSchemaColumn] = Field(default_factory=list)
+
+
+class DatabaseSchemaResponse(BaseModel):
+    """Schema payload returned to frontend schema explorer."""
+
+    connection_id: UUID = Field(..., description="Connection identifier")
+    database_type: Literal["postgresql", "clickhouse", "mysql"] = Field(
+        ..., description="Database engine type"
+    )
+    fetched_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), description="Schema fetch timestamp"
+    )
+    tables: list[DatabaseSchemaTable] = Field(default_factory=list)

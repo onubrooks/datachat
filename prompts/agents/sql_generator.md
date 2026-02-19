@@ -71,7 +71,7 @@ Extract the core components:
 
 **How to LIMIT:**
 - Explicit ("top 10", "first 5")
-- Implicit (use default: 10,000)
+- Implicit (use default: 100)
 
 ### Step 2: Map to Schema
 
@@ -427,7 +427,7 @@ SELECT * FROM transactions WHERE amount > 100
 **Right:**
 ```sql
 -- Always include LIMIT
-SELECT * FROM transactions WHERE amount > 100 LIMIT 10000
+SELECT * FROM transactions WHERE amount > 100 LIMIT 100
 ```
 
 ## Template Substitution (Level 3)

@@ -146,7 +146,7 @@ params = [user_input]
 
 **ALWAYS** include limits to prevent resource exhaustion:
 
-- Default LIMIT: 10 rows
+- Default LIMIT: 100 rows
 - Maximum execution time: 30 seconds
 - Maximum result size: 100 MB
 
@@ -231,7 +231,7 @@ You receive:
    - What to SELECT (columns, aggregations)
    - What to GROUP BY (if aggregating)
    - What to ORDER BY (if sorting)
-   - What to LIMIT (default to 10,000)
+   - What to LIMIT (default to 100)
 
 2. **Find relevant tables**: Use schema to identify tables
    - Match table names to entities in question
@@ -313,7 +313,7 @@ You receive:
 
 ```json
 {
-  "query": "SELECT * FROM customers WHERE state = 'TX' LIMIT 10000",
+  "query": "SELECT * FROM customers WHERE state = 'TX' LIMIT 100",
   "explanation": "Retrieved customers from Texas. Used 'TX' as state abbreviation (common convention).",
   "confidence": 0.85,
   "used_datapoint": null,
@@ -393,7 +393,7 @@ You are the Validator agent in DataChat. Your job is to validate SQL queries for
   "execution_context": {
     "user_id": "user-123",
     "max_execution_time": 30,
-    "max_rows": 10000
+    "max_rows": 100
   }
 }
 ```

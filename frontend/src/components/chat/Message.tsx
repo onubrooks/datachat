@@ -242,6 +242,10 @@ export function Message({
     }
   }, [selectedSubAnswerIndex, subAnswers.length]);
 
+  useEffect(() => {
+    setTablePage(0);
+  }, [message.id, selectedSubAnswerIndex]);
+
   const columnNames = useMemo(
     () => (activeData ? Object.keys(activeData) : []),
     [activeData]
@@ -250,6 +254,11 @@ export function Message({
     columnNames.length > 0
       ? Math.max(...columnNames.map((column) => activeData?.[column]?.length ?? 0))
       : 0;
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(rowCount / ROWS_PER_PAGE));
+    setTablePage((page) => Math.min(page, totalPages - 1));
+  }, [rowCount]);
 
   const rows = useMemo(
     () =>
@@ -592,7 +601,7 @@ export function Message({
                 </div>
               </div>
             )}
-            {totalPages === 1 && rowCount > ROWS_PER_PAGE && (
+            {totalPages === 1 && rowCount > 0 && (
               <p className="text-xs text-muted-foreground mt-2">
                 Showing {rowCount} rows
               </p>

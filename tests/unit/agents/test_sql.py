@@ -1401,9 +1401,11 @@ class TestErrorHandling:
 
         generated = sql_agent._parse_llm_response(content, sql_input)
 
-        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 5"
+        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 100"
 
-    def test_parse_llm_response_caps_explicit_limit_to_ten(self, sql_agent, sample_sql_agent_input):
+    def test_parse_llm_response_respects_explicit_limit_within_hard_cap(
+        self, sql_agent, sample_sql_agent_input
+    ):
         sql_input = sample_sql_agent_input.model_copy(
             update={"query": "Show me the first 50 rows from public.grocery_stores"}
         )
@@ -1413,7 +1415,7 @@ class TestErrorHandling:
 
         generated = sql_agent._parse_llm_response(content, sql_input)
 
-        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 10"
+        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 50"
 
     def test_parse_llm_response_adds_default_limit_when_missing(
         self, sql_agent, sample_sql_agent_input
@@ -1425,7 +1427,7 @@ class TestErrorHandling:
 
         generated = sql_agent._parse_llm_response(content, sql_input)
 
-        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 5"
+        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 100"
 
     def test_parse_llm_response_adds_outer_limit_when_only_subquery_has_limit(
         self, sql_agent, sample_sql_agent_input
@@ -1447,7 +1449,7 @@ class TestErrorHandling:
         generated = sql_agent._parse_llm_response(content, sql_input)
 
         assert "LIMIT 1" in generated.sql
-        assert generated.sql.endswith("LIMIT 5")
+        assert generated.sql.endswith("LIMIT 100")
 
     def test_parse_llm_response_keeps_top_level_parameterized_limit(
         self, sql_agent, sample_sql_agent_input
