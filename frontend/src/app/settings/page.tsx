@@ -12,8 +12,10 @@ import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
+  applyThemeMode,
   getSynthesizeSimpleSql,
   getShowLiveReasoning,
+  getThemeMode,
   getWaitingUxMode,
   getResultLayoutMode,
   getShowAgentTimingBreakdown,
@@ -21,8 +23,10 @@ import {
   setShowLiveReasoning,
   setShowAgentTimingBreakdown,
   setSynthesizeSimpleSql,
+  setThemeMode,
   setWaitingUxMode,
   type ResultLayoutMode,
+  type ThemeMode,
   type WaitingUxMode,
 } from "@/lib/settings";
 import { useChatStore } from "@/lib/stores/chat";
@@ -50,6 +54,7 @@ export default function SettingsPage() {
   const [showAgentTimings, setShowAgentTimings] = useState(true);
   const [synthesizeSimpleSql, setSynthesizeSimpleSqlState] = useState(true);
   const [showLiveReasoning, setShowLiveReasoningState] = useState(true);
+  const [themeMode, setThemeModeState] = useState<ThemeMode>("system");
   const [clearedAt, setClearedAt] = useState<Date | null>(null);
   const clearMessages = useChatStore((state) => state.clearMessages);
 
@@ -59,6 +64,7 @@ export default function SettingsPage() {
     setShowAgentTimings(getShowAgentTimingBreakdown());
     setSynthesizeSimpleSqlState(getSynthesizeSimpleSql());
     setShowLiveReasoningState(getShowLiveReasoning());
+    setThemeModeState(getThemeMode());
   }, []);
 
   const handleChange = (value: WaitingUxMode) => {
@@ -86,6 +92,12 @@ export default function SettingsPage() {
     setShowLiveReasoning(value);
   };
 
+  const handleThemeModeChange = (value: ThemeMode) => {
+    setThemeModeState(value);
+    setThemeMode(value);
+    applyThemeMode(value);
+  };
+
   const handleClearChatHistory = () => {
     clearMessages();
     setClearedAt(new Date());
@@ -104,6 +116,54 @@ export default function SettingsPage() {
           <Link href="/">Back to Chat</Link>
         </Button>
       </div>
+
+      <Card className="p-4 space-y-4">
+        <div className="text-sm font-medium">Theme</div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <button
+            type="button"
+            onClick={() => handleThemeModeChange("light")}
+            className={`rounded-md border px-4 py-3 text-left text-sm transition ${
+              themeMode === "light"
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/40"
+            }`}
+          >
+            <div className="font-medium">Light</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Always use light theme.
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleThemeModeChange("dark")}
+            className={`rounded-md border px-4 py-3 text-left text-sm transition ${
+              themeMode === "dark"
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/40"
+            }`}
+          >
+            <div className="font-medium">Dark</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Always use dark theme.
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleThemeModeChange("system")}
+            className={`rounded-md border px-4 py-3 text-left text-sm transition ${
+              themeMode === "system"
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/40"
+            }`}
+          >
+            <div className="font-medium">System</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Follow OS preference.
+            </div>
+          </button>
+        </div>
+      </Card>
 
       <Card className="p-4 space-y-4">
         <div className="text-sm font-medium">Waiting UX Mode</div>

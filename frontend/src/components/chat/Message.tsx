@@ -38,6 +38,7 @@ interface MessageProps {
   displayMode?: ResultLayoutMode;
   showAgentTimingBreakdown?: boolean;
   onClarifyingAnswer?: (question: string) => void;
+  onEditSqlDraft?: (sql: string) => void;
 }
 
 type TabId = "answer" | "sql" | "table" | "visualization" | "sources" | "timing";
@@ -255,6 +256,7 @@ export function Message({
   displayMode = "stacked",
   showAgentTimingBreakdown = true,
   onClarifyingAnswer,
+  onEditSqlDraft,
 }: MessageProps) {
   const isUser = message.role === "user";
   const [activeTab, setActiveTab] = useState<TabId>("answer");
@@ -2186,11 +2188,13 @@ export function Message({
         </div>
       )}
 
-      <div className={cn("flex-1 max-w-3xl", isUser && "flex justify-end")}>
+      <div className={cn("flex-1 max-w-4xl", isUser && "flex justify-end")}>
         <div
           className={cn(
-            "rounded-lg px-4 py-3",
-            isUser ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+            "rounded-xl px-4 py-3",
+            isUser
+              ? "bg-primary/90 text-primary-foreground shadow-sm"
+              : "border border-border/70 bg-card text-foreground shadow-sm"
           )}
         >
           {assistantMeta && (
@@ -2222,6 +2226,17 @@ export function Message({
                 >
                   <Copy size={12} />
                   Copy SQL
+                </button>
+              )}
+              {activeSql && onEditSqlDraft && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-secondary"
+                  onClick={() => onEditSqlDraft(activeSql)}
+                  aria-label="Edit SQL draft"
+                >
+                  <Code size={12} />
+                  Edit SQL
                 </button>
               )}
               {hasTable && (

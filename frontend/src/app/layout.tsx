@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,7 +13,22 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <Script id="datachat-theme-init" strategy="beforeInteractive">
+          {`
+            (function() {
+              try {
+                var key = "datachat.themeMode";
+                var mode = window.localStorage.getItem(key) || "system";
+                var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+                var useDark = mode === "dark" || (mode === "system" && prefersDark);
+                document.documentElement.classList.toggle("dark", useDark);
+              } catch (_) {}
+            })();
+          `}
+        </Script>
+      </head>
       <body className="font-sans">{children}</body>
     </html>
   );

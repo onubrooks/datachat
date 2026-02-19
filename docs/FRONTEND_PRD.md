@@ -40,6 +40,8 @@ This document describes the frontend architecture, current state, and roadmap fo
 | Conversation History Sidebar | Resume prior local sessions | ✅ Implemented |
 | Schema Explorer Sidebar | Browse tables/columns with search | ✅ Implemented |
 | Query Templates | Quick-action buttons for common prompts | ✅ Implemented |
+| SQL Editor Mode | Edit and run SQL drafts from composer or generated responses | ✅ Implemented |
+| Theme Override | Light, dark, and system theme settings | ✅ Implemented |
 | Chart Interaction | Tooltips, zoom controls, legend toggles | ✅ Implemented |
 | Chart Configuration | Per-chart axis + display settings panel | ✅ Implemented |
 | Accessibility Labels | ARIA labels, dialog semantics, live regions | ✅ Implemented |
@@ -117,23 +119,27 @@ This document describes the frontend architecture, current state, and roadmap fo
 
 ---
 
-## Should Add ➕
+## Recently Delivered ✅
 
 ### P1: Essential Features
 
 | Feature | Description | Effort |
 |---------|-------------|--------|
-| **Conversation Sidebar** | List of past conversations with search | 16h |
-| **Schema Browser** | Interactive table/column explorer | 12h |
+| ✅ **Conversation Sidebar + Search** | List of past conversations with local search/filter | Delivered |
+| ✅ **Schema Browser** | Interactive table/column explorer with search + use-in-query actions | Delivered |
 
 ### P2: Productivity Features
 
 | Feature | Description | Effort |
 |---------|-------------|--------|
-| **Query Templates** | Pre-defined patterns (Top N, Trends) | 8h |
-| **SQL Editor Mode** | Edit SQL before execution | 12h |
-| **Keyboard Shortcuts** | Cmd+K, Cmd+H, Cmd+/, Esc | 4h |
-| **Dark Mode Toggle** | Manual theme override | 2h |
+| ✅ **Query Templates** | Pre-defined patterns (Top N, trends, breakdown) | Delivered |
+| ✅ **SQL Editor Mode** | Edit SQL before execution and run deterministic SQL requests | Delivered |
+| ✅ **Keyboard Shortcuts** | Cmd/Ctrl+K, Cmd/Ctrl+H, Cmd/Ctrl+/, Esc | Delivered |
+| ✅ **Dark Mode Toggle** | Manual light/dark/system theme override in Settings | Delivered |
+
+---
+
+## Backlog ➕
 
 ### P3: Export & Sharing
 

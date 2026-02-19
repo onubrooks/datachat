@@ -178,4 +178,62 @@ describe("ChatInterface target database", () => {
       ).not.toBeInTheDocument()
     );
   });
+
+  it("filters conversation history from sidebar search", async () => {
+    window.localStorage.setItem(
+      "datachat.conversation.history.v1",
+      JSON.stringify([
+        {
+          frontendSessionId: "session-a",
+          title: "Sales trend review",
+          targetDatabaseId: "db_mysql",
+          conversationId: "conv_a",
+          sessionSummary: null,
+          sessionState: null,
+          updatedAt: new Date().toISOString(),
+          messages: [],
+        },
+        {
+          frontendSessionId: "session-b",
+          title: "Inventory checks",
+          targetDatabaseId: "db_pg",
+          conversationId: "conv_b",
+          sessionSummary: null,
+          sessionState: null,
+          updatedAt: new Date().toISOString(),
+          messages: [],
+        },
+      ])
+    );
+
+    render(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockGetDatabaseSchema).toHaveBeenCalled());
+
+    expect(screen.getByText("Sales trend review")).toBeInTheDocument();
+    expect(screen.getByText("Inventory checks")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Search saved conversations"), {
+      target: { value: "sales" },
+    });
+
+    expect(screen.getByText("Sales trend review")).toBeInTheDocument();
+    expect(screen.queryByText("Inventory checks")).not.toBeInTheDocument();
+  });
+
+  it("sends SQL editor content as deterministic execution prompt", async () => {
+    render(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: /SQL Editor/i }));
+    fireEvent.change(screen.getByLabelText("SQL editor input"), {
+      target: { value: "SELECT * FROM users LIMIT 10;" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run SQL draft" }));
+
+    await waitFor(() => expect(mockStreamChat).toHaveBeenCalledTimes(1));
+    const request = mockStreamChat.mock.calls[0][0] as Record<string, unknown>;
+    expect(String(request.message)).toContain("Execute this SQL query exactly as written");
+    expect(String(request.message)).toContain("SELECT * FROM users LIMIT 10;");
+  });
 });

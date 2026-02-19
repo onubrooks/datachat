@@ -34,6 +34,8 @@ import {
   Plus,
   Table2,
   Keyboard,
+  Search,
+  FileCode2,
 } from "lucide-react";
 import { Message } from "./Message";
 import { AgentStatus } from "../agents/AgentStatus";
@@ -110,6 +112,30 @@ const QUERY_TEMPLATES: Array<{ id: string; label: string; build: (selectedTable?
         ? `How many rows are in ${selectedTable}?`
         : "How many rows are in each table?",
   },
+  {
+    id: "top-10",
+    label: "Top 10",
+    build: (selectedTable) =>
+      selectedTable
+        ? `Show the top 10 records from ${selectedTable} by the most relevant numeric metric.`
+        : "Show top 10 products by sales amount.",
+  },
+  {
+    id: "trend",
+    label: "Trend",
+    build: (selectedTable) =>
+      selectedTable
+        ? `Show a monthly trend from ${selectedTable} for the last 12 months.`
+        : "Show a monthly trend for revenue for the last 12 months.",
+  },
+  {
+    id: "breakdown",
+    label: "Category Breakdown",
+    build: (selectedTable) =>
+      selectedTable
+        ? `Give me a category breakdown from ${selectedTable}.`
+        : "Give me a category breakdown of sales by department.",
+  },
 ];
 
 export function ChatInterface() {
@@ -175,16 +201,24 @@ export function ChatInterface() {
   const [schemaError, setSchemaError] = useState<string | null>(null);
   const [schemaSearch, setSchemaSearch] = useState("");
   const [selectedSchemaTable, setSelectedSchemaTable] = useState<string | null>(null);
+  const [conversationSearch, setConversationSearch] = useState("");
+  const [composerMode, setComposerMode] = useState<"nl" | "sql">("nl");
+  const [sqlDraft, setSqlDraft] = useState("");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const sqlEditorRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const shortcutsCloseButtonRef = useRef<HTMLButtonElement>(null);
   const toolApprovalApproveButtonRef = useRef<HTMLButtonElement>(null);
   const restoreInputFocus = useCallback(() => {
     window.requestAnimationFrame(() => {
+      if (composerMode === "sql") {
+        sqlEditorRef.current?.focus();
+        return;
+      }
       inputRef.current?.focus();
     });
-  }, []);
+  }, [composerMode]);
 
   const serializeMessages = (items: ChatStoreMessage[]): SerializedMessage[] =>
     items.slice(-MAX_CONVERSATION_MESSAGES).map((message) => ({
@@ -504,11 +538,20 @@ export function ChatInterface() {
 
   const sortedConversationHistory = useMemo(
     () =>
-      [...conversationHistory].sort(
-        (a, b) =>
-          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-      ),
-    [conversationHistory]
+      [...conversationHistory]
+        .sort(
+          (a, b) =>
+            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        )
+        .filter((snapshot) => {
+          const query = conversationSearch.trim().toLowerCase();
+          if (!query) {
+            return true;
+          }
+          const haystack = `${snapshot.title} ${snapshot.targetDatabaseId || ""}`.toLowerCase();
+          return haystack.includes(query);
+        }),
+    [conversationHistory, conversationSearch]
   );
 
   const formatSnapshotTime = (value: string) => {
@@ -524,11 +567,32 @@ export function ChatInterface() {
     });
   };
 
+  const buildSqlExecutionPrompt = (sql: string) =>
+    [
+      "Execute this SQL query exactly as written and return the results.",
+      "If it fails, explain the error and suggest a corrected SQL query.",
+      "",
+      "```sql",
+      sql.trim(),
+      "```",
+    ].join("\n");
+
   // Handle send message
   const handleSend = async () => {
-    if (!input.trim() || isLoading || !isInitialized) return;
+    const naturalLanguageQuery = input.trim();
+    const sqlQuery = sqlDraft.trim();
+    if (isLoading || !isInitialized) return;
+    if (composerMode === "nl" && !naturalLanguageQuery) return;
+    if (composerMode === "sql" && !sqlQuery) return;
 
-    const query = input.trim();
+    const userVisibleQuery =
+      composerMode === "sql"
+        ? sqlQuery
+        : naturalLanguageQuery;
+    const requestMessage =
+      composerMode === "sql"
+        ? buildSqlExecutionPrompt(sqlQuery)
+        : naturalLanguageQuery;
     const requestDatabaseId = targetDatabaseId || null;
     const canReuseConversation =
       !!conversationId &&
@@ -542,6 +606,9 @@ export function ChatInterface() {
       : [];
 
     setInput("");
+    if (composerMode === "sql") {
+      setSqlDraft("");
+    }
     setError(null);
     setErrorCategory(null);
     setLastFailedQuery(null);
@@ -555,7 +622,7 @@ export function ChatInterface() {
 
     addMessage({
       role: "user",
-      content: query,
+      content: userVisibleQuery,
     });
 
     addMessage({
@@ -566,7 +633,7 @@ export function ChatInterface() {
     try {
       wsClient.streamChat(
         {
-          message: query,
+          message: requestMessage,
           conversation_id: canReuseConversation ? conversationId || undefined : undefined,
           target_database: requestDatabaseId || undefined,
           conversation_history: conversationHistory,
@@ -647,7 +714,9 @@ export function ChatInterface() {
           onError: (message) => {
             setError(message);
             setErrorCategory(categorizeError(message));
-            setLastFailedQuery(query);
+            setLastFailedQuery(
+              composerMode === "sql" ? `__sql__${sqlQuery}` : naturalLanguageQuery
+            );
             setRetryCount((c) => c + 1);
             setLoading(false);
             setThinkingNotes([]);
@@ -670,7 +739,9 @@ export function ChatInterface() {
       const errorMessage = err instanceof Error ? err.message : "Failed to send message";
       setError(errorMessage);
       setErrorCategory(categorizeError(errorMessage));
-      setLastFailedQuery(query);
+      setLastFailedQuery(
+        composerMode === "sql" ? `__sql__${sqlQuery}` : naturalLanguageQuery
+      );
       setRetryCount((c) => c + 1);
       setLoading(false);
       resetAgentStatus();
@@ -680,11 +751,26 @@ export function ChatInterface() {
 
   const handleRetry = () => {
     if (!lastFailedQuery || isLoading) return;
-    setInput(lastFailedQuery);
+    if (lastFailedQuery.startsWith("__sql__")) {
+      setComposerMode("sql");
+      setSqlDraft(lastFailedQuery.replace("__sql__", ""));
+    } else if (lastFailedQuery.includes("```sql")) {
+      const extracted = lastFailedQuery.match(/```sql\s*([\s\S]*?)```/i)?.[1]?.trim();
+      if (extracted) {
+        setComposerMode("sql");
+        setSqlDraft(extracted);
+      } else {
+        setInput(lastFailedQuery);
+        setComposerMode("nl");
+      }
+    } else {
+      setInput(lastFailedQuery);
+      setComposerMode("nl");
+    }
     setError(null);
     setErrorCategory(null);
     setLastFailedQuery(null);
-    inputRef.current?.focus();
+    restoreInputFocus();
   };
 
   const handleApplyTemplate = (templateId: string) => {
@@ -692,7 +778,17 @@ export function ChatInterface() {
     if (!template) {
       return;
     }
+    setComposerMode("nl");
     setInput(template.build(selectedSchemaTable));
+    restoreInputFocus();
+  };
+
+  const handleOpenSqlEditor = (sql: string) => {
+    setComposerMode("sql");
+    setSqlDraft(sql);
+    setError(null);
+    setErrorCategory(null);
+    setLastFailedQuery(null);
     restoreInputFocus();
   };
 
@@ -703,6 +799,8 @@ export function ChatInterface() {
     setConversationId(null);
     setSessionMemory(null, null);
     setInput("");
+    setSqlDraft("");
+    setComposerMode("nl");
     setError(null);
     setErrorCategory(null);
     setLastFailedQuery(null);
@@ -722,6 +820,8 @@ export function ChatInterface() {
     setConversationDatabaseId(snapshot.targetDatabaseId);
     setTargetDatabaseId(snapshot.targetDatabaseId);
     setInput("");
+    setSqlDraft("");
+    setComposerMode("nl");
     setError(null);
     setErrorCategory(null);
     setLastFailedQuery(null);
@@ -796,6 +896,13 @@ export function ChatInterface() {
   // Handle key press (Enter to send)
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  const handleSqlEditorKeyPress = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       handleSend();
     }
@@ -919,9 +1026,13 @@ export function ChatInterface() {
   };
 
   return (
-    <div className="flex h-full min-h-0" role="main" aria-label="DataChat workspace">
+    <div
+      className="flex h-full min-h-0 bg-gradient-to-b from-background via-background to-muted/20"
+      role="main"
+      aria-label="DataChat workspace"
+    >
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex-shrink-0 border-b p-4" role="banner">
+        <div className="flex-shrink-0 border-b border-border/70 bg-background/90 p-4 backdrop-blur" role="banner">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Button
@@ -1036,7 +1147,7 @@ export function ChatInterface() {
 
         <div className="flex min-h-0 flex-1">
           <aside
-            className={`hidden border-r bg-muted/20 transition-all duration-200 lg:flex lg:flex-col ${
+            className={`hidden border-r border-border/70 bg-muted/30 transition-all duration-200 lg:flex lg:flex-col ${
               isHistorySidebarOpen ? "w-72" : "w-14"
             }`}
             role="complementary"
@@ -1066,58 +1177,77 @@ export function ChatInterface() {
               )}
             </div>
             {isHistorySidebarOpen ? (
-              <div className="min-h-0 flex-1 overflow-y-auto p-2" role="list" aria-label="Saved conversations">
-                {sortedConversationHistory.length === 0 ? (
-                  <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
-                    No saved conversations yet.
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {sortedConversationHistory.map((snapshot) => {
-                      const isActive = snapshot.frontendSessionId === frontendSessionId;
-                      return (
-                        <div
-                          key={snapshot.frontendSessionId}
-                          className={`rounded border ${
-                            isActive ? "border-primary/50 bg-primary/5" : "border-border"
-                          }`}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => handleLoadConversation(snapshot)}
-                            className="w-full px-2 py-2 text-left"
-                            aria-label={`Load conversation ${snapshot.title}`}
-                            aria-current={isActive ? "true" : undefined}
+              <div className="flex min-h-0 flex-1 flex-col p-2">
+                <div className="mb-2 flex items-center gap-1 rounded-md border border-border/70 bg-background/80 px-2">
+                  <Search size={12} className="text-muted-foreground" />
+                  <input
+                    type="text"
+                    value={conversationSearch}
+                    onChange={(event) => setConversationSearch(event.target.value)}
+                    placeholder="Search conversations..."
+                    className="h-8 w-full bg-transparent text-xs outline-none"
+                    aria-label="Search saved conversations"
+                  />
+                </div>
+                <div className="mb-2 text-[11px] text-muted-foreground">
+                  {sortedConversationHistory.length} conversation
+                  {sortedConversationHistory.length === 1 ? "" : "s"}
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto" role="list" aria-label="Saved conversations">
+                  {sortedConversationHistory.length === 0 ? (
+                    <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
+                      {conversationSearch.trim()
+                        ? "No conversations matched your search."
+                        : "No saved conversations yet."}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {sortedConversationHistory.map((snapshot) => {
+                        const isActive = snapshot.frontendSessionId === frontendSessionId;
+                        return (
+                          <div
+                            key={snapshot.frontendSessionId}
+                            className={`rounded border ${
+                              isActive ? "border-primary/40 bg-primary/5" : "border-border/70 bg-background/60"
+                            }`}
                           >
-                            <p className="truncate text-xs font-medium">{snapshot.title}</p>
-                            <p className="mt-1 text-[11px] text-muted-foreground">
-                              {formatSnapshotTime(snapshot.updatedAt)}
-                            </p>
-                            {snapshot.targetDatabaseId && (
-                              <p className="mt-1 text-[11px] text-muted-foreground">
-                                DB: {snapshot.targetDatabaseId}
-                              </p>
-                            )}
-                          </button>
-                          <div className="flex justify-end border-t px-1 py-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 px-2 text-[11px]"
-                              aria-label={`Delete conversation ${snapshot.title}`}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                handleDeleteConversation(snapshot.frontendSessionId);
-                              }}
+                            <button
+                              type="button"
+                              onClick={() => handleLoadConversation(snapshot)}
+                              className="w-full px-2 py-2 text-left"
+                              aria-label={`Load conversation ${snapshot.title}`}
+                              aria-current={isActive ? "true" : undefined}
                             >
-                              <Trash2 size={12} />
-                            </Button>
+                              <p className="truncate text-xs font-medium">{snapshot.title}</p>
+                              <p className="mt-1 text-[11px] text-muted-foreground">
+                                {formatSnapshotTime(snapshot.updatedAt)}
+                              </p>
+                              {snapshot.targetDatabaseId && (
+                                <p className="mt-1 text-[11px] text-muted-foreground">
+                                  DB: {snapshot.targetDatabaseId}
+                                </p>
+                              )}
+                            </button>
+                            <div className="flex justify-end border-t border-border/60 px-1 py-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-[11px]"
+                                aria-label={`Delete conversation ${snapshot.title}`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleDeleteConversation(snapshot.frontendSessionId);
+                                }}
+                              >
+                                <Trash2 size={12} />
+                              </Button>
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             ) : (
               <div className="flex flex-1 items-center justify-center text-muted-foreground">
@@ -1127,12 +1257,13 @@ export function ChatInterface() {
           </aside>
 
           <div className="flex min-w-0 flex-1 flex-col">
-            <div className="flex-1 overflow-y-auto p-4">
+            <div className="flex-1 overflow-y-auto px-4 py-5">
               <section
                 role="log"
                 aria-live="polite"
                 aria-relevant="additions text"
                 aria-label="Chat message stream"
+                className="mx-auto w-full max-w-5xl"
               >
               {!isInitialized && !setupCompleted && (
                 <SystemSetup
@@ -1172,7 +1303,9 @@ export function ChatInterface() {
                   message={message}
                   displayMode={resultLayoutMode}
                   showAgentTimingBreakdown={showAgentTimingBreakdown}
+                  onEditSqlDraft={handleOpenSqlEditor}
                   onClarifyingAnswer={(question) => {
+                    setComposerMode("nl");
                     setInput(`Regarding "${question}": `);
                     inputRef.current?.focus();
                   }}
@@ -1266,14 +1399,14 @@ export function ChatInterface() {
               </section>
             </div>
 
-            <div className="flex-shrink-0 border-t p-4">
-              <div className="mb-2 flex flex-wrap gap-2">
+            <div className="flex-shrink-0 border-t border-border/70 bg-background/90 p-4 backdrop-blur">
+              <div className="mb-3 flex flex-wrap gap-2">
                 {QUERY_TEMPLATES.map((template) => (
                   <button
                     key={template.id}
                     type="button"
                     onClick={() => handleApplyTemplate(template.id)}
-                    className="rounded-full border border-border bg-background px-3 py-1 text-xs hover:bg-muted"
+                    className="rounded-full border border-border/70 bg-background/80 px-3 py-1 text-xs text-foreground/90 shadow-sm transition hover:bg-muted"
                     disabled={isLoading || !isInitialized}
                   >
                     {template.label}
@@ -1285,31 +1418,93 @@ export function ChatInterface() {
                   </span>
                 )}
               </div>
-              <div className="flex gap-2">
-                <Input
-                  ref={inputRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyPress}
-                  placeholder="Ask a question about your data..."
-                  disabled={isLoading || !isInitialized}
-                  className="flex-1"
-                  aria-label="Chat query input"
-                />
-                <Button
-                  onClick={handleSend}
-                  disabled={!input.trim() || isLoading || !isInitialized}
-                  size="icon"
-                  aria-label="Send chat message"
+              <div className="mb-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setComposerMode("nl")}
+                  className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs transition ${
+                    composerMode === "nl"
+                      ? "border-primary/40 bg-primary/10 text-primary"
+                      : "border-border/70 bg-background/80 text-muted-foreground hover:bg-muted"
+                  }`}
                 >
-                  {isLoading ? (
-                    <Loader2 size={18} className="animate-spin" />
-                  ) : (
-                    <Send size={18} />
-                  )}
-                </Button>
+                  Ask
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setComposerMode("sql")}
+                  className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs transition ${
+                    composerMode === "sql"
+                      ? "border-primary/40 bg-primary/10 text-primary"
+                      : "border-border/70 bg-background/80 text-muted-foreground hover:bg-muted"
+                  }`}
+                >
+                  <FileCode2 size={12} />
+                  SQL Editor
+                </button>
               </div>
-              <p className="mt-2 text-xs text-muted-foreground">Press Enter to send</p>
+              {composerMode === "nl" ? (
+                <div className="flex gap-2">
+                  <Input
+                    ref={inputRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyPress}
+                    placeholder="Ask a question about your data..."
+                    disabled={isLoading || !isInitialized}
+                    className="flex-1"
+                    aria-label="Chat query input"
+                  />
+                  <Button
+                    onClick={handleSend}
+                    disabled={!input.trim() || isLoading || !isInitialized}
+                    size="icon"
+                    aria-label="Send chat message"
+                  >
+                    {isLoading ? (
+                      <Loader2 size={18} className="animate-spin" />
+                    ) : (
+                      <Send size={18} />
+                    )}
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <textarea
+                    ref={sqlEditorRef}
+                    value={sqlDraft}
+                    onChange={(event) => setSqlDraft(event.target.value)}
+                    onKeyDown={handleSqlEditorKeyPress}
+                    placeholder="SELECT * FROM your_table LIMIT 50;"
+                    disabled={isLoading || !isInitialized}
+                    className="min-h-[120px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    aria-label="SQL editor input"
+                  />
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs text-muted-foreground">
+                      Press Ctrl/Cmd + Enter to run SQL
+                    </p>
+                    <Button
+                      onClick={handleSend}
+                      disabled={!sqlDraft.trim() || isLoading || !isInitialized}
+                      size="sm"
+                      aria-label="Run SQL draft"
+                    >
+                      {isLoading ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Send size={14} />
+                      )}
+                      Run SQL
+                    </Button>
+                  </div>
+                </div>
+              )}
+              <p className="mt-2 text-xs text-muted-foreground">
+                {composerMode === "nl"
+                  ? "Press Enter to send"
+                  : "SQL editor sends your query as a deterministic execution request."}
+              </p>
               {conversationId &&
                 conversationDatabaseId &&
                 targetDatabaseId &&
@@ -1322,7 +1517,7 @@ export function ChatInterface() {
           </div>
 
           <aside
-            className={`hidden border-l bg-muted/20 transition-all duration-200 xl:flex xl:flex-col ${
+            className={`hidden border-l border-border/70 bg-muted/30 transition-all duration-200 xl:flex xl:flex-col ${
               isSchemaSidebarOpen ? "w-80" : "w-14"
             }`}
             role="complementary"
@@ -1403,7 +1598,11 @@ export function ChatInterface() {
                               aria-label={`Use table ${fullName} in query`}
                               onClick={() => {
                                 setSelectedSchemaTable(fullName);
-                                setInput(`Show first 100 rows from ${fullName}.`);
+                                if (composerMode === "sql") {
+                                  setSqlDraft(`SELECT *\nFROM ${fullName}\nLIMIT 100;`);
+                                } else {
+                                  setInput(`Show first 100 rows from ${fullName}.`);
+                                }
                                 restoreInputFocus();
                               }}
                             >

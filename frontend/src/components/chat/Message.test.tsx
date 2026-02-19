@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { vi } from "vitest";
 
 import { Message } from "@/components/chat/Message";
 
@@ -59,6 +60,25 @@ describe("Message", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
     expect(screen.getByText("Bar Chart")).toBeInTheDocument();
+  });
+
+  it("opens SQL draft editor callback from message actions", () => {
+    const onEditSqlDraft = vi.fn();
+    render(
+      <Message
+        message={{
+          id: "msg-edit-sql",
+          role: "assistant",
+          content: "SQL is ready.",
+          sql: "SELECT id, name FROM users LIMIT 5",
+          timestamp: new Date(),
+        }}
+        onEditSqlDraft={onEditSqlDraft}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit SQL draft" }));
+    expect(onEditSqlDraft).toHaveBeenCalledWith("SELECT id, name FROM users LIMIT 5");
   });
 
   it("renders axis and legend metadata for line visualization", () => {
