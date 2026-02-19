@@ -39,7 +39,9 @@ class TestClassifierAgent:
     # ============================================================================
 
     @pytest.mark.asyncio
-    async def test_detects_data_query_intent(self, classifier_agent, sample_input, mock_llm_provider):
+    async def test_detects_data_query_intent(
+        self, classifier_agent, sample_input, mock_llm_provider
+    ):
         """Test that data queries are correctly classified."""
         mock_llm_provider.set_response(
             """
@@ -172,7 +174,9 @@ class TestClassifierAgent:
         assert entity.normalized_value == "analytics.fact_sales"
 
     @pytest.mark.asyncio
-    async def test_extracts_metric_entities(self, classifier_agent, sample_input, mock_llm_provider):
+    async def test_extracts_metric_entities(
+        self, classifier_agent, sample_input, mock_llm_provider
+    ):
         """Test metric extraction including synonyms."""
         mock_llm_provider.set_response(
             """
@@ -197,7 +201,9 @@ class TestClassifierAgent:
         assert metrics[0].normalized_value == "revenue"
 
     @pytest.mark.asyncio
-    async def test_extracts_time_references(self, classifier_agent, sample_input, mock_llm_provider):
+    async def test_extracts_time_references(
+        self, classifier_agent, sample_input, mock_llm_provider
+    ):
         """Test time reference extraction."""
         mock_llm_provider.set_response(
             """
@@ -500,7 +506,9 @@ class TestClassifierAgent:
         assert result.metadata.started_at is not None
 
     @pytest.mark.asyncio
-    async def test_confidence_score_included(self, classifier_agent, sample_input, mock_llm_provider):
+    async def test_confidence_score_included(
+        self, classifier_agent, sample_input, mock_llm_provider
+    ):
         """Test that confidence scores are included."""
         mock_llm_provider.set_response(
             """

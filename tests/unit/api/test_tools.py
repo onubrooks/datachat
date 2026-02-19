@@ -37,14 +37,17 @@ class TestToolsEndpoint:
         pipeline = SimpleNamespace(retriever=object())
         executor_mock = AsyncMock(return_value={"result": {"ok": True}})
 
-        with patch(
-            "backend.api.main.app_state",
-            {
-                "pipeline": pipeline,
-                "database_manager": manager,
-                "connector": "connector-instance",
-            },
-        ), patch("backend.api.routes.tools.ToolExecutor.execute", new=executor_mock):
+        with (
+            patch(
+                "backend.api.main.app_state",
+                {
+                    "pipeline": pipeline,
+                    "database_manager": manager,
+                    "connector": "connector-instance",
+                },
+            ),
+            patch("backend.api.routes.tools.ToolExecutor.execute", new=executor_mock),
+        ):
             response = self.client.post(
                 "/api/v1/tools/execute",
                 json={"name": "list_tables", "arguments": {"schema": "public"}},
@@ -70,10 +73,13 @@ class TestToolsEndpoint:
         manager.get_default_connection = AsyncMock(return_value=None)
         executor_mock = AsyncMock(return_value={"result": {"ok": True}})
 
-        with patch(
-            "backend.api.main.app_state",
-            {"pipeline": None, "database_manager": manager, "connector": None},
-        ), patch("backend.api.routes.tools.ToolExecutor.execute", new=executor_mock):
+        with (
+            patch(
+                "backend.api.main.app_state",
+                {"pipeline": None, "database_manager": manager, "connector": None},
+            ),
+            patch("backend.api.routes.tools.ToolExecutor.execute", new=executor_mock),
+        ):
             response = self.client.post(
                 "/api/v1/tools/execute",
                 json={
@@ -94,10 +100,13 @@ class TestToolsEndpoint:
         get_settings.cache_clear()
         executor_mock = AsyncMock(return_value={"result": {"ok": True}})
 
-        with patch(
-            "backend.api.main.app_state",
-            {"pipeline": None, "database_manager": None, "connector": None},
-        ), patch("backend.api.routes.tools.ToolExecutor.execute", new=executor_mock):
+        with (
+            patch(
+                "backend.api.main.app_state",
+                {"pipeline": None, "database_manager": None, "connector": None},
+            ),
+            patch("backend.api.routes.tools.ToolExecutor.execute", new=executor_mock),
+        ):
             response = self.client.post(
                 "/api/v1/tools/execute",
                 json={
@@ -116,10 +125,13 @@ class TestToolsEndpoint:
         get_settings.cache_clear()
         executor_mock = AsyncMock(return_value={"result": {"ok": True}})
 
-        with patch(
-            "backend.api.main.app_state",
-            {"pipeline": None, "database_manager": None, "connector": None},
-        ), patch("backend.api.routes.tools.ToolExecutor.execute", new=executor_mock):
+        with (
+            patch(
+                "backend.api.main.app_state",
+                {"pipeline": None, "database_manager": None, "connector": None},
+            ),
+            patch("backend.api.routes.tools.ToolExecutor.execute", new=executor_mock),
+        ):
             response = self.client.post(
                 "/api/v1/tools/execute",
                 json={"name": "list_tables", "arguments": {}},

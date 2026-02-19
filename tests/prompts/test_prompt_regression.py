@@ -19,6 +19,6 @@ def test_prompt_hashes_unchanged():
 
     for path, expected_hash in expected.items():
         content = loader.load(path)
-        assert (
-            _hash(content) == expected_hash
-        ), f"Prompt changed: {path}. Update hash if intentional."
+        assert _hash(content) == expected_hash, (
+            f"Prompt changed: {path}. Update hash if intentional."
+        )

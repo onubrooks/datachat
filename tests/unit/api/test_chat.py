@@ -103,7 +103,6 @@ class TestChatEndpoint:
                 "backend.api.main.app_state",
                 {"pipeline": mock_pipeline, "database_manager": None},
             ):
-
                 # Make request
                 response = client.post(
                     "/api/v1/chat",
@@ -129,7 +128,6 @@ class TestChatEndpoint:
                 "backend.api.main.app_state",
                 {"pipeline": mock_pipeline, "database_manager": None},
             ):
-
                 # Make request
                 response = client.post(
                     "/api/v1/chat",
@@ -232,7 +230,6 @@ class TestChatEndpoint:
                 "backend.api.main.app_state",
                 {"pipeline": mock_pipeline, "database_manager": None},
             ):
-
                 # Make request with conversation history
                 response = client.post(
                     "/api/v1/chat",
@@ -257,7 +254,10 @@ class TestChatEndpoint:
                 assert call_args.kwargs["query"] == "What about last month?"
                 assert len(call_args.kwargs["conversation_history"]) == 2
                 assert call_args.kwargs["conversation_history"][0]["role"] == "user"
-                assert call_args.kwargs["session_summary"] == "Intent summary: last_goal=What's the revenue?"
+                assert (
+                    call_args.kwargs["session_summary"]
+                    == "Intent summary: last_goal=What's the revenue?"
+                )
                 assert call_args.kwargs["session_state"]["last_goal"] == "What's the revenue?"
 
     @pytest.mark.asyncio
@@ -273,7 +273,6 @@ class TestChatEndpoint:
                 "backend.api.main.app_state",
                 {"pipeline": mock_pipeline, "database_manager": None},
             ):
-
                 # Make request
                 response = client.post(
                     "/api/v1/chat",
@@ -328,7 +327,6 @@ class TestChatEndpoint:
                 "backend.api.main.app_state",
                 {"pipeline": None, "database_manager": None},
             ):
-
                 # Make request
                 response = client.post(
                     "/api/v1/chat",
@@ -342,9 +340,7 @@ class TestChatEndpoint:
                 assert "not initialized" in data["detail"].lower()
 
     @pytest.mark.asyncio
-    async def test_chat_returns_fallback_answer_on_pipeline_error(
-        self, client, initialized_status
-    ):
+    async def test_chat_returns_fallback_answer_on_pipeline_error(self, client, initialized_status):
         """Test that chat endpoint returns fallback answer when pipeline has errors."""
         with patch(
             "backend.api.routes.chat.SystemInitializer.status",
@@ -365,7 +361,6 @@ class TestChatEndpoint:
                 "backend.api.main.app_state",
                 {"pipeline": mock_pipeline, "database_manager": None},
             ):
-
                 # Make request
                 response = client.post(
                     "/api/v1/chat",
@@ -393,7 +388,6 @@ class TestChatEndpoint:
                 "backend.api.main.app_state",
                 {"pipeline": mock_pipeline, "database_manager": None},
             ):
-
                 # Make request without conversation_id
                 response = client.post(
                     "/api/v1/chat",
@@ -438,7 +432,9 @@ class TestChatEndpoint:
         manager.get_connection = AsyncMock(
             return_value=SimpleNamespace(
                 database_type="clickhouse",
-                database_url=SimpleNamespace(get_secret_value=lambda: "clickhouse://u:p@host:8123/db"),
+                database_url=SimpleNamespace(
+                    get_secret_value=lambda: "clickhouse://u:p@host:8123/db"
+                ),
             )
         )
         with patch(
@@ -504,7 +500,6 @@ class TestChatEndpoint:
                 "backend.api.main.app_state",
                 {"pipeline": mock_pipeline, "database_manager": None},
             ):
-
                 # Make request with conversation_id
                 response = client.post(
                     "/api/v1/chat",
@@ -553,9 +548,7 @@ class TestChatEndpoint:
                 assert payload["answer_confidence"] == 0.7
 
     @pytest.mark.asyncio
-    async def test_chat_clamps_answer_confidence(
-        self, client, initialized_status
-    ):
+    async def test_chat_clamps_answer_confidence(self, client, initialized_status):
         pipeline_result = {
             "natural_language_answer": "Summary.",
             "answer_source": "context",

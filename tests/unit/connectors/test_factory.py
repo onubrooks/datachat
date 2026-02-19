@@ -5,14 +5,25 @@ from backend.connectors.postgres import PostgresConnector
 
 
 def test_infer_database_type_from_url():
-    assert connector_factory.infer_database_type("postgresql://u:p@localhost:5432/app") == "postgresql"
-    assert connector_factory.infer_database_type("clickhouse://u:p@localhost:8123/default") == "clickhouse"
+    assert (
+        connector_factory.infer_database_type("postgresql://u:p@localhost:5432/app") == "postgresql"
+    )
+    assert (
+        connector_factory.infer_database_type("clickhouse://u:p@localhost:8123/default")
+        == "clickhouse"
+    )
     assert connector_factory.infer_database_type("mysql://u:p@localhost:3306/app") == "mysql"
 
 
 def test_resolve_database_type_normalizes_aliases():
-    assert connector_factory.resolve_database_type("postgres", "postgresql://u:p@localhost:5432/app") == "postgresql"
-    assert connector_factory.resolve_database_type("POSTGRESQL", "postgresql://u:p@localhost:5432/app") == "postgresql"
+    assert (
+        connector_factory.resolve_database_type("postgres", "postgresql://u:p@localhost:5432/app")
+        == "postgresql"
+    )
+    assert (
+        connector_factory.resolve_database_type("POSTGRESQL", "postgresql://u:p@localhost:5432/app")
+        == "postgresql"
+    )
 
 
 def test_create_connector_postgres():

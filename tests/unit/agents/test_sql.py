@@ -392,15 +392,18 @@ class TestExecution:
             clarifying_questions=[],
         )
 
-        with patch.object(
-            sql_agent,
-            "_build_generation_prompt",
-            new=AsyncMock(return_value=("prompt", compiler_plan)),
-        ), patch.object(
-            sql_agent,
-            "_request_sql_from_llm",
-            new=AsyncMock(side_effect=[first, second]),
-        ) as mock_request:
+        with (
+            patch.object(
+                sql_agent,
+                "_build_generation_prompt",
+                new=AsyncMock(return_value=("prompt", compiler_plan)),
+            ),
+            patch.object(
+                sql_agent,
+                "_request_sql_from_llm",
+                new=AsyncMock(side_effect=[first, second]),
+            ) as mock_request,
+        ):
             output = await sql_agent(sample_sql_agent_input)
 
         assert output.success is True
@@ -814,9 +817,7 @@ class TestPromptBuilding:
     """Test prompt construction logic."""
 
     @pytest.mark.asyncio
-    async def test_builds_generation_prompt_with_schema(
-        self, sql_agent, sample_sql_agent_input
-    ):
+    async def test_builds_generation_prompt_with_schema(self, sql_agent, sample_sql_agent_input):
         """Test generation prompt includes schema context."""
         prompt = await sql_agent._build_generation_prompt(sample_sql_agent_input)
 
@@ -1024,16 +1025,14 @@ class TestDatabaseContext:
         assert mock_live_context.await_args.kwargs["include_profile"] is False
 
     @pytest.mark.asyncio
-    async def test_prompt_includes_conversation_context(
-        self, sql_agent, sample_sql_agent_input
-    ):
+    async def test_prompt_includes_conversation_context(self, sql_agent, sample_sql_agent_input):
         sql_input = sample_sql_agent_input.model_copy(
             update={
                 "query": "sales",
                 "conversation_history": [
                     {"role": "user", "content": "Show me the first 5 rows"},
                     {"role": "assistant", "content": "Which table should I use?"},
-                ]
+                ],
             }
         )
         prompt = await sql_agent._build_generation_prompt(sql_input)
@@ -1051,7 +1050,9 @@ class TestDatabaseContext:
         mock_connector.close = AsyncMock()
 
         with (
-            patch("backend.agents.sql.create_connector", return_value=mock_connector) as connector_factory,
+            patch(
+                "backend.agents.sql.create_connector", return_value=mock_connector
+            ) as connector_factory,
             patch.object(
                 sql_agent,
                 "_fetch_live_schema_context",
@@ -1300,9 +1301,9 @@ class TestErrorHandling:
         self, sql_agent, sample_sql_agent_input
     ):
         content = (
-            "{\"sql\":\"SELECT store_id, SUM(quantity) "
-            "FROM public.grocery_sales_transactions GROUP BY store_id\", "
-            "\"explanation\":\"aggregate"
+            '{"sql":"SELECT store_id, SUM(quantity) '
+            'FROM public.grocery_sales_transactions GROUP BY store_id", '
+            '"explanation":"aggregate'
         )
 
         generated = sql_agent._parse_llm_response(content, sample_sql_agent_input)
@@ -1326,7 +1327,7 @@ class TestErrorHandling:
         self, sample_sql_agent_input
     ):
         malformed_response = LLMResponse(
-            content='{\"explanation\":\"missing sql\"}',
+            content='{"explanation":"missing sql"}',
             model="gpt-4o",
             usage=LLMUsage(prompt_tokens=20, completion_tokens=10, total_tokens=30),
             finish_reason="stop",
@@ -1401,9 +1402,7 @@ class TestErrorHandling:
 
         assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 5"
 
-    def test_parse_llm_response_caps_explicit_limit_to_ten(
-        self, sql_agent, sample_sql_agent_input
-    ):
+    def test_parse_llm_response_caps_explicit_limit_to_ten(self, sql_agent, sample_sql_agent_input):
         sql_input = sample_sql_agent_input.model_copy(
             update={"query": "Show me the first 50 rows from public.grocery_stores"}
         )

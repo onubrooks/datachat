@@ -155,24 +155,6 @@ def validate_datapoint_contract(
             )
 
     elif isinstance(datapoint, QueryDataPoint):
-        if not datapoint.sql_template or len(datapoint.sql_template.strip()) < 10:
-            report.issues.append(
-                _missing_issue(
-                    code="invalid_sql_template",
-                    message="Query DataPoint must have a valid sql_template (min 10 chars).",
-                    field="sql_template",
-                    severity="error",
-                )
-            )
-        if not datapoint.description or len(datapoint.description.strip()) < 10:
-            report.issues.append(
-                _missing_issue(
-                    code="missing_description",
-                    message="Query DataPoint must have a meaningful description.",
-                    field="description",
-                    severity="error",
-                )
-            )
         if not datapoint.related_tables:
             report.issues.append(
                 _missing_issue(

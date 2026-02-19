@@ -457,7 +457,10 @@ class TestConnectCommand:
         manager.list_connections.return_value = [existing]
 
         with (
-            patch("backend.cli._resolve_system_database_url", return_value=("postgresql://system", "settings")),
+            patch(
+                "backend.cli._resolve_system_database_url",
+                return_value=("postgresql://system", "settings"),
+            ),
             patch("backend.cli.DatabaseConnectionManager", return_value=manager),
         ):
             registered, message = await _register_cli_connection(
@@ -486,7 +489,10 @@ class TestConnectCommand:
         manager.list_connections.return_value = [existing]
 
         with (
-            patch("backend.cli._resolve_system_database_url", return_value=("postgresql://system", "settings")),
+            patch(
+                "backend.cli._resolve_system_database_url",
+                return_value=("postgresql://system", "settings"),
+            ),
             patch("backend.cli.DatabaseConnectionManager", return_value=manager),
         ):
             registered, _ = await _register_cli_connection(
@@ -523,7 +529,10 @@ class TestConnectCommand:
         manager.list_connections.return_value = [other, matching, matching_default]
 
         with (
-            patch("backend.cli._resolve_system_database_url", return_value=("postgresql://system", "settings")),
+            patch(
+                "backend.cli._resolve_system_database_url",
+                return_value=("postgresql://system", "settings"),
+            ),
             patch("backend.cli.DatabaseConnectionManager", return_value=manager),
         ):
             resolved = await _resolve_registry_connection_id_for_url(
@@ -719,9 +728,7 @@ class TestCLIState:
             config = state.load_config()
             assert config["connection_string"] == conn_str
 
-    def test_resolve_target_database_url_prefers_settings_over_saved_config(
-        self, temp_config_dir
-    ):
+    def test_resolve_target_database_url_prefers_settings_over_saved_config(self, temp_config_dir):
         """Target DB resolution should prefer settings/.env over saved CLI config."""
         from backend.cli import CLIState, state
 

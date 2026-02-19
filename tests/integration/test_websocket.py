@@ -91,9 +91,7 @@ class TestWebSocketStreaming:
                 "retrieved_datapoints": [],
             }
         )
-        with patch(
-            "backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)
-        ):
+        with patch("backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)):
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send message
                 websocket.send_json({"message": "Test query"})
@@ -114,6 +112,7 @@ class TestWebSocketStreaming:
 
     def test_websocket_receives_agent_status_events(self, client):
         """Test that WebSocket receives agent_start and agent_complete events."""
+
         # Create mock pipeline that will call the callback
         async def mock_run_with_streaming(
             query,
@@ -150,10 +149,7 @@ class TestWebSocketStreaming:
 
         mock_pipeline = AsyncMock()
         mock_pipeline.run_with_streaming = mock_run_with_streaming
-        with patch(
-            "backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)
-        ):
-
+        with patch("backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)):
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send message
                 websocket.send_json({"message": "Test query"})
@@ -185,7 +181,6 @@ class TestWebSocketStreaming:
         mock_pipeline = AsyncMock()
         mock_pipeline.run_with_streaming = AsyncMock(return_value=mock_pipeline_result)
         with patch("backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)):
-
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send message
                 websocket.send_json({"message": "What's the total revenue?"})
@@ -249,9 +244,7 @@ class TestWebSocketStreaming:
             self._app_state_for_pipeline(mock_pipeline, database_manager=manager),
         ):
             with client.websocket_connect("/ws/chat") as websocket:
-                websocket.send_json(
-                    {"message": "Test query", "target_database": "db-123"}
-                )
+                websocket.send_json({"message": "Test query", "target_database": "db-123"})
                 while True:
                     event = websocket.receive_json()
                     if event.get("event") == "complete":
@@ -276,9 +269,7 @@ class TestWebSocketStreaming:
         )
         with patch("backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)):
             with client.websocket_connect("/ws/chat") as websocket:
-                websocket.send_json(
-                    {"message": "Test query", "synthesize_simple_sql": False}
-                )
+                websocket.send_json({"message": "Test query", "synthesize_simple_sql": False})
                 while True:
                     event = websocket.receive_json()
                     if event.get("event") == "complete":
@@ -312,7 +303,9 @@ class TestWebSocketStreaming:
                     if event.get("event") == "complete":
                         break
         kwargs = mock_pipeline.run_with_streaming.call_args.kwargs
-        assert kwargs["session_summary"] == "Intent summary: last_goal=How many products do we have?"
+        assert (
+            kwargs["session_summary"] == "Intent summary: last_goal=How many products do we have?"
+        )
         assert kwargs["session_state"]["last_goal"] == "How many products do we have?"
 
     def test_websocket_handles_client_disconnect(self, client):
@@ -329,7 +322,6 @@ class TestWebSocketStreaming:
             }
         )
         with patch("backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)):
-
             # Connect and immediately disconnect
             with client.websocket_connect("/ws/chat") as websocket:
                 websocket.send_json({"message": "Test query"})
@@ -341,7 +333,6 @@ class TestWebSocketStreaming:
     def test_websocket_validates_request_message(self, client):
         """Test that WebSocket validates incoming message."""
         with patch("backend.api.main.app_state", {"pipeline": AsyncMock()}):
-
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send invalid message (missing required field)
                 websocket.send_json({})
@@ -355,7 +346,6 @@ class TestWebSocketStreaming:
         """Test that WebSocket handles uninitialized pipeline."""
         # Pipeline not initialized
         with patch("backend.api.main.app_state", {"pipeline": None}):
-
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send message
                 websocket.send_json({"message": "Test query"})
@@ -379,7 +369,6 @@ class TestWebSocketStreaming:
             }
         )
         with patch("backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)):
-
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send message with conversation_id
                 websocket.send_json({"message": "Test query", "conversation_id": "conv_custom_123"})
@@ -413,7 +402,6 @@ class TestWebSocketStreaming:
             }
         )
         with patch("backend.api.main.app_state", self._app_state_for_pipeline(mock_pipeline)):
-
             with client.websocket_connect("/ws/chat") as websocket:
                 # Send message without conversation_id
                 websocket.send_json({"message": "Test query"})

@@ -242,9 +242,7 @@ class TestSchemaProfiler:
     async def test_fetch_tables_with_explicit_tables_handles_ordered_template(self, manager):
         profiler = SchemaProfiler(manager)
         conn = AsyncMock()
-        conn.fetch = AsyncMock(
-            return_value=[{"table_schema": "public", "table_name": "orders"}]
-        )
+        conn.fetch = AsyncMock(return_value=[{"table_schema": "public", "table_name": "orders"}])
 
         base_query = (
             "SELECT table_schema, table_name "
@@ -272,9 +270,7 @@ class TestSchemaProfiler:
     async def test_fetch_tables_with_max_tables_handles_ordered_template(self, manager):
         profiler = SchemaProfiler(manager)
         conn = AsyncMock()
-        conn.fetch = AsyncMock(
-            return_value=[{"table_schema": "public", "table_name": "orders"}]
-        )
+        conn.fetch = AsyncMock(return_value=[{"table_schema": "public", "table_name": "orders"}])
         conn.fetchrow = AsyncMock(return_value={"total": 3})
 
         base_query = (

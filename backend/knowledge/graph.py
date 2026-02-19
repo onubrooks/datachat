@@ -537,9 +537,7 @@ class KnowledgeGraph:
                 data = json.load(f)
 
             # Reconstruct graph
-            self.graph = json_graph.node_link_graph(
-                data["graph"], directed=True, edges="links"
-            )
+            self.graph = json_graph.node_link_graph(data["graph"], directed=True, edges="links")
             self._datapoint_count = data.get("datapoint_count", 0)
 
             logger.info(

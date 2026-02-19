@@ -31,7 +31,9 @@ def _command_result(name: str, stdout: str, return_code: int = 0):
 def test_release_gate_fails_when_intent_metrics_missing(monkeypatch):
     config = {
         "release_checks": {
-            "eval_runs": [{"name": "intent-check", "mode": "intent", "dataset": "eval/intent.json"}],
+            "eval_runs": [
+                {"name": "intent-check", "mode": "intent", "dataset": "eval/intent.json"}
+            ],
             "intent_avg_latency_ms_max": 5000,
             "intent_avg_llm_calls_max": 3.0,
         }
@@ -49,7 +51,9 @@ def test_release_gate_fails_when_intent_metrics_missing(monkeypatch):
 def test_release_gate_fails_when_intent_quality_metrics_missing(monkeypatch):
     config = {
         "release_checks": {
-            "eval_runs": [{"name": "intent-check", "mode": "intent", "dataset": "eval/intent.json"}],
+            "eval_runs": [
+                {"name": "intent-check", "mode": "intent", "dataset": "eval/intent.json"}
+            ],
             "intent_source_accuracy_min": 0.8,
             "intent_clarification_match_min": 0.8,
         }
@@ -70,7 +74,9 @@ def test_release_gate_fails_when_intent_quality_metrics_missing(monkeypatch):
 def test_release_gate_fails_when_threshold_set_but_no_intent_runs(monkeypatch):
     config = {
         "release_checks": {
-            "eval_runs": [{"name": "catalog-check", "mode": "catalog", "dataset": "eval/catalog.json"}],
+            "eval_runs": [
+                {"name": "catalog-check", "mode": "catalog", "dataset": "eval/catalog.json"}
+            ],
             "intent_avg_latency_ms_max": 5000,
             "intent_avg_llm_calls_max": 3.0,
         }
@@ -88,7 +94,9 @@ def test_release_gate_fails_when_threshold_set_but_no_intent_runs(monkeypatch):
 def test_release_gate_passes_when_intent_metrics_present_and_within_threshold(monkeypatch):
     config = {
         "release_checks": {
-            "eval_runs": [{"name": "intent-check", "mode": "intent", "dataset": "eval/intent.json"}],
+            "eval_runs": [
+                {"name": "intent-check", "mode": "intent", "dataset": "eval/intent.json"}
+            ],
             "intent_avg_latency_ms_max": 5000,
             "intent_avg_llm_calls_max": 3.0,
             "intent_source_accuracy_min": 0.7,
@@ -115,7 +123,9 @@ def test_release_gate_fails_when_smoke_check_fails(monkeypatch):
     config = {
         "release_checks": {
             "smoke_checks": [{"name": "health", "path": "/api/v1/health", "expect_status": 200}],
-            "eval_runs": [{"name": "intent-check", "mode": "intent", "dataset": "eval/intent.json"}],
+            "eval_runs": [
+                {"name": "intent-check", "mode": "intent", "dataset": "eval/intent.json"}
+            ],
         }
     }
 

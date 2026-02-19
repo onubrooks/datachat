@@ -195,9 +195,7 @@ class TestPendingApprovalContracts:
             )
 
         assert response.status_code == 200
-        store.list_pending.assert_awaited_once_with(
-            status="pending", connection_id=connection_id
-        )
+        store.list_pending.assert_awaited_once_with(status="pending", connection_id=connection_id)
         body = response.json()
         assert len(body["pending"]) == 1
 
@@ -235,9 +233,7 @@ class TestPendingApprovalContracts:
             )
 
         assert response.status_code == 200
-        store.list_pending.assert_awaited_once_with(
-            status="pending", connection_id=connection_id
-        )
+        store.list_pending.assert_awaited_once_with(status="pending", connection_id=connection_id)
         store.bulk_update_pending.assert_awaited_once()
         kwargs = store.bulk_update_pending.await_args.kwargs
         assert kwargs["status"] == "approved"

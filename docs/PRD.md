@@ -179,9 +179,11 @@ The YAML-based schema described in DATAPOINT_SCHEMA.md is the target architectur
 - [x] Add QueryDataPoint to vector store (document/metadata generation)
 - [x] Add QueryDataPoint contract validation
 - [x] Update retriever conflict key for Query type
-- [ ] Add CLI commands: `datachat dp add-query`, `datachat dp list --type Query`
-- [ ] Integrate with pipeline (ContextAgent retrieval, SQLAgent template use)
-- [ ] Add tests for QueryDataPoint validation and retrieval
+- [x] Add CLI commands: `datachat dp add query`, `datachat dp list --type Query`
+- [x] Update RetrievedDataPoint model to include Query type
+- [x] Add tests for QueryDataPoint model validation
+- [x] Add tests for QueryDataPoint contract validation
+- [ ] Integrate with SQLAgent for template use (optional optimization)
 
 ### Phase 2.1: Routing Fixes ✅
 - [x] Fix P1: Add 'clarification' route to intent_gate check
