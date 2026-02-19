@@ -646,6 +646,50 @@ def _sanitize_table_reference(table: str) -> str:
     return candidate
 
 
+def _normalize_target_database(target_database: Any) -> str | None:
+    """Normalize optional target connection id values from CLI/session payloads."""
+    if target_database is None:
+        return None
+    value = str(target_database).strip()
+    if not value or value.lower() in {"none", "null"}:
+        return None
+    return value
+
+
+def _resolve_schema_table_match(
+    tables: list[Any],
+    *,
+    requested_table: str,
+    requested_schema: str | None = None,
+) -> Any:
+    """Resolve a table match from schema metadata, handling unqualified names."""
+    schema_filter = requested_schema.strip() if requested_schema else None
+    matches = [
+        item
+        for item in tables
+        if str(getattr(item, "table_name", "")).lower() == requested_table.lower()
+        and (
+            schema_filter is None
+            or str(getattr(item, "schema_name", "")).lower() == schema_filter.lower()
+        )
+    ]
+    if not matches:
+        lookup_name = (
+            f"{schema_filter}.{requested_table}" if schema_filter else requested_table
+        )
+        raise click.ClickException(f"Table not found: {lookup_name}")
+    if schema_filter is None and len(matches) > 1:
+        options = ", ".join(
+            f"{getattr(item, 'schema_name', '?')}.{getattr(item, 'table_name', '?')}"
+            for item in matches[:5]
+        )
+        raise click.ClickException(
+            "Table name is ambiguous. Use schema-qualified TABLE or --schema-name. "
+            f"Matches: {options}"
+        )
+    return matches[0]
+
+
 def _apply_display_pagination(
     data: dict[str, list] | None,
     *,
@@ -1252,9 +1296,11 @@ def chat(
             f"[green]✓ Resumed session {session_identifier}[/green] "
             f"({saved_session.get('title', 'Untitled session')})"
         )
-    session_target_database = target_database or (
-        str(saved_session.get("target_connection_id")) if saved_session else None
-    )
+    session_target_database = _normalize_target_database(target_database)
+    if session_target_database is None and saved_session:
+        session_target_database = _normalize_target_database(
+            saved_session.get("target_connection_id")
+        )
 
     mode = execution_mode.lower().strip()
     if mode not in {"natural_language", "direct_sql"}:
@@ -1587,7 +1633,7 @@ def ask(
         settings = get_settings()
         database_type, database_url, target_connection_id = await _resolve_target_database_context(
             settings,
-            target_database=target_database,
+            target_database=_normalize_target_database(target_database),
         )
         local_response = _maybe_local_intent_response(effective_query)
         if execution_mode == "natural_language" and local_response:
@@ -1874,7 +1920,7 @@ def schema_columns(table: str, target_database: str | None, schema_name: str | N
         if "." in qualified:
             requested_schema, requested_table = qualified.split(".", 1)
         else:
-            requested_schema = schema_name or "public"
+            requested_schema = schema_name.strip() if schema_name else None
             requested_table = qualified
 
         connector = create_connector(database_type=database_type, database_url=database_url)
@@ -1883,21 +1929,15 @@ def schema_columns(table: str, target_database: str | None, schema_name: str | N
             tables = await connector.get_schema(schema_name=requested_schema)
         finally:
             await connector.close()
-        match = next(
-            (
-                item
-                for item in tables
-                if item.table_name == requested_table and item.schema_name == requested_schema
-            ),
-            None,
+        match = _resolve_schema_table_match(
+            tables,
+            requested_table=requested_table,
+            requested_schema=requested_schema,
         )
-        if match is None:
-            raise click.ClickException(
-                f"Table not found: {requested_schema}.{requested_table}"
-            )
+        display_name = f"{match.schema_name}.{match.table_name}"
 
         columns = Table(
-            title=f"Columns: {requested_schema}.{requested_table}",
+            title=f"Columns: {display_name}",
             show_header=True,
             header_style="bold cyan",
         )
@@ -2053,7 +2093,9 @@ def resume_session(
     snapshot = state.get_session(session_id.strip())
     if snapshot is None:
         raise click.ClickException(f"Session not found: {session_id}")
-    effective_target = target_database or snapshot.get("target_connection_id")
+    effective_target = _normalize_target_database(target_database)
+    if effective_target is None:
+        effective_target = _normalize_target_database(snapshot.get("target_connection_id"))
     ctx.invoke(
         chat,
         evidence=evidence,

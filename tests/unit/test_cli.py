@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -16,9 +17,11 @@ from backend.cli import (
     _apply_display_pagination,
     _emit_entry_event_cli,
     _is_read_only_sql,
+    _normalize_target_database,
     _register_cli_connection,
     _render_template_query,
     _resolve_registry_connection_id_for_url,
+    _resolve_schema_table_match,
     _resolve_target_database_url,
     _should_exit_chat,
     _split_sql_statements,
@@ -180,6 +183,52 @@ class TestCLIBasics:
     def test_render_template_query_uses_default_table(self):
         rendered = _render_template_query("sample-rows")
         assert "grocery_sales_transactions" in rendered
+
+    def test_normalize_target_database_treats_none_like_missing(self):
+        assert _normalize_target_database(None) is None
+        assert _normalize_target_database("") is None
+        assert _normalize_target_database("None") is None
+        assert _normalize_target_database("null") is None
+        assert _normalize_target_database(" conn-123 ") == "conn-123"
+
+    def test_resolve_schema_table_match_without_schema_uses_unique_match(self):
+        table = MagicMock()
+        table.schema_name = "analytics"
+        table.table_name = "orders"
+        resolved = _resolve_schema_table_match(
+            [table],
+            requested_table="orders",
+            requested_schema=None,
+        )
+        assert resolved is table
+
+    def test_resolve_schema_table_match_without_schema_rejects_ambiguous(self):
+        first = MagicMock()
+        first.schema_name = "public"
+        first.table_name = "orders"
+        second = MagicMock()
+        second.schema_name = "analytics"
+        second.table_name = "orders"
+        with pytest.raises(click.ClickException, match="ambiguous"):
+            _resolve_schema_table_match(
+                [first, second],
+                requested_table="orders",
+                requested_schema=None,
+            )
+
+    def test_resolve_schema_table_match_with_schema_filters_match(self):
+        first = MagicMock()
+        first.schema_name = "public"
+        first.table_name = "orders"
+        second = MagicMock()
+        second.schema_name = "analytics"
+        second.table_name = "orders"
+        resolved = _resolve_schema_table_match(
+            [first, second],
+            requested_table="orders",
+            requested_schema="analytics",
+        )
+        assert resolved is second
 
 
 class TestDemoCommand:
