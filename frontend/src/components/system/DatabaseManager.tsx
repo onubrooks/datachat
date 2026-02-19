@@ -1517,7 +1517,7 @@ export function DatabaseManager() {
         </div>
         {qualityReport && (
           <div className="rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-            <div>Total DataPoints: {qualityReport.total_datapoints ?? 0}</div>
+            <div>Total DataPoints: {Number(qualityReport.total_datapoints ?? 0)}</div>
             <div>
               Weak Schema:{" "}
               {(qualityReport.weak_schema as unknown[] | undefined)?.length ?? 0}

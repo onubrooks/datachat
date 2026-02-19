@@ -72,12 +72,21 @@ type PersistedMessage = Pick<
   | "answer_confidence"
   | "tool_approval_required"
   | "tool_approval_message"
+  | "sql"
+  | "visualization_hint"
+  | "visualization_metadata"
+  | "sources"
+  | "evidence"
+  | "metrics"
+  | "sub_answers"
 > & {
   timestamp: string | Date;
+  data?: Record<string, unknown[]> | null;
 };
 
 const MAX_PERSISTED_MESSAGES = 60;
 const MAX_PERSISTED_CONTENT_CHARS = 4000;
+const MAX_PERSISTED_DATA_ROWS = 50;
 
 const createSessionId = () => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -104,20 +113,54 @@ const reviveMessage = (message: PersistedMessage): Message => ({
   timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp),
 });
 
-const compactMessageForPersistence = (message: Message): PersistedMessage => ({
-  id: message.id,
-  role: message.role,
-  content:
-    message.content.length > MAX_PERSISTED_CONTENT_CHARS
-      ? `${message.content.slice(0, MAX_PERSISTED_CONTENT_CHARS)}...`
-      : message.content,
-  clarifying_questions: message.clarifying_questions,
-  answer_source: message.answer_source,
-  answer_confidence: message.answer_confidence,
-  tool_approval_required: message.tool_approval_required,
-  tool_approval_message: message.tool_approval_message,
-  timestamp: message.timestamp,
-});
+const compactMessageForPersistence = (message: Message): PersistedMessage => {
+  const compactedData: Record<string, unknown[]> | null = message.data
+    ? Object.fromEntries(
+        Object.entries(message.data).map(([key, values]) => [
+          key,
+          Array.isArray(values) ? values.slice(0, MAX_PERSISTED_DATA_ROWS) : values,
+        ])
+      )
+    : null;
+
+  return {
+    id: message.id,
+    role: message.role,
+    content:
+      message.content.length > MAX_PERSISTED_CONTENT_CHARS
+        ? `${message.content.slice(0, MAX_PERSISTED_CONTENT_CHARS)}...`
+        : message.content,
+    clarifying_questions: message.clarifying_questions,
+    answer_source: message.answer_source,
+    answer_confidence: message.answer_confidence,
+    tool_approval_required: message.tool_approval_required,
+    tool_approval_message: message.tool_approval_message,
+    sql: message.sql,
+    visualization_hint: message.visualization_hint,
+    visualization_metadata: message.visualization_metadata,
+    sources: message.sources?.slice(0, 10),
+    evidence: message.evidence?.slice(0, 10),
+    metrics: message.metrics
+      ? {
+          total_latency_ms: message.metrics.total_latency_ms,
+          agent_timings: message.metrics.agent_timings,
+          llm_calls: message.metrics.llm_calls,
+          retry_count: message.metrics.retry_count,
+        }
+      : undefined,
+    sub_answers: message.sub_answers?.slice(0, 5).map((sub) => ({
+      index: sub.index,
+      query: sub.query,
+      answer: sub.answer?.slice(0, MAX_PERSISTED_CONTENT_CHARS),
+      answer_source: sub.answer_source,
+      answer_confidence: sub.answer_confidence,
+      sql: sub.sql,
+      visualization_hint: sub.visualization_hint,
+    })),
+    data: compactedData,
+    timestamp: message.timestamp,
+  };
+};
 
 interface ChatState {
   // Messages
@@ -145,7 +188,7 @@ interface ChatState {
   updateLastMessage: (
     updates: Partial<Omit<Message, "id" | "timestamp">>
   ) => void;
-  setConversationId: (id: string) => void;
+  setConversationId: (id: string | null) => void;
   setSessionMemory: (
     summary: string | null,
     state: Record<string, unknown> | null

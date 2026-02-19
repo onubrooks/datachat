@@ -24,6 +24,8 @@ import {
   Copy,
   Download,
   BarChart3,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { cn } from "@/lib/utils";
@@ -214,6 +216,8 @@ export function Message({
   const [activeTab, setActiveTab] = useState<TabId>("answer");
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [selectedSubAnswerIndex, setSelectedSubAnswerIndex] = useState<number>(0);
+  const [tablePage, setTablePage] = useState<number>(0);
+  const ROWS_PER_PAGE = 50;
 
   const subAnswers = message.sub_answers || [];
   const activeSubAnswer =
@@ -499,6 +503,20 @@ export function Message({
         </Card>
       );
     }
+
+    const totalPages = Math.ceil(rowCount / ROWS_PER_PAGE);
+    const startRow = tablePage * ROWS_PER_PAGE;
+    const endRow = Math.min(startRow + ROWS_PER_PAGE, rowCount);
+    const pageRows = rows.slice(startRow, endRow);
+
+    const handlePrevPage = () => {
+      setTablePage((p) => Math.max(0, p - 1));
+    };
+
+    const handleNextPage = () => {
+      setTablePage((p) => Math.min(totalPages - 1, p + 1));
+    };
+
     return (
       <Card className="mt-4">
         <details>
@@ -524,8 +542,8 @@ export function Message({
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.slice(0, 10).map((row, idx) => (
-                    <tr key={idx} className="border-b last:border-0">
+                  {pageRows.map((row, idx) => (
+                    <tr key={startRow + idx} className="border-b last:border-0">
                       {row.map((value, vidx) => {
                         const { display, full, truncated } = formatCellValue(value);
                         return (
@@ -543,12 +561,42 @@ export function Message({
                   ))}
                 </tbody>
               </table>
-              {rowCount > 10 && (
-                <p className="text-xs text-muted-foreground mt-2">
-                  Showing 10 of {rowCount} rows
-                </p>
-              )}
             </div>
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between mt-3 pt-3 border-t">
+                <p className="text-xs text-muted-foreground">
+                  Showing {startRow + 1}-{endRow} of {rowCount} rows
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handlePrevPage}
+                    disabled={tablePage === 0}
+                    className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <ChevronLeft size={14} />
+                    Previous
+                  </button>
+                  <span className="text-xs text-muted-foreground">
+                    Page {tablePage + 1} of {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleNextPage}
+                    disabled={tablePage >= totalPages - 1}
+                    className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              </div>
+            )}
+            {totalPages === 1 && rowCount > ROWS_PER_PAGE && (
+              <p className="text-xs text-muted-foreground mt-2">
+                Showing {rowCount} rows
+              </p>
+            )}
           </CardContent>
         </details>
       </Card>

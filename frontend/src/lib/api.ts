@@ -739,6 +739,23 @@ export class DataChatAPI {
     }
     return response.json();
   }
+
+  async emitEntryEvent(payload: {
+    flow: string;
+    step: string;
+    status: string;
+    source?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/api/v1/events/entry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      throw new Error(`Event emission failed: ${response.statusText}`);
+    }
+  }
 }
 
 /**
