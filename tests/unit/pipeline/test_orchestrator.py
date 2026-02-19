@@ -1893,4 +1893,8 @@ class TestErrorHandling:
             or "attempt" in error_text
             or "clarif" in error_text
             or "datapoint" in error_text
+            or "sorry" in error_text
+            or "don't have" in error_text
+            or "provide more" in error_text
+            or "unable to" in error_text
         )
