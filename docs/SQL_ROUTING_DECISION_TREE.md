@@ -2,6 +2,8 @@
 
 This document summarizes how DataChat routes SQL generation and visualization selection after the latest runtime updates.
 
+> **Note**: Intent classification and initial routing is now handled by `QueryAnalyzerAgent` (see `UNIFIED_ROUTING_ARCHITECTURE.md`). This document describes the SQL-specific routing once the query has been routed to the SQL path.
+
 ## SQL Routing Overview
 
 ```mermaid

@@ -1,9 +1,46 @@
 # DataPoint Schema Specification
 
-**Version:** 1.0  
-**Last Updated:** January 30, 2026
+**Version:** 1.1  
+**Last Updated:** February 18, 2026
+
+> **Note:** This document describes the **target architecture** for Levels 3-5. The current implementation uses JSON-based Pydantic models (SchemaDataPoint, BusinessDataPoint, ProcessDataPoint). See the "Current Implementation" section below and docs/DATAPOINT_MIGRATION.md for details.
 
 This document defines the complete schema for DataPoints across all levels (1-5) of the DataChat system.
+
+---
+
+## Current Implementation vs Target State
+
+### Current Implementation (JSON-based)
+
+DataPoints are currently implemented as JSON-based Pydantic models with three types:
+
+| Type | Purpose | Key Fields |
+|------|---------|------------|
+| `SchemaDataPoint` | Tables/views with column metadata | `table_name`, `key_columns`, `relationships`, `freshness` |
+| `BusinessDataPoint` | Metrics and business concepts | `calculation`, `synonyms`, `related_tables`, `unit` |
+| `ProcessDataPoint` | ETL/scheduled processes | `schedule`, `data_freshness`, `target_tables`, `dependencies` |
+
+**Planned types (Level 2.5+):**
+- `QueryDataPoint` - Reusable SQL templates with parameters
+- `ConstraintDataPoint` - Business rules affecting WHERE clauses
+- `DashboardDataPoint` - Pre-built visualizations
+
+### Target Architecture (YAML-based)
+
+This document describes YAML-based DataPoints with execution blocks:
+
+| Target YAML Type | Current JSON Type | Implementation Status |
+|------------------|-------------------|----------------------|
+| `metric` | `BusinessDataPoint` | Partial (missing execution block) |
+| `dimension` | - | Planned |
+| `entity` | - | Planned |
+| `concept` | - | Planned |
+| `query` | `QueryDataPoint` | Planned (Level 2.5) |
+| - | `SchemaDataPoint` | Implemented (no YAML equivalent) |
+| - | `ProcessDataPoint` | Implemented (no YAML equivalent) |
+
+**Migration path:** See docs/DATAPOINT_MIGRATION.md for the plan to bridge current JSON types to target YAML types.
 
 ---
 

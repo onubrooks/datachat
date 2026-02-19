@@ -2,6 +2,8 @@
 
 This document describes how DataChat compiles SQL-oriented questions into an explicit query plan before SQL generation.
 
+> **Note**: Intent classification is now handled by `QueryAnalyzerAgent` (see `UNIFIED_ROUTING_ARCHITECTURE.md`). The query compiler runs after context retrieval for SQL-routed queries.
+
 ## Why This Exists
 
 Before SQL generation, DataChat compiles a semantic plan from:
@@ -68,11 +70,13 @@ Automated evaluation supports a compiler-specific run:
 DataChat has two levels of observability:
 
 1. Always-on decision trace
+
 - Returned on every chat response as `decision_trace` (API and websocket).
 - Captures branch decisions across the pipeline (`stage`, `decision`, `reason`, optional `details`).
 - Includes query compiler decisions as `stage=query_compiler`.
 
 2. Deep execution trace (on demand)
+
 - Generated only when you run the trace script.
 - Captures exact LLM prompts/responses and SQL-internal step outputs.
 
