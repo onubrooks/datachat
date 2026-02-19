@@ -127,9 +127,7 @@ class TestExecutorAgent:
         assert query_result.execution_time_ms > 0
 
     @pytest.mark.asyncio
-    async def test_includes_column_names(
-        self, executor_agent, sample_input, mock_llm_provider
-    ):
+    async def test_includes_column_names(self, executor_agent, sample_input, mock_llm_provider):
         """Test that column names are included in results."""
         mock_llm_provider.set_response("Answer: Results show customer IDs and totals.")
 
@@ -155,9 +153,7 @@ class TestExecutorAgent:
         assert len(result.executed_query.natural_language_answer) > 0
 
     @pytest.mark.asyncio
-    async def test_extracts_key_insights(
-        self, executor_agent, sample_input, mock_llm_provider
-    ):
+    async def test_extracts_key_insights(self, executor_agent, sample_input, mock_llm_provider):
         """Test that key insights are extracted."""
         mock_llm_provider.set_response(
             """Answer: Two customers found.
@@ -195,7 +191,9 @@ Insights:
     ):
         """Test handling of queries with no results."""
         mock_postgres_connector.execute = AsyncMock(
-            return_value=ConnectorQueryResult(rows=[], row_count=0, columns=["customer_id", "total"], execution_time_ms=10.0)
+            return_value=ConnectorQueryResult(
+                rows=[], row_count=0, columns=["customer_id", "total"], execution_time_ms=10.0
+            )
         )
         mock_llm_provider.set_response("Answer: No results found.")
 
@@ -211,7 +209,9 @@ Insights:
     ):
         """Test basic summary for empty results."""
         mock_postgres_connector.execute = AsyncMock(
-            return_value=ConnectorQueryResult(rows=[], row_count=0, columns=[], execution_time_ms=10.0)
+            return_value=ConnectorQueryResult(
+                rows=[], row_count=0, columns=[], execution_time_ms=10.0
+            )
         )
         # Simulate LLM failure to test fallback
         mock_llm_provider.generate = AsyncMock(side_effect=Exception("Failed"))
@@ -241,7 +241,10 @@ Insights:
 
         result = await executor_agent.execute(sample_input)
 
-        assert "No columns were found for table `sales`." == result.executed_query.natural_language_answer
+        assert (
+            "No columns were found for table `sales`."
+            == result.executed_query.natural_language_answer
+        )
         assert result.metadata.llm_calls == 0
 
     @pytest.mark.asyncio
@@ -309,6 +312,7 @@ Insights:
         self, executor_agent, sample_input, mock_postgres_connector
     ):
         """Test that timeout prevents runaway queries."""
+
         # Simulate slow query
         async def slow_query(*args, **kwargs):
             await asyncio.sleep(2)
@@ -332,7 +336,9 @@ Insights:
         # Create 150 rows
         large_result = [{"id": i, "value": i * 100} for i in range(150)]
         mock_postgres_connector.execute = AsyncMock(
-            return_value=ConnectorQueryResult(rows=large_result, row_count=150, columns=["id", "value"], execution_time_ms=100.0)
+            return_value=ConnectorQueryResult(
+                rows=large_result, row_count=150, columns=["id", "value"], execution_time_ms=100.0
+            )
         )
         mock_llm_provider.set_response("Answer: Found 100 results (truncated).")
 
@@ -380,7 +386,9 @@ Insights:
         # Create 30 rows
         many_rows = [{"id": i, "value": i * 100} for i in range(30)]
         mock_postgres_connector.execute = AsyncMock(
-            return_value=ConnectorQueryResult(rows=many_rows, row_count=30, columns=["id", "value"], execution_time_ms=50.0)
+            return_value=ConnectorQueryResult(
+                rows=many_rows, row_count=30, columns=["id", "value"], execution_time_ms=50.0
+            )
         )
         mock_llm_provider.set_response("Answer: Found 30 results.")
 
@@ -398,7 +406,9 @@ Insights:
             {"date": "2024-01-02", "amount": 1500},
         ]
         mock_postgres_connector.execute = AsyncMock(
-            return_value=ConnectorQueryResult(rows=time_series, row_count=2, columns=["date", "amount"], execution_time_ms=20.0)
+            return_value=ConnectorQueryResult(
+                rows=time_series, row_count=2, columns=["date", "amount"], execution_time_ms=20.0
+            )
         )
         mock_llm_provider.set_response("Answer: Sales over time.")
 
@@ -437,7 +447,9 @@ Insights:
         """Test no visualization for single value."""
         single_value = [{"total": 50000.0}]
         mock_postgres_connector.execute = AsyncMock(
-            return_value=ConnectorQueryResult(rows=single_value, row_count=1, columns=["total"], execution_time_ms=15.0)
+            return_value=ConnectorQueryResult(
+                rows=single_value, row_count=1, columns=["total"], execution_time_ms=15.0
+            )
         )
         mock_llm_provider.set_response("Answer: Total is $50,000.")
 
@@ -455,7 +467,9 @@ Insights:
             {"x": 2, "y": 20, "z": 200},
         ]
         mock_postgres_connector.execute = AsyncMock(
-            return_value=ConnectorQueryResult(rows=multi_col, row_count=2, columns=["x", "y", "z"], execution_time_ms=25.0)
+            return_value=ConnectorQueryResult(
+                rows=multi_col, row_count=2, columns=["x", "y", "z"], execution_time_ms=25.0
+            )
         )
         mock_llm_provider.set_response("Answer: Multi-dimensional data.")
 
@@ -658,9 +672,7 @@ Insights:
     # ============================================================================
 
     @pytest.mark.asyncio
-    async def test_includes_source_citations(
-        self, executor_agent, sample_input, mock_llm_provider
-    ):
+    async def test_includes_source_citations(self, executor_agent, sample_input, mock_llm_provider):
         """Test that source citations are included."""
         mock_llm_provider.set_response("Answer: Results from fact_sales.")
 
@@ -670,9 +682,7 @@ Insights:
         assert "table_fact_sales_001" in result.executed_query.source_citations
 
     @pytest.mark.asyncio
-    async def test_empty_citations_handled(
-        self, executor_agent, sample_input, mock_llm_provider
-    ):
+    async def test_empty_citations_handled(self, executor_agent, sample_input, mock_llm_provider):
         """Test handling of empty citations."""
         sample_input.source_datapoints = []
         mock_llm_provider.set_response("Answer: Results found.")
@@ -690,21 +700,15 @@ Insights:
         self, executor_agent, sample_input, mock_postgres_connector
     ):
         """Test handling of query execution errors."""
-        mock_postgres_connector.execute = AsyncMock(
-            side_effect=QueryError("Syntax error in SQL")
-        )
+        mock_postgres_connector.execute = AsyncMock(side_effect=QueryError("Syntax error in SQL"))
 
         with pytest.raises(QueryError):
             await executor_agent.execute(sample_input)
 
     @pytest.mark.asyncio
-    async def test_handles_connection_error(
-        self, executor_agent, sample_input
-    ):
+    async def test_handles_connection_error(self, executor_agent, sample_input):
         """Test handling of database connection errors."""
-        executor_agent._get_connector = AsyncMock(
-            side_effect=Exception("Connection failed")
-        )
+        executor_agent._get_connector = AsyncMock(side_effect=Exception("Connection failed"))
 
         with pytest.raises(Exception, match="Connection failed"):
             await executor_agent.execute(sample_input)
@@ -714,9 +718,7 @@ Insights:
         self, executor_agent, sample_input, mock_postgres_connector
     ):
         """Test that connector is closed even on error."""
-        mock_postgres_connector.execute = AsyncMock(
-            side_effect=QueryError("Error")
-        )
+        mock_postgres_connector.execute = AsyncMock(side_effect=QueryError("Error"))
 
         try:
             await executor_agent.execute(sample_input)
@@ -741,9 +743,7 @@ Insights:
     # ============================================================================
 
     @pytest.mark.asyncio
-    async def test_metadata_populated(
-        self, executor_agent, sample_input, mock_llm_provider
-    ):
+    async def test_metadata_populated(self, executor_agent, sample_input, mock_llm_provider):
         """Test that metadata is properly populated."""
         mock_llm_provider.set_response("Answer: Results found.")
 
@@ -791,9 +791,7 @@ Insights:
     # ============================================================================
 
     @pytest.mark.asyncio
-    async def test_supports_postgresql(
-        self, executor_agent, sample_input, mock_llm_provider
-    ):
+    async def test_supports_postgresql(self, executor_agent, sample_input, mock_llm_provider):
         """Test PostgreSQL support."""
         sample_input.database_type = "postgresql"
         mock_llm_provider.set_response("Answer: PostgreSQL results.")
@@ -803,9 +801,7 @@ Insights:
         assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_supports_clickhouse(
-        self, executor_agent, sample_input, mock_llm_provider
-    ):
+    async def test_supports_clickhouse(self, executor_agent, sample_input, mock_llm_provider):
         """Test ClickHouse support."""
         sample_input.database_type = "clickhouse"
         mock_llm_provider.set_response("Answer: ClickHouse results.")
@@ -815,9 +811,7 @@ Insights:
         assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_rejects_unsupported_database(
-        self, executor_agent, sample_input
-    ):
+    async def test_rejects_unsupported_database(self, executor_agent, sample_input):
         """Test rejection of unsupported database types."""
         # Reset the mock to allow real _get_connector to run
         executor_agent._get_connector = ExecutorAgent._get_connector.__get__(
@@ -834,11 +828,7 @@ Insights:
 
     def test_parses_json_correction_from_code_fence(self, executor_agent):
         """Parse SQL from fenced JSON correction payloads."""
-        content = (
-            "```json\n"
-            '{ "sql": "SELECT COUNT(*) FROM public.orders", "confidence": 0.8 }\n'
-            "```"
-        )
+        content = '```json\n{ "sql": "SELECT COUNT(*) FROM public.orders", "confidence": 0.8 }\n```'
 
         parsed = executor_agent._parse_correction_response(content)
 
@@ -851,9 +841,7 @@ Insights:
         extracted = executor_agent._extract_table_name_from_sql(sql)
         assert extracted == "my-project.dataset.table"
 
-    def test_deterministic_summary_uses_full_bigquery_table_name(
-        self, executor_agent
-    ):
+    def test_deterministic_summary_uses_full_bigquery_table_name(self, executor_agent):
         query_result = ConnectorQueryResult(
             rows=[{"id": 1, "amount": 100}],
             row_count=1,

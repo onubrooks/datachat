@@ -10,7 +10,11 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from backend.api.main import app
-from backend.connectors.base import ConnectionError as ConnectorConnectionError
+from backend.connectors.base import (
+    ColumnInfo,
+    ConnectionError as ConnectorConnectionError,
+    TableInfo,
+)
 from backend.models.database import DatabaseConnection
 
 
@@ -58,12 +62,15 @@ class TestDatabaseEndpoints:
         manager.add_connection.assert_awaited_once()
 
     def test_list_connections(self, client, sample_connection):
-        with patch(
-            "backend.api.main.app_state",
-            {"database_manager": None},
-        ), patch(
-            "backend.api.routes.databases.list_available_connections",
-            new=AsyncMock(return_value=[sample_connection]),
+        with (
+            patch(
+                "backend.api.main.app_state",
+                {"database_manager": None},
+            ),
+            patch(
+                "backend.api.routes.databases.list_available_connections",
+                new=AsyncMock(return_value=[sample_connection]),
+            ),
         ):
             response = client.get("/api/v1/databases")
 
@@ -74,15 +81,19 @@ class TestDatabaseEndpoints:
 
     def test_get_environment_connection(self, client, sample_connection):
         env_connection_id = str(sample_connection.connection_id)
-        with patch(
-            "backend.api.main.app_state",
-            {"database_manager": None},
-        ), patch(
-            "backend.api.routes.databases.environment_connection_id",
-            return_value=env_connection_id,
-        ), patch(
-            "backend.api.routes.databases.list_available_connections",
-            new=AsyncMock(return_value=[sample_connection]),
+        with (
+            patch(
+                "backend.api.main.app_state",
+                {"database_manager": None},
+            ),
+            patch(
+                "backend.api.routes.databases.environment_connection_id",
+                return_value=env_connection_id,
+            ),
+            patch(
+                "backend.api.routes.databases.list_available_connections",
+                new=AsyncMock(return_value=[sample_connection]),
+            ),
         ):
             response = client.get(f"/api/v1/databases/{env_connection_id}")
 
@@ -184,9 +195,7 @@ class TestDatabaseEndpoints:
         manager.remove_connection = AsyncMock(return_value=None)
 
         with patch("backend.api.routes.databases._get_manager", return_value=manager):
-            response = client.delete(
-                f"/api/v1/databases/{sample_connection.connection_id}"
-            )
+            response = client.delete(f"/api/v1/databases/{sample_connection.connection_id}")
 
         assert response.status_code == 204
         manager.remove_connection.assert_awaited_once()
@@ -196,9 +205,7 @@ class TestDatabaseEndpoints:
             "backend.api.routes.databases.environment_connection_id",
             return_value="00000000-0000-0000-0000-00000000dada",
         ):
-            response = client.delete(
-                "/api/v1/databases/00000000-0000-0000-0000-00000000dada"
-            )
+            response = client.delete("/api/v1/databases/00000000-0000-0000-0000-00000000dada")
 
         assert response.status_code == 400
         assert "Environment Database" in response.json()["detail"]
@@ -221,9 +228,7 @@ class TestDatabaseEndpoints:
 
     def test_create_connection_connection_error_returns_bad_request(self, client):
         manager = AsyncMock()
-        manager.add_connection = AsyncMock(
-            side_effect=ConnectorConnectionError("dial tcp timeout")
-        )
+        manager.add_connection = AsyncMock(side_effect=ConnectorConnectionError("dial tcp timeout"))
 
         with patch("backend.api.routes.databases._get_manager", return_value=manager):
             response = client.post(
@@ -237,3 +242,54 @@ class TestDatabaseEndpoints:
 
         assert response.status_code == 400
         assert "Failed to connect to database" in response.json()["detail"]
+
+    def test_get_connection_schema(self, client, sample_connection):
+        connector = AsyncMock()
+        connector.connect = AsyncMock(return_value=None)
+        connector.close = AsyncMock(return_value=None)
+        connector.get_schema = AsyncMock(
+            return_value=[
+                TableInfo(
+                    schema="public",
+                    table_name="orders",
+                    row_count=250,
+                    table_type="BASE TABLE",
+                    columns=[
+                        ColumnInfo(
+                            name="order_id",
+                            data_type="integer",
+                            is_nullable=False,
+                            is_primary_key=True,
+                        ),
+                        ColumnInfo(
+                            name="customer_id",
+                            data_type="integer",
+                            is_nullable=False,
+                            is_foreign_key=True,
+                            foreign_table="customers",
+                            foreign_column="customer_id",
+                        ),
+                    ],
+                )
+            ]
+        )
+
+        with (
+            patch("backend.api.main.app_state", {"database_manager": None}),
+            patch(
+                "backend.api.routes.databases.list_available_connections",
+                new=AsyncMock(return_value=[sample_connection]),
+            ),
+            patch(
+                "backend.api.routes.databases.create_connector",
+                return_value=connector,
+            ),
+        ):
+            response = client.get(f"/api/v1/databases/{sample_connection.connection_id}/schema")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["connection_id"] == str(sample_connection.connection_id)
+        assert len(payload["tables"]) == 1
+        assert payload["tables"][0]["table_name"] == "orders"
+        assert payload["tables"][0]["columns"][0]["is_primary_key"] is True

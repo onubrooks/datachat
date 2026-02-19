@@ -27,7 +27,7 @@ from backend.agents.context import ContextAgent
 from backend.agents.context_answer import ContextAnswerAgent
 from backend.agents.executor import ExecutorAgent
 from backend.agents.query_analyzer import QueryAnalyzerAgent, QueryAnalyzerInput
-from backend.agents.query_compiler import QueryCompilerAgent, QueryCompilerInput
+from backend.agents.query_compiler import QueryCompilerAgent
 from backend.agents.response_synthesis import ResponseSynthesisAgent
 from backend.agents.sql import SQLAgent
 from backend.agents.tool_planner import ToolPlannerAgent
@@ -50,13 +50,12 @@ from backend.models import (
     ToolPlannerAgentInput,
     ValidatorAgentInput,
 )
-from backend.utils.pattern_matcher import QueryPatternMatcher
 from backend.pipeline.route_handlers import (
     ClarificationRouteHandler,
+    ContextRouteHandler,
     EndRouteHandler,
     RouteDispatcher,
     SQLRouteHandler,
-    ContextRouteHandler,
     ToolRouteHandler,
 )
 from backend.pipeline.session_context import SessionContext
@@ -64,6 +63,7 @@ from backend.tools import ToolExecutor, initialize_tools
 from backend.tools.base import ToolContext
 from backend.tools.policy import ToolPolicyError
 from backend.tools.registry import ToolRegistry
+from backend.utils.pattern_matcher import QueryPatternMatcher
 
 logger = logging.getLogger(__name__)
 ENV_DATABASE_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada"
@@ -94,6 +94,9 @@ class PipelineState(TypedDict, total=False):
     correlation_id: str | None
     tool_approved: bool
     intent_gate: str | None
+    route: (
+        str | None
+    )  # Explicit route from QueryAnalyzerAgent (sql, context, clarification, tool, end)
     intent_summary: dict[str, Any] | None
     clarification_turn_count: int
     clarification_limit: int
@@ -510,141 +513,12 @@ class DataChatPipeline:
 
         return state
 
-        intent_gate = self._classify_intent_gate(state.get("query") or "")
-        if intent_gate == "clarify":
-            self._apply_clarification_response(
-                state,
-                ["What would you like to do with your data?"],
-                default_intro=(
-                    "I can help with questions about your connected data, but I need a bit more detail."
-                ),
-            )
-            state["intent_gate"] = "clarify"
-            self._record_decision(
-                state,
-                stage="intent_gate",
-                decision="clarify",
-                reason="rule_based_non_actionable",
-            )
-            elapsed = (time.time() - start_time) * 1000
-            state.setdefault("agent_timings", {})["intent_gate"] = elapsed
-            state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
-            return state
-
-        if intent_gate == "data_query" and self._should_call_intent_llm(state, summary):
-            llm_result, llm_calls = await self._llm_intent_gate(state.get("query") or "", summary)
-            if llm_calls:
-                state["llm_calls"] = state.get("llm_calls", 0) + llm_calls
-            if llm_result:
-                intent_gate = llm_result.get("intent", intent_gate)
-                confidence = llm_result.get("confidence", 0.0)
-                question = llm_result.get("clarifying_question")
-                if intent_gate == "clarify" or (
-                    intent_gate == "data_query"
-                    and confidence < float(self.routing_policy["intent_llm_confidence_threshold"])
-                    and self._is_ambiguous_intent(state, summary)
-                ):
-                    question = question or "What would you like to do with your data?"
-                    self._apply_clarification_response(
-                        state,
-                        [question],
-                        default_intro=(
-                            "I can help with questions about your connected data, but I need a bit more detail."
-                        ),
-                    )
-                    state["intent_gate"] = "clarify"
-                    self._record_decision(
-                        state,
-                        stage="intent_gate",
-                        decision="clarify",
-                        reason="intent_llm_low_confidence",
-                        details={
-                            "intent": intent_gate,
-                            "confidence": confidence,
-                            "threshold": self.routing_policy["intent_llm_confidence_threshold"],
-                        },
-                    )
-                    elapsed = (time.time() - start_time) * 1000
-                    state.setdefault("agent_timings", {})["intent_gate"] = elapsed
-                    state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
-                    return state
-                if intent_gate == "data_query" and self._is_non_actionable_utterance(
-                    state.get("query") or ""
-                ):
-                    self._apply_clarification_response(
-                        state,
-                        ["What would you like to do with your data?"],
-                        default_intro=(
-                            "I can help with questions about your connected data, but I need a bit more detail."
-                        ),
-                    )
-                    state["intent_gate"] = "clarify"
-                    self._record_decision(
-                        state,
-                        stage="intent_gate",
-                        decision="clarify",
-                        reason="intent_llm_non_actionable_followup",
-                    )
-                    elapsed = (time.time() - start_time) * 1000
-                    state.setdefault("agent_timings", {})["intent_gate"] = elapsed
-                    state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
-                    return state
-
-        if intent_gate == "data_query" and self._is_ambiguous_intent(state, summary):
-            questions = summary.get("last_clarifying_questions") or []
-            question = questions[0] if questions else "What would you like to do with your data?"
-            self._apply_clarification_response(
-                state,
-                [question],
-                default_intro=(
-                    "I can help with questions about your connected data, but I need a bit more detail."
-                ),
-            )
-            state["intent_gate"] = "clarify"
-            self._record_decision(
-                state,
-                stage="intent_gate",
-                decision="clarify",
-                reason="ambiguous_query_requires_clarification",
-            )
-            elapsed = (time.time() - start_time) * 1000
-            state.setdefault("agent_timings", {})["intent_gate"] = elapsed
-            state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
-            return state
-        state["intent_gate"] = intent_gate
-        self._record_decision(
-            state,
-            stage="intent_gate",
-            decision=str(intent_gate),
-            reason="rule_or_llm_classification",
-        )
-
-        if intent_gate in {
-            "exit",
-            "out_of_scope",
-            "small_talk",
-            "setup_help",
-            "datapoint_help",
-        }:
-            state["intent"] = intent_gate
-            state["answer_source"] = "system"
-            state["answer_confidence"] = 0.8
-            state["natural_language_answer"] = self._build_intent_gate_response(intent_gate)
-            state["clarification_needed"] = False
-            state["clarifying_questions"] = []
-
-        elapsed = (time.time() - start_time) * 1000
-        state.setdefault("agent_timings", {})["intent_gate"] = elapsed
-        state["total_latency_ms"] = state.get("total_latency_ms", 0) + elapsed
-
-        return state
-
     def _should_continue_after_query_analyzer(self, state: PipelineState) -> str:
         """Determine route after query analysis."""
         intent_gate = state.get("intent_gate")
         intent = state.get("intent")
 
-        # End route for system intents
+        # End route for system intents and clarification
         if intent_gate in {
             "exit",
             "out_of_scope",
@@ -652,6 +526,7 @@ class DataChatPipeline:
             "setup_help",
             "datapoint_help",
             "clarify",
+            "clarification",  # P1 fix: also handle "clarification" route from QueryAnalyzerAgent
         }:
             self._record_decision(
                 state,
@@ -661,7 +536,7 @@ class DataChatPipeline:
             )
             return "end"
 
-        # Fast path for deterministic SQL
+        # Fast path for deterministic SQL (no context retrieval needed)
         if state.get("fast_path"):
             self._record_decision(
                 state,
@@ -671,17 +546,10 @@ class DataChatPipeline:
             )
             return "sql"
 
-        # Check the explicit route from QueryAnalyzer first
-        # If route is explicitly sql or context, respect that
+        # Check the explicit route from QueryAnalyzer
+        # For route="sql", we still go through context to retrieve datapoints
+        # Context is needed for SQL generation context
         route = state.get("route")
-        if route == "sql":
-            self._record_decision(
-                state,
-                stage="continue_after_query_analyzer",
-                decision="sql",
-                reason="explicit_route=sql",
-            )
-            return "sql"
         if route == "context":
             self._record_decision(
                 state,
@@ -690,6 +558,15 @@ class DataChatPipeline:
                 reason="explicit_route=context",
             )
             return "context"
+        # P2 fix: Honor explicit tool route from analyzer
+        if route == "tool":
+            self._record_decision(
+                state,
+                stage="continue_after_query_analyzer",
+                decision="tool_planner",
+                reason="explicit_route=tool",
+            )
+            return "tool_planner"
 
         # Check for tool requests (only if no explicit route was set)
         if self._should_run_tool_planner(state):
@@ -1636,7 +1513,7 @@ class DataChatPipeline:
                 validated_sql=validated_sql,
                 database_type=state.get("database_type", "postgresql"),
                 database_url=state.get("database_url"),
-                max_rows=10,
+                max_rows=100,
                 timeout_seconds=30,
                 source_datapoints=state.get("used_datapoints", []),
             )

@@ -11,6 +11,8 @@ from backend.models.datapoint import (
     BusinessDataPoint,
     ColumnMetadata,
     ProcessDataPoint,
+    QueryDataPoint,
+    QueryParameter,
     Relationship,
     SchemaDataPoint,
 )
@@ -561,3 +563,178 @@ class TestJSONSerialization:
         assert deserialized.name == original.name
         assert len(deserialized.key_columns) == len(original.key_columns)
         assert deserialized.tags == original.tags
+
+
+class TestQueryParameter:
+    """Test QueryParameter model."""
+
+    def test_valid_query_parameter(self):
+        """Valid query parameter is accepted."""
+        param = QueryParameter(
+            type="integer",
+            required=False,
+            default=10,
+            description="Number of results to return",
+        )
+
+        assert param.type == "integer"
+        assert param.required is False
+        assert param.default == 10
+        assert param.description == "Number of results to return"
+
+    def test_required_parameter(self):
+        """Required parameter without default."""
+        param = QueryParameter(type="timestamp", required=True)
+
+        assert param.required is True
+        assert param.default is None
+
+    def test_enum_parameter(self):
+        """Enum parameter with allowed values."""
+        param = QueryParameter(
+            type="enum",
+            required=True,
+            values=["asc", "desc"],
+            description="Sort order",
+        )
+
+        assert param.type == "enum"
+        assert param.values == ["asc", "desc"]
+
+    def test_invalid_type_rejected(self):
+        """Invalid parameter type is rejected."""
+        with pytest.raises(ValidationError):
+            QueryParameter(type="array")  # Not in allowed types
+
+
+class TestQueryDataPoint:
+    """Test QueryDataPoint model."""
+
+    def test_valid_query_datapoint(self):
+        """Valid query datapoint is accepted."""
+        datapoint = QueryDataPoint(
+            datapoint_id="query_top_customers_001",
+            name="Top Customers by Revenue",
+            sql_template=(
+                "SELECT customer_id, SUM(amount) as revenue "
+                "FROM transactions WHERE status = 'completed' "
+                "GROUP BY customer_id ORDER BY revenue DESC LIMIT {limit}"
+            ),
+            parameters={
+                "limit": QueryParameter(
+                    type="integer", default=10, description="Number of customers"
+                )
+            },
+            description="Returns top customers by total revenue",
+            owner="sales-team@company.com",
+        )
+
+        assert datapoint.type == "Query"
+        assert datapoint.datapoint_id == "query_top_customers_001"
+        assert "SELECT" in datapoint.sql_template
+        assert "limit" in datapoint.parameters
+
+    def test_query_datapoint_with_backend_variants(self):
+        """Query datapoint with backend-specific SQL."""
+        datapoint = QueryDataPoint(
+            datapoint_id="query_daily_sales_001",
+            name="Daily Sales Summary",
+            sql_template="SELECT date, SUM(amount) FROM sales GROUP BY date",
+            description="Daily sales aggregation",
+            backend_variants={
+                "clickhouse": "SELECT date, SUM(amount) FROM sales GROUP BY date ORDER BY date",
+            },
+            related_tables=["sales"],
+            owner="analytics@company.com",
+        )
+
+        assert datapoint.backend_variants is not None
+        assert "clickhouse" in datapoint.backend_variants
+        assert len(datapoint.related_tables) == 1
+
+    def test_query_datapoint_with_validation_rules(self):
+        """Query datapoint with result validation."""
+        datapoint = QueryDataPoint(
+            datapoint_id="query_metrics_001",
+            name="Key Metrics",
+            sql_template="SELECT metric, value FROM metrics",
+            description="Fetch key business metrics",
+            validation={
+                "expected_columns": ["metric", "value"],
+                "max_rows": 100,
+            },
+            owner="data@company.com",
+        )
+
+        assert datapoint.validation is not None
+        assert datapoint.validation["max_rows"] == 100
+
+    def test_short_sql_template_rejected(self):
+        """SQL template must be at least 10 characters."""
+        with pytest.raises(ValidationError, match="at least 10 characters"):
+            QueryDataPoint(
+                datapoint_id="query_test_001",
+                name="Test Query",
+                sql_template="SELECT 1",  # Too short
+                description="Test query",
+                owner="test@example.com",
+            )
+
+    def test_short_description_rejected(self):
+        """Description must be at least 10 characters."""
+        with pytest.raises(ValidationError, match="at least 10 characters"):
+            QueryDataPoint(
+                datapoint_id="query_test_001",
+                name="Test Query",
+                sql_template="SELECT * FROM users LIMIT {limit}",
+                description="Short",  # Too short
+                owner="test@example.com",
+            )
+
+    def test_query_datapoint_with_multiple_parameters(self):
+        """Query datapoint with multiple parameters."""
+        datapoint = QueryDataPoint(
+            datapoint_id="query_range_001",
+            name="Query by Date Range",
+            sql_template="SELECT * FROM events WHERE date >= {start} AND date < {end} LIMIT {limit}",
+            parameters={
+                "start": QueryParameter(type="timestamp", required=True),
+                "end": QueryParameter(type="timestamp", required=True),
+                "limit": QueryParameter(type="integer", default=100),
+            },
+            description="Query events within a date range",
+            owner="team@company.com",
+        )
+
+        assert len(datapoint.parameters) == 3
+        assert datapoint.parameters["start"].required is True
+        assert datapoint.parameters["limit"].default == 100
+
+
+class TestQueryDataPointDeserialization:
+    """Test QueryDataPoint deserialization via discriminated union."""
+
+    def test_deserialize_query_datapoint(self):
+        """JSON with type='Query' deserializes to QueryDataPoint."""
+        data = {
+            "datapoint_id": "query_test_001",
+            "type": "Query",
+            "name": "Test Query",
+            "sql_template": "SELECT * FROM users WHERE id = {user_id}",
+            "parameters": {
+                "user_id": {"type": "integer", "required": True, "description": "User ID"}
+            },
+            "description": "Fetch user by ID",
+            "owner": "test@example.com",
+        }
+
+        from pydantic import TypeAdapter
+
+        from backend.models.datapoint import DataPoint
+
+        adapter = TypeAdapter(DataPoint)
+        datapoint = adapter.validate_python(data)
+
+        assert isinstance(datapoint, QueryDataPoint)
+        assert datapoint.sql_template == "SELECT * FROM users WHERE id = {user_id}"
+        assert "user_id" in datapoint.parameters

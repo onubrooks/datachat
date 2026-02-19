@@ -201,7 +201,9 @@ def _format_connection_target(connection_string: str) -> str:
     scheme = parsed.scheme.split("+")[0].lower()
     default_ports = {"postgres": 5432, "postgresql": 5432, "mysql": 3306, "clickhouse": 8123}
     port = parsed.port or default_ports.get(scheme, 0)
-    database = parsed.path.lstrip("/") if parsed.path else ("default" if scheme == "clickhouse" else "")
+    database = (
+        parsed.path.lstrip("/") if parsed.path else ("default" if scheme == "clickhouse" else "")
+    )
     if not database:
         database = "datachat"
     return f"{host}:{port}/{database}"
@@ -512,9 +514,7 @@ async def create_pipeline_from_config() -> DataChatPipeline:
                 )
             for step in status_state.setup_required:
                 console.print(f"[yellow]- {step.title}: {step.description}[/yellow]")
-            console.print(
-                "[cyan]Hint: Run 'datachat setup' or 'datachat demo' to continue.[/cyan]"
-            )
+            console.print("[cyan]Hint: Run 'datachat setup' or 'datachat demo' to continue.[/cyan]")
             raise click.ClickException("System not initialized")
 
         if not status_state.has_datapoints:
@@ -1449,9 +1449,7 @@ def setup(
                     else:
                         console.print("[green]✓ Auto-profiling completed.[/green]")
                 except Exception as exc:
-                    console.print(
-                        f"[yellow]Auto-profiling failed to start: {exc}[/yellow]"
-                    )
+                    console.print(f"[yellow]Auto-profiling failed to start: {exc}[/yellow]")
         if status_state.setup_required:
             console.print("[yellow]Remaining setup steps:[/yellow]")
             for step in status_state.setup_required:
@@ -1493,7 +1491,9 @@ def setup(
 )
 @click.option(
     "--persona",
-    type=click.Choice(["base", "analyst", "engineer", "platform", "executive"], case_sensitive=False),
+    type=click.Choice(
+        ["base", "analyst", "engineer", "platform", "executive"], case_sensitive=False
+    ),
     default="base",
     show_default=True,
     help="Persona profile used when --dataset=core.",
@@ -1716,9 +1716,7 @@ def train(
             )
         else:
             if not profile_connection_id:
-                raise click.ClickException(
-                    "mode=profile requires --profile-connection-id."
-                )
+                raise click.ClickException("mode=profile requires --profile-connection-id.")
             ctx.invoke(
                 start_profile,
                 connection_id=profile_connection_id,
@@ -1929,7 +1927,9 @@ def reset(
 )
 @click.option(
     "--persona",
-    type=click.Choice(["base", "analyst", "engineer", "platform", "executive"], case_sensitive=False),
+    type=click.Choice(
+        ["base", "analyst", "engineer", "platform", "executive"], case_sensitive=False
+    ),
     default="base",
     show_default=True,
     help="Persona-specific demo setup to load.",
@@ -2102,9 +2102,7 @@ def demo(dataset: str, persona: str, reset: bool, no_workspace: bool):
                     f"[yellow]Workspace demo folder not found at {workspace_root} (skipping).[/yellow]"
                 )
 
-        console.print(
-            f"[green]✓ Demo data loaded. Try: datachat ask \"{suggested_query}\"[/green]"
-        )
+        console.print(f'[green]✓ Demo data loaded. Try: datachat ask "{suggested_query}"[/green]')
 
     asyncio.run(run_demo())
 
@@ -2135,9 +2133,7 @@ def start_profile(connection_id: str, sample_size: int, tables: tuple[str, ...])
         )
         response.raise_for_status()
         data = response.json()
-        console.print(
-            f"[green]✓ Profiling started[/green] job_id={data['job_id']}"
-        )
+        console.print(f"[green]✓ Profiling started[/green] job_id={data['job_id']}")
     except Exception as exc:
         console.print(f"[red]Failed to start profiling: {exc}[/red]")
         sys.exit(1)
@@ -2148,9 +2144,7 @@ def start_profile(connection_id: str, sample_size: int, tables: tuple[str, ...])
 def profile_status(job_id: str):
     """Check profiling job status."""
     try:
-        response = httpx.get(
-            f"{API_BASE_URL}/api/v1/profiling/jobs/{job_id}", timeout=15.0
-        )
+        response = httpx.get(f"{API_BASE_URL}/api/v1/profiling/jobs/{job_id}", timeout=15.0)
         response.raise_for_status()
         data = response.json()
         console.print(json.dumps(data, indent=2))
@@ -2212,9 +2206,7 @@ def run_tool(name: str, approve: bool):
         )
     payload = {"name": name, "arguments": {}, "approved": approve}
     try:
-        response = httpx.post(
-            f"{API_BASE_URL}/api/v1/tools/execute", json=payload, timeout=60.0
-        )
+        response = httpx.post(f"{API_BASE_URL}/api/v1/tools/execute", json=payload, timeout=60.0)
         response.raise_for_status()
         console.print(json.dumps(response.json(), indent=2))
     except Exception as exc:
@@ -2227,9 +2219,7 @@ def quality_report():
     """Run DataPoint quality report."""
     payload = {"name": "datapoint_quality_report", "arguments": {"limit": 10}}
     try:
-        response = httpx.post(
-            f"{API_BASE_URL}/api/v1/tools/execute", json=payload, timeout=30.0
-        )
+        response = httpx.post(f"{API_BASE_URL}/api/v1/tools/execute", json=payload, timeout=30.0)
         response.raise_for_status()
         console.print(json.dumps(response.json(), indent=2))
     except Exception as exc:
@@ -2238,7 +2228,13 @@ def quality_report():
 
 
 @datapoint.command(name="list")
-def list_datapoints():
+@click.option(
+    "--type",
+    "dp_type",
+    type=click.Choice(["Schema", "Business", "Process", "Query"]),
+    help="Filter by DataPoint type",
+)
+def list_datapoints(dp_type: str | None):
     """List all DataPoints in the knowledge base."""
 
     async def run_list():
@@ -2246,14 +2242,20 @@ def list_datapoints():
             vector_store = VectorStore()
             await vector_store.initialize()
 
-            # Get all datapoints without embedding calls
-            results = await vector_store.list_datapoints(limit=1000)
+            filter_metadata = None
+            if dp_type:
+                filter_metadata = {"type": dp_type}
+
+            results = await vector_store.search(
+                query="",
+                top_k=1000,
+                filter_metadata=filter_metadata,
+            )
 
             if not results:
                 console.print("[yellow]No DataPoints found[/yellow]")
                 return
 
-            # Create table
             table = Table(
                 title=f"DataPoints ({len(results)} found)",
                 show_header=True,
@@ -2421,9 +2423,7 @@ def approve_all_pending(profile_id: str | None, latest: bool):
                 if str(item.get("profile_id")) == profile_id
             ]
             if not pending:
-                console.print(
-                    "[yellow]No pending DataPoints found for that profile.[/yellow]"
-                )
+                console.print("[yellow]No pending DataPoints found for that profile.[/yellow]")
                 return
             approved = 0
             for item in pending:
@@ -2501,9 +2501,7 @@ def generate_datapoints_cli(
         )
         response.raise_for_status()
         data = response.json()
-        console.print(
-            f"[green]✓ Generation started[/green] job_id={data['job_id']}"
-        )
+        console.print(f"[green]✓ Generation started[/green] job_id={data['job_id']}")
     except Exception as exc:
         console.print(f"[red]Failed to start generation: {exc}[/red]")
         sys.exit(1)
@@ -2527,7 +2525,7 @@ def generation_status(job_id: str):
 
 
 @datapoint.command(name="add")
-@click.argument("datapoint_type", type=click.Choice(["schema", "business", "process"]))
+@click.argument("datapoint_type", type=click.Choice(["schema", "business", "process", "query"]))
 @click.argument("file", type=click.Path(exists=True))
 @click.option(
     "--strict-contracts/--no-strict-contracts",
@@ -2654,9 +2652,7 @@ def sync_datapoints(
                     f"[yellow]⚠ {stats['failed_count']} DataPoints failed to load[/yellow]"
                 )
                 for error in stats["failed_files"]:
-                    console.print(
-                        f"  [red]• {error['path']}: {error['error']}[/red]"
-                    )
+                    console.print(f"  [red]• {error['path']}: {error['error']}[/red]")
 
             if not datapoints:
                 console.print("[yellow]No valid DataPoints found[/yellow]")
@@ -2675,9 +2671,7 @@ def sync_datapoints(
                 if global_scope:
                     console.print("[dim]Applied scope: global[/dim]")
                 else:
-                    console.print(
-                        f"[dim]Applied scope: database ({connection_id})[/dim]"
-                    )
+                    console.print(f"[dim]Applied scope: database ({connection_id})[/dim]")
 
             console.print(f"[green]✓ Loaded {len(datapoints)} DataPoints[/green]")
             reports = validate_contracts(datapoints, strict=strict_contracts)
@@ -2713,9 +2707,7 @@ def sync_datapoints(
             graph = KnowledgeGraph()
 
             with progress:
-                task = progress.add_task(
-                    "Adding to knowledge graph...", total=len(datapoints)
-                )
+                task = progress.add_task("Adding to knowledge graph...", total=len(datapoints))
                 for datapoint in datapoints:
                     graph.add_datapoint(datapoint)
                     progress.update(task, advance=1)
@@ -2785,9 +2777,7 @@ def lint_datapoints(
                     f"[yellow]⚠ {stats['failed_count']} DataPoints failed to load[/yellow]"
                 )
                 for error in stats["failed_files"]:
-                    console.print(
-                        f"  [red]• {error['path']}: {error['error']}[/red]"
-                    )
+                    console.print(f"  [red]• {error['path']}: {error['error']}[/red]")
             if not datapoints:
                 console.print("[yellow]No valid DataPoints found[/yellow]")
                 sys.exit(1)
@@ -2817,9 +2807,7 @@ def _print_contract_reports(
         for issue in report.issues:
             label = issue.severity.upper()
             field_hint = f" ({issue.field})" if issue.field else ""
-            message = (
-                f"[{label}] {report.datapoint_id}: {issue.code}{field_hint} - {issue.message}"
-            )
+            message = f"[{label}] {report.datapoint_id}: {issue.code}{field_hint} - {issue.message}"
             if issue.severity == "error":
                 total_errors += 1
                 console.print(f"[red]{message}[/red]")

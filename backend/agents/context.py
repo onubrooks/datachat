@@ -177,7 +177,7 @@ class ContextAgent(BaseAgent):
         """
         Extract DataPoint type from metadata.
 
-        Vector store uses "type" field directly (Schema/Business/Process).
+        Vector store uses "type" field directly (Schema/Business/Process/Query).
         Knowledge graph uses "node_type" field (table/column/metric/process/glossary).
 
         Maps node_type to DataPoint type:
@@ -189,16 +189,13 @@ class ContextAgent(BaseAgent):
             metadata: Item metadata from retrieval
 
         Returns:
-            DataPoint type: "Schema", "Business", or "Process"
+            DataPoint type: "Schema", "Business", "Process", or "Query"
         """
-        # First check if type is already set (vector store)
         if "type" in metadata:
             return metadata["type"]
 
-        # Otherwise map from node_type (knowledge graph)
         node_type = metadata.get("node_type", "")
 
-        # Map NodeType to DataPoint type
         if node_type in ("table", "column"):
             return "Schema"
         elif node_type in ("metric", "glossary"):
@@ -206,7 +203,6 @@ class ContextAgent(BaseAgent):
         elif node_type == "process":
             return "Process"
         else:
-            # Default to Schema if unknown
             logger.warning(f"Unknown node_type '{node_type}', defaulting to Schema")
             return "Schema"
 
@@ -230,9 +226,7 @@ class ContextAgent(BaseAgent):
             "investigation_memory": output.investigation_memory.model_dump(),
         }
 
-    def _estimate_context_confidence(
-        self, query: str, memory: InvestigationMemory
-    ) -> float:
+    def _estimate_context_confidence(self, query: str, memory: InvestigationMemory) -> float:
         query_lower = query.lower()
         datapoints = memory.datapoints
         if not datapoints:

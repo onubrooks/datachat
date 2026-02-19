@@ -103,7 +103,5 @@ def test_generate_and_approve_datapoints():
         pending = generate.json()["pending"]
         assert pending
 
-        approve = client.post(
-            f"/api/v1/datapoints/pending/{pending[0]['pending_id']}/approve"
-        )
+        approve = client.post(f"/api/v1/datapoints/pending/{pending[0]['pending_id']}/approve")
         assert approve.status_code == 200

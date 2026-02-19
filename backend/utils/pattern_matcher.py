@@ -10,11 +10,11 @@ This replaces scattered keyword detection across the orchestrator.
 
 import re
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class QueryPatternType(str, Enum):
+class QueryPatternType(StrEnum):
     TABLE_LIST = "table_list"
     COLUMN_LIST = "column_list"
     ROW_COUNT = "row_count"

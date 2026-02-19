@@ -288,9 +288,7 @@ class VectorStore:
                         )
                         return formatted_results
                     except Exception as retry_error:
-                        logger.warning(
-                            "Vector search retry failed after recovery: %s", retry_error
-                        )
+                        logger.warning("Vector search retry failed after recovery: %s", retry_error)
                 logger.warning(
                     "Falling back to empty vector results due to recoverable index error: %s", e
                 )
@@ -473,7 +471,9 @@ class VectorStore:
             datapoints = loader.load_directory(datapoints_root, recursive=True, skip_errors=True)
             if datapoints:
                 await self.add_datapoints(datapoints)
-                logger.info("Rebuilt vector index from local datapoint files (%s).", len(datapoints))
+                logger.info(
+                    "Rebuilt vector index from local datapoint files (%s).", len(datapoints)
+                )
             return True
         except Exception as rebuild_error:
             logger.warning("Vector rebuild failed: %s", rebuild_error)
@@ -541,6 +541,14 @@ class VectorStore:
             parts.append(f"Target Tables: {', '.join(datapoint.target_tables[:10])}")
         if hasattr(datapoint, "dependencies") and datapoint.dependencies:
             parts.append(f"Dependencies: {', '.join(datapoint.dependencies[:10])}")
+
+        if hasattr(datapoint, "sql_template"):
+            parts.append(f"SQL Template: {datapoint.sql_template}")
+        if hasattr(datapoint, "description") and datapoint.type == "Query":
+            parts.append(f"Query Description: {datapoint.description}")
+        if hasattr(datapoint, "parameters") and datapoint.parameters:
+            param_list = [f"{name}: {p.type}" for name, p in datapoint.parameters.items()]
+            parts.append(f"Parameters: {', '.join(param_list[:10])}")
 
         # Add tags
         if datapoint.tags:
@@ -632,6 +640,33 @@ class VectorStore:
             metadata["target_tables"] = ",".join(datapoint.target_tables)
         if hasattr(datapoint, "dependencies") and datapoint.dependencies:
             metadata["dependencies"] = ",".join(datapoint.dependencies)
+
+        if hasattr(datapoint, "sql_template") and datapoint.sql_template:
+            metadata["sql_template"] = datapoint.sql_template
+        if hasattr(datapoint, "parameters") and datapoint.parameters:
+            metadata["parameters"] = json.dumps(
+                {
+                    name: {
+                        "type": p.type,
+                        "required": p.required,
+                        "default": p.default,
+                        "description": p.description,
+                    }
+                    for name, p in datapoint.parameters.items()
+                }
+            )
+        if (
+            hasattr(datapoint, "description")
+            and datapoint.type == "Query"
+            and datapoint.description
+        ):
+            metadata["query_description"] = datapoint.description
+        if hasattr(datapoint, "backend_variants") and datapoint.backend_variants:
+            metadata["backend_variants"] = json.dumps(datapoint.backend_variants)
+        if hasattr(datapoint, "validation") and datapoint.validation:
+            metadata["validation"] = json.dumps(datapoint.validation)
+        if hasattr(datapoint, "related_tables") and datapoint.related_tables:
+            metadata["related_tables"] = ",".join(datapoint.related_tables)
 
         if datapoint.tags:
             metadata["tags"] = ",".join(datapoint.tags)

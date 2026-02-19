@@ -58,7 +58,9 @@ async def test_list_available_connections_skips_duplicate_environment_url(monkey
     managed_connection = SimpleNamespace(
         connection_id="11111111-1111-1111-1111-111111111111",
         name="Managed",
-        database_url=SimpleNamespace(get_secret_value=lambda: "postgresql://user:pass@localhost:5432/app"),
+        database_url=SimpleNamespace(
+            get_secret_value=lambda: "postgresql://user:pass@localhost:5432/app"
+        ),
         database_type="postgresql",
         is_active=True,
         is_default=True,

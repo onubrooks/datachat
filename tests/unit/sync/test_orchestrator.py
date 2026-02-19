@@ -56,8 +56,12 @@ async def test_full_sync_rebuilds_everything(tmp_path: Path):
     graph.add_datapoint = MagicMock()
 
     datapoints_dir = tmp_path / "datapoints"
-    _write_datapoint(datapoints_dir / "table_orders_001.json", _schema_datapoint("table_orders_001"))
-    _write_datapoint(datapoints_dir / "table_customers_001.json", _schema_datapoint("table_customers_001"))
+    _write_datapoint(
+        datapoints_dir / "table_orders_001.json", _schema_datapoint("table_orders_001")
+    )
+    _write_datapoint(
+        datapoints_dir / "table_customers_001.json", _schema_datapoint("table_customers_001")
+    )
 
     orchestrator = SyncOrchestrator(
         vector_store=vector_store,
@@ -85,8 +89,12 @@ async def test_incremental_sync_updates_specific_ids(tmp_path: Path):
     graph.add_datapoint = MagicMock()
 
     datapoints_dir = tmp_path / "datapoints"
-    _write_datapoint(datapoints_dir / "table_orders_001.json", _schema_datapoint("table_orders_001"))
-    _write_datapoint(datapoints_dir / "table_customers_001.json", _schema_datapoint("table_customers_001"))
+    _write_datapoint(
+        datapoints_dir / "table_orders_001.json", _schema_datapoint("table_orders_001")
+    )
+    _write_datapoint(
+        datapoints_dir / "table_customers_001.json", _schema_datapoint("table_customers_001")
+    )
 
     orchestrator = SyncOrchestrator(
         vector_store=vector_store,
@@ -113,7 +121,9 @@ async def test_status_tracking_updates(tmp_path: Path):
     graph.add_datapoint = MagicMock()
 
     datapoints_dir = tmp_path / "datapoints"
-    _write_datapoint(datapoints_dir / "table_orders_001.json", _schema_datapoint("table_orders_001"))
+    _write_datapoint(
+        datapoints_dir / "table_orders_001.json", _schema_datapoint("table_orders_001")
+    )
 
     orchestrator = SyncOrchestrator(
         vector_store=vector_store,
@@ -141,7 +151,9 @@ async def test_full_sync_applies_database_scope_metadata(tmp_path: Path):
     graph.add_datapoint = MagicMock()
 
     datapoints_dir = tmp_path / "datapoints"
-    _write_datapoint(datapoints_dir / "table_orders_001.json", _schema_datapoint("table_orders_001"))
+    _write_datapoint(
+        datapoints_dir / "table_orders_001.json", _schema_datapoint("table_orders_001")
+    )
 
     orchestrator = SyncOrchestrator(
         vector_store=vector_store,

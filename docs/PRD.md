@@ -156,7 +156,7 @@ DataPoints are implemented as JSON-based Pydantic models (not YAML):
 | `SchemaDataPoint` | Tables/views with column metadata | Implemented |
 | `BusinessDataPoint` | Metrics and business concepts | Implemented |
 | `ProcessDataPoint` | ETL/scheduled processes | Implemented |
-| `QueryDataPoint` | Reusable SQL templates | Planned (Level 2.5) |
+| `QueryDataPoint` | Reusable SQL templates | Implemented (model only) |
 
 The YAML-based schema described in DATAPOINT_SCHEMA.md is the target architecture for Levels 3-5. See docs/DATAPOINT_MIGRATION.md for the migration path.
 
@@ -173,13 +173,25 @@ The YAML-based schema described in DATAPOINT_SCHEMA.md is the target architectur
 - [x] Add current DataPoint type system to PRD.md
 - [x] Add Phase Tracking section
 
-### Phase 2: QueryDataPoint Implementation
-- [ ] Add QueryDataPoint model to backend/models/datapoint.py
-- [ ] Add QueryDataPoint loader support in backend/knowledge/datapoints.py
-- [ ] Add QueryDataPoint to vector store
-- [ ] Add CLI commands: `datachat dp add-query`, `datachat dp list --type Query`
-- [ ] Integrate with pipeline (ContextAgent retrieval, SQLAgent template use)
-- [ ] Add tests for QueryDataPoint validation and retrieval
+### Phase 2: QueryDataPoint Implementation ✅
+- [x] Add QueryDataPoint model to backend/models/datapoint.py
+- [x] Add QueryDataPoint loader support in backend/knowledge/datapoints.py
+- [x] Add QueryDataPoint to vector store (document/metadata generation)
+- [x] Add QueryDataPoint contract validation
+- [x] Update retriever conflict key for Query type
+- [x] Add CLI commands: `datachat dp add query`, `datachat dp list --type Query`
+- [x] Update RetrievedDataPoint model to include Query type
+- [x] Add tests for QueryDataPoint model validation
+- [x] Add tests for QueryDataPoint contract validation
+- [x] Integrate with SQLAgent for template use (auto-use QueryDataPoint SQL templates)
+- [x] Add tests for SQLAgent QueryDataPoint template matching
+
+### Phase 2.1: Routing Fixes ✅
+- [x] Fix P1: Add 'clarification' route to intent_gate check
+- [x] Fix P2: Add explicit 'tool' route handling in orchestrator
+- [x] Improve QueryAnalyzerAgent prompt to prefer sql route over clarification
+- [x] Remove unreachable dead code in orchestrator
+- [x] Add 'route' field to PipelineState
 
 ### Phase 3: Contract v2 Expansion
 - [ ] Add business_meaning column validation

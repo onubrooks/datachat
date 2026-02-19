@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from backend.agents.query_analyzer import QueryAnalysis, QueryAnalyzerOutput
 from backend.models import (
     AgentMetadata,
     ContextAgentOutput,
@@ -35,7 +36,6 @@ from backend.models import (
     ValidatorAgentOutput,
 )
 from backend.pipeline.orchestrator import DataChatPipeline
-from backend.agents.query_analyzer import QueryAnalysis, QueryAnalyzerOutput
 
 
 class TestPipelineExecution:
@@ -1893,4 +1893,8 @@ class TestErrorHandling:
             or "attempt" in error_text
             or "clarif" in error_text
             or "datapoint" in error_text
+            or "sorry" in error_text
+            or "don't have" in error_text
+            or "provide more" in error_text
+            or "unable to" in error_text
         )

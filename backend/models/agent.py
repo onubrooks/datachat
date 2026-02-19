@@ -250,7 +250,7 @@ class RetrievedDataPoint(BaseModel):
     """A single retrieved DataPoint with retrieval metadata."""
 
     datapoint_id: str = Field(..., description="DataPoint identifier")
-    datapoint_type: Literal["Schema", "Business", "Process"]
+    datapoint_type: Literal["Schema", "Business", "Process", "Query"]
     name: str = Field(..., description="Human-readable name")
     score: float = Field(..., ge=0.0, le=1.0, description="Relevance score (0-1, higher is better)")
     source: str = Field(..., description="Retrieval source (vector/graph/hybrid)")
@@ -891,9 +891,7 @@ class ExecutorAgentInput(AgentInput):
     database_type: Literal["postgresql", "clickhouse", "mysql"] = Field(
         ..., description="Target database type"
     )
-    database_url: str | None = Field(
-        None, description="Database URL override for execution"
-    )
+    database_url: str | None = Field(None, description="Database URL override for execution")
     max_rows: int = Field(default=1000, description="Maximum rows to return")
     timeout_seconds: int = Field(default=30, description="Query timeout in seconds")
     source_datapoints: list[str] = Field(

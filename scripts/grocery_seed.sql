@@ -125,6 +125,29 @@ INSERT INTO public.grocery_products (
 ('PZA-01', 'Frozen Pizza', 'frozen', 2.70, 6.49, true, 38, 3),
 ('FSH-01', 'Salmon Fillet 300g', 'seafood', 4.80, 9.99, true, 20, 4);
 
+-- Add synthetic catalog depth so product-heavy tables exceed 150+ rows.
+INSERT INTO public.grocery_products (
+    sku, product_name, category, unit_cost, unit_price, is_perishable, reorder_level, supplier_id
+)
+SELECT
+    'GEN-' || LPAD(seq::text, 3, '0') AS sku,
+    'Generated Product ' || seq::text AS product_name,
+    CASE
+        WHEN seq % 7 = 0 THEN 'seafood'
+        WHEN seq % 7 = 1 THEN 'produce'
+        WHEN seq % 7 = 2 THEN 'dairy'
+        WHEN seq % 7 = 3 THEN 'bakery'
+        WHEN seq % 7 = 4 THEN 'pantry'
+        WHEN seq % 7 = 5 THEN 'beverage'
+        ELSE 'frozen'
+    END AS category,
+    ROUND((0.65 + (seq % 35) * 0.18)::numeric, 2) AS unit_cost,
+    ROUND((0.65 + (seq % 35) * 0.18 + 0.90 + (seq % 6) * 0.22)::numeric, 2) AS unit_price,
+    CASE WHEN seq % 7 IN (4, 5) THEN false ELSE true END AS is_perishable,
+    35 + (seq % 70) AS reorder_level,
+    ((seq % 6) + 1) AS supplier_id
+FROM generate_series(25, 220) AS seq;
+
 -- 62-day inventory spine with deterministic variation.
 WITH days AS (
     SELECT gs::date AS snapshot_date

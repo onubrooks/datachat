@@ -8,11 +8,18 @@ from backend.api.database_context import (
     environment_connection_id,
     list_available_connections,
 )
-from backend.connectors.base import ConnectionError as ConnectorConnectionError
+from backend.connectors.base import (
+    ConnectionError as ConnectorConnectionError,
+    SchemaError as ConnectorSchemaError,
+)
+from backend.connectors.factory import create_connector
 from backend.database.manager import DatabaseConnectionManager
 from backend.models.database import (
     DatabaseConnection,
     DatabaseConnectionCreate,
+    DatabaseSchemaColumn,
+    DatabaseSchemaResponse,
+    DatabaseSchemaTable,
     DatabaseConnectionUpdate,
     DatabaseConnectionUpdateDefault,
 )
@@ -88,6 +95,68 @@ async def get_database_connection(connection_id: str) -> DatabaseConnection:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get("/databases/{connection_id}/schema", response_model=DatabaseSchemaResponse)
+async def get_database_schema(connection_id: str) -> DatabaseSchemaResponse:
+    """Introspect schema for the selected connection."""
+    from backend.api.main import app_state
+
+    manager = app_state.get("database_manager")
+    connections = await list_available_connections(manager)
+    connection = next(
+        (item for item in connections if str(item.connection_id) == connection_id),
+        None,
+    )
+    if connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Connection not found: {connection_id}",
+        )
+
+    connector = create_connector(
+        database_type=connection.database_type,
+        database_url=connection.database_url.get_secret_value(),
+    )
+    try:
+        await connector.connect()
+        schema_tables = await connector.get_schema()
+    except (ConnectorConnectionError, ConnectorSchemaError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to introspect schema: {exc}",
+        ) from exc
+    finally:
+        await connector.close()
+
+    tables = [
+        DatabaseSchemaTable(
+            schema_name=table.schema_name,
+            table_name=table.table_name,
+            row_count=table.row_count,
+            table_type=table.table_type,
+            columns=[
+                DatabaseSchemaColumn(
+                    name=column.name,
+                    data_type=column.data_type,
+                    is_nullable=column.is_nullable,
+                    is_primary_key=column.is_primary_key,
+                    is_foreign_key=column.is_foreign_key,
+                    foreign_table=column.foreign_table,
+                    foreign_column=column.foreign_column,
+                )
+                for column in table.columns
+            ],
+        )
+        for table in schema_tables
+    ]
+    tables.sort(key=lambda item: (item.schema_name, item.table_name))
+
+    return DatabaseSchemaResponse(
+        connection_id=connection.connection_id,
+        database_type=connection.database_type,
+        tables=tables,
+    )
 
 
 @router.patch("/databases/{connection_id}", response_model=DatabaseConnection)

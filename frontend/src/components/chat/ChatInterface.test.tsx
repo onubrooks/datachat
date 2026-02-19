@@ -4,9 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 import { useChatStore } from "@/lib/stores/chat";
 
-const { mockSystemStatus, mockListDatabases, mockStreamChat } = vi.hoisted(() => ({
+const { mockSystemStatus, mockListDatabases, mockGetDatabaseSchema, mockStreamChat } = vi.hoisted(() => ({
   mockSystemStatus: vi.fn(),
   mockListDatabases: vi.fn(),
+  mockGetDatabaseSchema: vi.fn(),
   mockStreamChat: vi.fn(),
 }));
 
@@ -22,6 +23,7 @@ vi.mock("@/lib/api", async () => {
       ...actual.apiClient,
       systemStatus: mockSystemStatus,
       listDatabases: mockListDatabases,
+      getDatabaseSchema: mockGetDatabaseSchema,
     },
     wsClient: {
       ...actual.wsClient,
@@ -73,6 +75,12 @@ describe("ChatInterface target database", () => {
         datapoint_count: 0,
       },
     ]);
+    mockGetDatabaseSchema.mockResolvedValue({
+      connection_id: "db_mysql",
+      database_type: "mysql",
+      fetched_at: new Date().toISOString(),
+      tables: [],
+    });
   });
 
   it("sends the default selected connection as target_database", async () => {
@@ -141,5 +149,33 @@ describe("ChatInterface target database", () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(input);
     });
+  });
+
+  it("applies quick query templates into the input", async () => {
+    render(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockGetDatabaseSchema).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: "List Tables" }));
+    expect(
+      screen.getByDisplayValue("List all available tables.")
+    ).toBeInTheDocument();
+  });
+
+  it("opens and closes keyboard shortcuts modal from keyboard shortcut", async () => {
+    render(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(window, { key: "/", ctrlKey: true });
+    expect(
+      screen.getByRole("dialog", { name: "Keyboard shortcuts" })
+    ).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Keyboard shortcuts" })
+      ).not.toBeInTheDocument()
+    );
   });
 });

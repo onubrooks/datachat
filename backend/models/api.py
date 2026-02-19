@@ -41,8 +41,7 @@ class ChatRequest(BaseModel):
     synthesize_simple_sql: bool | None = Field(
         default=None,
         description=(
-            "Override for response synthesis on simple SQL answers "
-            "(None = use server default)."
+            "Override for response synthesis on simple SQL answers (None = use server default)."
         ),
     )
 
@@ -146,9 +145,7 @@ class ChatResponse(BaseModel):
     sources: list[DataSource] = Field(
         default_factory=list, description="Data sources used to answer"
     )
-    answer_source: str | None = Field(
-        default=None, description="Answer source (context|sql|error)"
-    )
+    answer_source: str | None = Field(default=None, description="Answer source (context|sql|error)")
     answer_confidence: float | None = Field(
         default=None, description="Confidence score for the answer"
     )
@@ -164,9 +161,7 @@ class ChatResponse(BaseModel):
     tool_approval_required: bool = Field(
         default=False, description="Whether tool execution needs approval"
     )
-    tool_approval_message: str | None = Field(
-        default=None, description="Approval request message"
-    )
+    tool_approval_message: str | None = Field(default=None, description="Approval request message")
     tool_approval_calls: list[dict] = Field(
         default_factory=list, description="Tool calls requiring approval"
     )
@@ -315,9 +310,7 @@ class SystemStatusResponse(BaseModel):
 class SystemInitializeRequest(BaseModel):
     """Initialization request payload."""
 
-    database_url: str | None = Field(
-        None, description="Database URL to use for initialization"
-    )
+    database_url: str | None = Field(None, description="Database URL to use for initialization")
     system_database_url: str | None = Field(
         None, description="System database URL for registry/profiling/demo"
     )

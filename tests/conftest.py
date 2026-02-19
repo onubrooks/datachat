@@ -186,6 +186,7 @@ def mock_openai_api_key(monkeypatch):
     """
     # Clear the settings cache to force reload with new env vars
     from backend.config import get_settings
+
     get_settings.cache_clear()
 
     test_key = "sk-test-key-1234567890-abcdefghijklmnop"  # 20+ chars

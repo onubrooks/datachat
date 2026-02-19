@@ -13,6 +13,7 @@ import pytest
 from backend.agents.sql import QueryCompilerPlan, SQLAgent
 from backend.llm.models import LLMResponse, LLMUsage
 from backend.models.agent import (
+    AgentMetadata,
     GeneratedSQL,
     InvestigationMemory,
     RetrievedDataPoint,
@@ -392,15 +393,18 @@ class TestExecution:
             clarifying_questions=[],
         )
 
-        with patch.object(
-            sql_agent,
-            "_build_generation_prompt",
-            new=AsyncMock(return_value=("prompt", compiler_plan)),
-        ), patch.object(
-            sql_agent,
-            "_request_sql_from_llm",
-            new=AsyncMock(side_effect=[first, second]),
-        ) as mock_request:
+        with (
+            patch.object(
+                sql_agent,
+                "_build_generation_prompt",
+                new=AsyncMock(return_value=("prompt", compiler_plan)),
+            ),
+            patch.object(
+                sql_agent,
+                "_request_sql_from_llm",
+                new=AsyncMock(side_effect=[first, second]),
+            ) as mock_request,
+        ):
             output = await sql_agent(sample_sql_agent_input)
 
         assert output.success is True
@@ -814,9 +818,7 @@ class TestPromptBuilding:
     """Test prompt construction logic."""
 
     @pytest.mark.asyncio
-    async def test_builds_generation_prompt_with_schema(
-        self, sql_agent, sample_sql_agent_input
-    ):
+    async def test_builds_generation_prompt_with_schema(self, sql_agent, sample_sql_agent_input):
         """Test generation prompt includes schema context."""
         prompt = await sql_agent._build_generation_prompt(sample_sql_agent_input)
 
@@ -1024,16 +1026,14 @@ class TestDatabaseContext:
         assert mock_live_context.await_args.kwargs["include_profile"] is False
 
     @pytest.mark.asyncio
-    async def test_prompt_includes_conversation_context(
-        self, sql_agent, sample_sql_agent_input
-    ):
+    async def test_prompt_includes_conversation_context(self, sql_agent, sample_sql_agent_input):
         sql_input = sample_sql_agent_input.model_copy(
             update={
                 "query": "sales",
                 "conversation_history": [
                     {"role": "user", "content": "Show me the first 5 rows"},
                     {"role": "assistant", "content": "Which table should I use?"},
-                ]
+                ],
             }
         )
         prompt = await sql_agent._build_generation_prompt(sql_input)
@@ -1051,7 +1051,9 @@ class TestDatabaseContext:
         mock_connector.close = AsyncMock()
 
         with (
-            patch("backend.agents.sql.create_connector", return_value=mock_connector) as connector_factory,
+            patch(
+                "backend.agents.sql.create_connector", return_value=mock_connector
+            ) as connector_factory,
             patch.object(
                 sql_agent,
                 "_fetch_live_schema_context",
@@ -1300,9 +1302,9 @@ class TestErrorHandling:
         self, sql_agent, sample_sql_agent_input
     ):
         content = (
-            "{\"sql\":\"SELECT store_id, SUM(quantity) "
-            "FROM public.grocery_sales_transactions GROUP BY store_id\", "
-            "\"explanation\":\"aggregate"
+            '{"sql":"SELECT store_id, SUM(quantity) '
+            'FROM public.grocery_sales_transactions GROUP BY store_id", '
+            '"explanation":"aggregate'
         )
 
         generated = sql_agent._parse_llm_response(content, sample_sql_agent_input)
@@ -1326,7 +1328,7 @@ class TestErrorHandling:
         self, sample_sql_agent_input
     ):
         malformed_response = LLMResponse(
-            content='{\"explanation\":\"missing sql\"}',
+            content='{"explanation":"missing sql"}',
             model="gpt-4o",
             usage=LLMUsage(prompt_tokens=20, completion_tokens=10, total_tokens=30),
             finish_reason="stop",
@@ -1399,9 +1401,9 @@ class TestErrorHandling:
 
         generated = sql_agent._parse_llm_response(content, sql_input)
 
-        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 5"
+        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 100"
 
-    def test_parse_llm_response_caps_explicit_limit_to_ten(
+    def test_parse_llm_response_respects_explicit_limit_within_hard_cap(
         self, sql_agent, sample_sql_agent_input
     ):
         sql_input = sample_sql_agent_input.model_copy(
@@ -1413,7 +1415,7 @@ class TestErrorHandling:
 
         generated = sql_agent._parse_llm_response(content, sql_input)
 
-        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 10"
+        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 50"
 
     def test_parse_llm_response_adds_default_limit_when_missing(
         self, sql_agent, sample_sql_agent_input
@@ -1425,7 +1427,7 @@ class TestErrorHandling:
 
         generated = sql_agent._parse_llm_response(content, sql_input)
 
-        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 5"
+        assert generated.sql == "SELECT * FROM public.grocery_stores LIMIT 100"
 
     def test_parse_llm_response_adds_outer_limit_when_only_subquery_has_limit(
         self, sql_agent, sample_sql_agent_input
@@ -1447,7 +1449,7 @@ class TestErrorHandling:
         generated = sql_agent._parse_llm_response(content, sql_input)
 
         assert "LIMIT 1" in generated.sql
-        assert generated.sql.endswith("LIMIT 5")
+        assert generated.sql.endswith("LIMIT 100")
 
     def test_parse_llm_response_keeps_top_level_parameterized_limit(
         self, sql_agent, sample_sql_agent_input
@@ -1505,3 +1507,234 @@ class TestInputValidation:
             await sql_agent(invalid_input)
 
         assert "Expected SQLAgentInput" in str(exc_info.value)
+
+
+class TestQueryDataPointTemplates:
+    """Test QueryDataPoint template matching and execution."""
+
+    def test_try_query_datapoint_template_returns_none_without_datapoints(self, sql_agent):
+        """Returns None when no datapoints in memory."""
+        memory = InvestigationMemory(
+            query="show top customers",
+            datapoints=[],
+            total_retrieved=0,
+            retrieval_mode="hybrid",
+            sources_used=[],
+        )
+        sql_input = SQLAgentInput(
+            query="show top customers",
+            investigation_memory=memory,
+        )
+
+        result = sql_agent._try_query_datapoint_template(sql_input)
+
+        assert result is None
+
+    def test_try_query_datapoint_template_ignores_non_query_datapoints(self, sql_agent):
+        """Ignores Schema and Business datapoints."""
+        memory = InvestigationMemory(
+            query="show top customers",
+            datapoints=[
+                RetrievedDataPoint(
+                    datapoint_id="table_sales_001",
+                    datapoint_type="Schema",
+                    name="Sales",
+                    score=0.9,
+                    source="vector",
+                    metadata={"table_name": "sales"},
+                ),
+            ],
+            total_retrieved=1,
+            retrieval_mode="hybrid",
+            sources_used=["table_sales_001"],
+        )
+        sql_input = SQLAgentInput(
+            query="show top customers",
+            investigation_memory=memory,
+        )
+
+        result = sql_agent._try_query_datapoint_template(sql_input)
+
+        assert result is None
+
+    def test_try_query_datapoint_template_uses_matching_template(self, sql_agent):
+        """Uses QueryDataPoint template when query matches."""
+        memory = InvestigationMemory(
+            query="show top customers by revenue",
+            datapoints=[
+                RetrievedDataPoint(
+                    datapoint_id="query_top_customers_001",
+                    datapoint_type="Query",
+                    name="Top Customers by Revenue",
+                    score=0.95,
+                    source="vector",
+                    metadata={
+                        "sql_template": (
+                            "SELECT customer_id, SUM(amount) as revenue "
+                            "FROM transactions "
+                            "GROUP BY customer_id "
+                            "ORDER BY revenue DESC LIMIT {limit}"
+                        ),
+                        "query_description": "Returns top customers by total revenue",
+                        "parameters": json.dumps({"limit": {"type": "integer", "default": 10}}),
+                    },
+                ),
+            ],
+            total_retrieved=1,
+            retrieval_mode="hybrid",
+            sources_used=["query_top_customers_001"],
+        )
+        sql_input = SQLAgentInput(
+            query="show top customers by revenue",
+            investigation_memory=memory,
+        )
+
+        result = sql_agent._try_query_datapoint_template(sql_input)
+
+        assert result is not None
+        assert result.confidence == 0.95
+        assert "query_top_customers_001" in result.used_datapoints
+        assert "LIMIT 10" in result.sql
+
+    def test_try_query_datapoint_template_uses_backend_variant(self, sql_agent):
+        """Uses backend-specific SQL variant when available."""
+        memory = InvestigationMemory(
+            query="show daily sales",
+            datapoints=[
+                RetrievedDataPoint(
+                    datapoint_id="query_daily_sales_001",
+                    datapoint_type="Query",
+                    name="Daily Sales Summary",
+                    score=0.90,
+                    source="vector",
+                    metadata={
+                        "sql_template": "SELECT date, SUM(amount) FROM sales GROUP BY date",
+                        "query_description": "Daily sales aggregation",
+                        "backend_variants": json.dumps(
+                            {
+                                "clickhouse": "SELECT date, SUM(amount) FROM sales GROUP BY date ORDER BY date"
+                            }
+                        ),
+                    },
+                ),
+            ],
+            total_retrieved=1,
+            retrieval_mode="hybrid",
+            sources_used=["query_daily_sales_001"],
+        )
+        sql_input = SQLAgentInput(
+            query="show daily sales",
+            investigation_memory=memory,
+            database_type="clickhouse",
+        )
+
+        result = sql_agent._try_query_datapoint_template(sql_input)
+
+        assert result is not None
+        assert "ORDER BY date" in result.sql
+
+    def test_fill_template_defaults_handles_string_params(self, sql_agent):
+        """Fills string parameters with quotes."""
+        sql = "SELECT * FROM users WHERE status = {status}"
+        params = {"status": {"type": "string", "default": "active"}}
+
+        result = sql_agent._fill_template_defaults(sql, params)
+
+        assert result == "SELECT * FROM users WHERE status = 'active'"
+
+    def test_fill_template_defaults_handles_integer_params(self, sql_agent):
+        """Fills integer parameters without quotes."""
+        sql = "SELECT * FROM users LIMIT {limit}"
+        params = {"limit": {"type": "integer", "default": 10}}
+
+        result = sql_agent._fill_template_defaults(sql, params)
+
+        assert result == "SELECT * FROM users LIMIT 10"
+
+    def test_fill_template_defaults_handles_boolean_params(self, sql_agent):
+        """Fills boolean parameters as TRUE/FALSE."""
+        sql = "SELECT * FROM users WHERE is_active = {active}"
+        params = {"active": {"type": "boolean", "default": True}}
+
+        result = sql_agent._fill_template_defaults(sql, params)
+
+        assert result == "SELECT * FROM users WHERE is_active = TRUE"
+
+    def test_fill_template_defaults_handles_json_string_params(self, sql_agent):
+        """Handles parameters as JSON string."""
+        sql = "SELECT * FROM users LIMIT {limit}"
+        params = '{"limit": {"type": "integer", "default": 5}}'
+
+        result = sql_agent._fill_template_defaults(sql, params)
+
+        assert result == "SELECT * FROM users LIMIT 5"
+
+    def test_query_matches_template_by_name_overlap(self, sql_agent):
+        """Matches when query shares words with template name."""
+        query = "show top customers by revenue"
+        name = "Top Customers Revenue"
+        description = "Returns top customers by total revenue"
+
+        assert sql_agent._query_matches_template(query.lower(), name.lower(), description.lower())
+
+    def test_query_matches_template_by_description_keywords(self, sql_agent):
+        """Matches when query shares keywords with description."""
+        query = "daily sales aggregation report breakdown"
+        name = "Sales Query"
+        description = "aggregates daily sales totals for reporting breakdown"
+
+        assert sql_agent._query_matches_template(query.lower(), name.lower(), description.lower())
+
+    def test_query_does_not_match_unrelated_template(self, sql_agent):
+        """Does not match unrelated queries."""
+        query = "show user activity"
+        name = "Revenue Report"
+        description = "Monthly revenue breakdown by region"
+
+        assert not sql_agent._query_matches_template(
+            query.lower(), name.lower(), description.lower()
+        )
+
+    @pytest.mark.asyncio
+    async def test_generate_sql_uses_query_datapoint_template(self, sql_agent):
+        """_generate_sql uses QueryDataPoint template when matched."""
+        memory = InvestigationMemory(
+            query="top customers revenue",
+            datapoints=[
+                RetrievedDataPoint(
+                    datapoint_id="query_top_cust_001",
+                    datapoint_type="Query",
+                    name="Top Customers by Revenue",
+                    score=0.95,
+                    source="vector",
+                    metadata={
+                        "sql_template": (
+                            "SELECT customer_id, SUM(amount) as revenue "
+                            "FROM orders GROUP BY customer_id "
+                            "ORDER BY revenue DESC LIMIT {limit}"
+                        ),
+                        "query_description": "top customers by total revenue",
+                        "parameters": '{"limit": {"type": "integer", "default": 5}}',
+                    },
+                ),
+            ],
+            total_retrieved=1,
+            retrieval_mode="hybrid",
+            sources_used=["query_top_cust_001"],
+        )
+        sql_input = SQLAgentInput(
+            query="top customers revenue",
+            investigation_memory=memory,
+            database_type="postgresql",
+        )
+
+        result = await sql_agent._generate_sql(
+            sql_input,
+            metadata=AgentMetadata(agent_name="SQLAgent"),
+            runtime_stats={},
+        )
+
+        assert result.confidence >= 0.95
+        assert "query_top_cust_001" in result.used_datapoints
+        assert "LIMIT 5" in result.sql
+        sql_agent.llm.generate.assert_not_called()
