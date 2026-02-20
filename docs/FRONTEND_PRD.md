@@ -283,7 +283,12 @@ const categorizeError = (errorMessage: string) => {
 
 ### Component Extraction
 
-Move visualization rendering to dedicated components:
+| Item | Scope | Status |
+|------|-------|--------|
+| ✅ Visualization extraction | `Message.tsx` chart rendering moved into dedicated components | Done |
+| Remaining extraction | Break down other large UI surfaces (chat message actions, feedback panel, table/export actions) | Pending |
+
+Implemented visualization structure:
 
 ```
 frontend/src/components/visualizations/

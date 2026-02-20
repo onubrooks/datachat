@@ -110,6 +110,7 @@ export function DatabaseManager() {
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [depth, setDepth] = useState("metrics_basic");
   const addConnectionRef = useRef<HTMLDivElement | null>(null);
+  const previousGenerationStateRef = useRef<{ jobId: string; status: string } | null>(null);
 
   const dedupeApproved = useCallback((items: DataPointSummary[]) => {
     const seen = new Map<string, DataPointSummary>();
@@ -283,6 +284,26 @@ export function DatabaseManager() {
       queryClient.invalidateQueries({ queryKey: ["generation-latest"] }),
     ]);
   }, [queryClient]);
+
+  useEffect(() => {
+    const current = generationJob
+      ? { jobId: generationJob.job_id, status: generationJob.status }
+      : null;
+    const previous = previousGenerationStateRef.current;
+
+    if (previous && current && previous.jobId === current.jobId) {
+      const nowTerminal = current.status === "completed" || current.status === "failed";
+      const wasTerminal = previous.status === "completed" || previous.status === "failed";
+      if (nowTerminal && !wasTerminal) {
+        void Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["pending-datapoints"] }),
+          queryClient.invalidateQueries({ queryKey: ["approved-datapoints"] }),
+        ]);
+      }
+    }
+
+    previousGenerationStateRef.current = current;
+  }, [generationJob, queryClient]);
 
   const handleToolProfile = async () => {
     setToolApprovalOpen(true);

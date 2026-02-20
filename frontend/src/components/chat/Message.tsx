@@ -569,14 +569,21 @@ export function Message({
     }
     setFeedbackSubmitting(true);
     try {
+      const feedbackAnswerSource =
+        activeSubAnswer?.answer_source ?? message.answer_source ?? null;
+      const feedbackAnswerConfidence =
+        typeof activeSubAnswer?.answer_confidence === "number"
+          ? activeSubAnswer.answer_confidence
+          : typeof message.answer_confidence === "number"
+            ? message.answer_confidence
+            : null;
       await onSubmitFeedback({
         category,
         sentiment: sentiment ?? null,
         message: messageText ?? null,
         message_id: message.id,
-        answer_source: message.answer_source ?? null,
-        answer_confidence:
-          typeof message.answer_confidence === "number" ? message.answer_confidence : null,
+        answer_source: feedbackAnswerSource,
+        answer_confidence: feedbackAnswerConfidence,
         answer: activeContent || null,
         sql: activeSql ?? null,
         sources: (message.sources || []) as Array<Record<string, unknown>>,

@@ -363,6 +363,47 @@ describe("Message", () => {
     expect(screen.getByText("Showing 1-25 of 120 rows")).toBeInTheDocument();
   });
 
+  it("uses active sub-answer source metadata when submitting feedback", async () => {
+    const onSubmitFeedback = vi.fn().mockResolvedValue(undefined);
+    render(
+      <Message
+        displayMode="tabbed"
+        message={{
+          id: "msg-feedback-sub-answer",
+          role: "assistant",
+          content: "Composite answer",
+          answer_source: "multi",
+          answer_confidence: 0.22,
+          sub_answers: [
+            {
+              index: 1,
+              query: "Q1",
+              answer: "A1",
+              answer_source: "context",
+              answer_confidence: 0.45,
+            },
+            {
+              index: 2,
+              query: "Q2",
+              answer: "A2",
+              answer_source: "semantic_sql",
+              answer_confidence: 0.91,
+            },
+          ],
+          timestamp: new Date(),
+        }}
+        onSubmitFeedback={onSubmitFeedback}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Q2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rate answer helpful" }));
+
+    await waitFor(() => expect(onSubmitFeedback).toHaveBeenCalledTimes(1));
+    expect(onSubmitFeedback.mock.calls[0][0].answer_source).toBe("semantic_sql");
+    expect(onSubmitFeedback.mock.calls[0][0].answer_confidence).toBe(0.91);
+  });
+
   it("supports markdown export and share link actions for tabular results", async () => {
     clipboardWriteText.mockResolvedValue(undefined);
     render(
