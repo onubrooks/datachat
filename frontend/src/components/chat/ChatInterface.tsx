@@ -202,8 +202,8 @@ export function ChatInterface() {
   const [toolApprovalMessage, setToolApprovalMessage] = useState<string | null>(null);
   const [toolApprovalRunning, setToolApprovalRunning] = useState(false);
   const [toolApprovalError, setToolApprovalError] = useState<string | null>(null);
-  const [isHistorySidebarOpen, setIsHistorySidebarOpen] = useState(true);
-  const [isSchemaSidebarOpen, setIsSchemaSidebarOpen] = useState(true);
+  const [isHistorySidebarOpen, setIsHistorySidebarOpen] = useState(false);
+  const [isSchemaSidebarOpen, setIsSchemaSidebarOpen] = useState(false);
   const [conversationHistory, setConversationHistory] = useState<ConversationSnapshot[]>([]);
   const [schemaTables, setSchemaTables] = useState<DatabaseSchemaTable[]>([]);
   const [schemaLoading, setSchemaLoading] = useState(false);

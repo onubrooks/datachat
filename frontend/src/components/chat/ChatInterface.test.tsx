@@ -256,6 +256,7 @@ describe("ChatInterface target database", () => {
     renderWithProviders(<ChatInterface />);
     await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mockGetDatabaseSchema).toHaveBeenCalled());
+    fireEvent.click(screen.getByLabelText("Toggle conversation history sidebar"));
 
     expect(screen.getByText("Sales trend review")).toBeInTheDocument();
     expect(screen.getByText("Inventory checks")).toBeInTheDocument();
