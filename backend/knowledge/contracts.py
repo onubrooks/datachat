@@ -57,6 +57,32 @@ def _metadata_value(datapoint: DataPoint, key: str) -> str | list[str] | None:
     return None
 
 
+def _lifecycle_value(datapoint: DataPoint, key: str) -> str | None:
+    metadata = datapoint.metadata if isinstance(datapoint.metadata, dict) else {}
+    lifecycle = metadata.get("lifecycle")
+    if not isinstance(lifecycle, dict):
+        return None
+    value = lifecycle.get(key)
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _source_tier(datapoint: DataPoint) -> str:
+    metadata = datapoint.metadata if isinstance(datapoint.metadata, dict) else {}
+    raw = metadata.get("source_tier")
+    if raw is None:
+        return "unknown"
+    tier = str(raw).strip().lower()
+    return tier or "unknown"
+
+
+def _has_lifecycle_block(datapoint: DataPoint) -> bool:
+    metadata = datapoint.metadata if isinstance(datapoint.metadata, dict) else {}
+    return isinstance(metadata.get("lifecycle"), dict)
+
+
 def _missing_issue(*, code: str, message: str, field: str, severity: Severity) -> ContractIssue:
     return ContractIssue(code=code, message=message, field=field, severity=severity)
 
@@ -104,6 +130,48 @@ def validate_datapoint_contract(
                 severity=warning_level,
             )
         )
+
+    should_validate_lifecycle = _has_lifecycle_block(datapoint) or _source_tier(datapoint) in {
+        "managed",
+        "user",
+    }
+    if should_validate_lifecycle:
+        if not _lifecycle_value(datapoint, "version"):
+            report.issues.append(
+                _missing_issue(
+                    code="missing_lifecycle_version",
+                    message="Metadata lifecycle should include semantic version metadata.lifecycle.version.",
+                    field="metadata.lifecycle.version",
+                    severity="warning",
+                )
+            )
+        if not _lifecycle_value(datapoint, "changed_by"):
+            report.issues.append(
+                _missing_issue(
+                    code="missing_lifecycle_changed_by",
+                    message="Metadata lifecycle should include metadata.lifecycle.changed_by.",
+                    field="metadata.lifecycle.changed_by",
+                    severity="warning",
+                )
+            )
+        if not _lifecycle_value(datapoint, "changed_reason"):
+            report.issues.append(
+                _missing_issue(
+                    code="missing_lifecycle_changed_reason",
+                    message="Metadata lifecycle should include metadata.lifecycle.changed_reason.",
+                    field="metadata.lifecycle.changed_reason",
+                    severity="warning",
+                )
+            )
+        if not _lifecycle_value(datapoint, "reviewer"):
+            report.issues.append(
+                _missing_issue(
+                    code="missing_lifecycle_reviewer",
+                    message="Metadata lifecycle should include metadata.lifecycle.reviewer.",
+                    field="metadata.lifecycle.reviewer",
+                    severity="warning",
+                )
+            )
 
     if isinstance(datapoint, SchemaDataPoint):
         freshness = datapoint.freshness or _metadata_value(datapoint, "freshness")

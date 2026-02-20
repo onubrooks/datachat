@@ -39,7 +39,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -56,6 +56,11 @@ from backend.connectors.factory import create_connector, infer_database_type
 from backend.connectors.postgres import PostgresConnector
 from backend.database.manager import DatabaseConnectionManager
 from backend.initialization.initializer import SystemInitializer
+from backend.knowledge.conflicts import (
+    ConflictMode,
+    DataPointConflictError,
+    resolve_datapoint_conflicts,
+)
 from backend.knowledge.contracts import DataPointContractReport, validate_contracts
 from backend.knowledge.datapoints import DataPointLoader
 from backend.knowledge.graph import KnowledgeGraph
@@ -2724,6 +2729,13 @@ def quickstart(
     help="Treat contract warnings as errors during sync mode.",
 )
 @click.option(
+    "--conflict-mode",
+    type=click.Choice(["error", "prefer_user", "prefer_managed", "prefer_latest"]),
+    default="error",
+    show_default=True,
+    help="Conflict resolution policy for duplicate semantic definitions in sync mode.",
+)
+@click.option(
     "--profile-connection-id",
     default=None,
     help="Connection ID for mode=profile.",
@@ -2754,6 +2766,7 @@ def train(
     global_scope: bool,
     strict_contracts: bool,
     fail_on_contract_warnings: bool,
+    conflict_mode: str,
     profile_connection_id: str | None,
     sample_size: int,
     tables: tuple[str, ...],
@@ -2780,6 +2793,7 @@ def train(
                 global_scope=global_scope,
                 strict_contracts=strict_contracts,
                 fail_on_contract_warnings=fail_on_contract_warnings,
+                conflict_mode=conflict_mode,
             )
         else:
             if not profile_connection_id:
@@ -3694,12 +3708,20 @@ def add_datapoint(
     default=False,
     help="Fail when contract warnings are present.",
 )
+@click.option(
+    "--conflict-mode",
+    type=click.Choice(["error", "prefer_user", "prefer_managed", "prefer_latest"]),
+    default="error",
+    show_default=True,
+    help="Conflict resolution policy for duplicate semantic definitions.",
+)
 def sync_datapoints(
     datapoints_dir: str,
     connection_id: str | None,
     global_scope: bool,
     strict_contracts: bool,
     fail_on_contract_warnings: bool,
+    conflict_mode: str,
 ):
     """Rebuild vector store and knowledge graph from DataPoints directory."""
 
@@ -3749,6 +3771,33 @@ def sync_datapoints(
                 fail_on_warnings=fail_on_contract_warnings,
             ):
                 sys.exit(1)
+
+            try:
+                resolved_conflict_mode = cast(ConflictMode, conflict_mode)
+                resolution = resolve_datapoint_conflicts(
+                    datapoints,
+                    mode=resolved_conflict_mode,
+                )
+            except DataPointConflictError as exc:
+                console.print(f"[red]Conflict validation failed: {exc}[/red]")
+                sys.exit(1)
+
+            datapoints = resolution.datapoints
+            if resolution.conflicts and conflict_mode != "error":
+                console.print(
+                    f"[yellow]Resolved {len(resolution.conflicts)} semantic conflict(s) "
+                    f"with --conflict-mode={conflict_mode}.[/yellow]"
+                )
+                for conflict in resolution.conflicts[:5]:
+                    if not conflict.resolved_datapoint_id:
+                        continue
+                    console.print(
+                        f"[dim]• {conflict.key} -> {conflict.resolved_datapoint_id}[/dim]"
+                    )
+                if len(resolution.conflicts) > 5:
+                    console.print(
+                        f"[dim]… +{len(resolution.conflicts) - 5} more conflict decisions[/dim]"
+                    )
 
             # Rebuild vector store
             console.print("\n[cyan]Rebuilding vector store...[/cyan]")

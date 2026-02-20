@@ -4,14 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from backend.knowledge.conflicts import (
+    ConflictMode,
+    DataPointConflict,
+    resolve_datapoint_conflicts,
+)
 from backend.knowledge.datapoints import DataPointLoader
 from backend.models.datapoint import DataPoint
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -80,6 +88,7 @@ class SyncOrchestrator:
         *,
         scope: str = "auto",
         connection_id: str | None = None,
+        conflict_mode: ConflictMode = "error",
     ) -> UUID:
         job_id = uuid4()
         self._schedule_job(
@@ -88,12 +97,20 @@ class SyncOrchestrator:
             None,
             scope=scope,
             connection_id=connection_id,
+            conflict_mode=conflict_mode,
         )
         return job_id
 
-    def enqueue_sync_incremental(self, datapoint_ids: Iterable[str]) -> UUID:
+    def enqueue_sync_incremental(
+        self, datapoint_ids: Iterable[str], *, conflict_mode: ConflictMode = "error"
+    ) -> UUID:
         job_id = uuid4()
-        self._schedule_job(job_id, "incremental", list(datapoint_ids))
+        self._schedule_job(
+            job_id,
+            "incremental",
+            list(datapoint_ids),
+            conflict_mode=conflict_mode,
+        )
         return job_id
 
     async def sync_all(
@@ -101,14 +118,26 @@ class SyncOrchestrator:
         *,
         scope: str = "auto",
         connection_id: str | None = None,
+        conflict_mode: ConflictMode = "error",
     ) -> SyncJob:
         job = self._start_job(uuid4(), "full")
-        await self._run_sync_all(job, scope=scope, connection_id=connection_id)
+        await self._run_sync_all(
+            job,
+            scope=scope,
+            connection_id=connection_id,
+            conflict_mode=conflict_mode,
+        )
         return job
 
-    async def sync_incremental(self, datapoint_ids: Iterable[str]) -> SyncJob:
+    async def sync_incremental(
+        self, datapoint_ids: Iterable[str], *, conflict_mode: ConflictMode = "error"
+    ) -> SyncJob:
         job = self._start_job(uuid4(), "incremental")
-        await self._run_sync_incremental(job, list(datapoint_ids))
+        await self._run_sync_incremental(
+            job,
+            list(datapoint_ids),
+            conflict_mode=conflict_mode,
+        )
         return job
 
     def _schedule_job(
@@ -119,6 +148,7 @@ class SyncOrchestrator:
         *,
         scope: str = "auto",
         connection_id: str | None = None,
+        conflict_mode: ConflictMode = "error",
     ) -> None:
         if not self._loop:
             raise RuntimeError("Sync orchestrator requires an event loop")
@@ -127,10 +157,13 @@ class SyncOrchestrator:
                 self._start_job(job_id, sync_type),
                 scope=scope,
                 connection_id=connection_id,
+                conflict_mode=conflict_mode,
             )
         else:
             coro = self._run_sync_incremental(
-                self._start_job(job_id, sync_type), datapoint_ids or []
+                self._start_job(job_id, sync_type),
+                datapoint_ids or [],
+                conflict_mode=conflict_mode,
             )
         asyncio.run_coroutine_threadsafe(coro, self._loop)
 
@@ -150,6 +183,7 @@ class SyncOrchestrator:
         *,
         scope: str = "auto",
         connection_id: str | None = None,
+        conflict_mode: ConflictMode = "error",
     ) -> None:
         async with self._lock:
             try:
@@ -157,6 +191,9 @@ class SyncOrchestrator:
                     scope=scope,
                     connection_id=connection_id,
                 )
+                resolution = resolve_datapoint_conflicts(datapoints, mode=conflict_mode)
+                self._log_conflict_decisions(resolution.conflicts)
+                datapoints = resolution.datapoints
                 job.total_datapoints = len(datapoints)
 
                 await self._vector_store.clear()
@@ -175,11 +212,23 @@ class SyncOrchestrator:
             finally:
                 job.finished_at = datetime.now(UTC)
 
-    async def _run_sync_incremental(self, job: SyncJob, datapoint_ids: list[str]) -> None:
+    async def _run_sync_incremental(
+        self,
+        job: SyncJob,
+        datapoint_ids: list[str],
+        *,
+        conflict_mode: ConflictMode = "error",
+    ) -> None:
         async with self._lock:
             try:
                 job.total_datapoints = len(datapoint_ids)
                 load_result = self._load_datapoints_by_id(datapoint_ids)
+                resolution = resolve_datapoint_conflicts(
+                    load_result.datapoints,
+                    mode=conflict_mode,
+                )
+                self._log_conflict_decisions(resolution.conflicts)
+                load_result.datapoints = resolution.datapoints
 
                 if load_result.ids_to_delete:
                     await self._vector_store.delete(load_result.ids_to_delete)
@@ -284,6 +333,22 @@ class SyncOrchestrator:
             ids_to_delete=ids_to_delete,
             errors=load_errors,
         )
+
+    @staticmethod
+    def _log_conflict_decisions(conflicts: list[DataPointConflict]) -> None:
+        for conflict in conflicts:
+            if not conflict.resolved_datapoint_id:
+                continue
+            logger.info(
+                "datapoint_conflict_resolved",
+                extra={
+                    "conflict_key": conflict.key,
+                    "mode": conflict.mode,
+                    "winner_datapoint_id": conflict.resolved_datapoint_id,
+                    "candidate_datapoint_ids": conflict.datapoint_ids,
+                    "candidate_source_tiers": conflict.source_tiers,
+                },
+            )
 
     def _collect_datapoint_files(self) -> list[Path]:
         if not self._datapoints_dir.exists():

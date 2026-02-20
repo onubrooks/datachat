@@ -178,6 +178,23 @@ Approve payload supports optional edits:
 - `PUT /datapoints/{id}` - Update a DataPoint.
 - `DELETE /datapoints/{id}` - Delete a DataPoint.
 
+`POST /sync` supports conflict handling controls:
+
+```json
+{
+  "scope": "auto",
+  "connection_id": null,
+  "conflict_mode": "error"
+}
+```
+
+`conflict_mode` values:
+
+- `error` (default): fail sync on conflicting semantic definitions.
+- `prefer_user`: keep user-tier definitions when conflicts exist.
+- `prefer_managed`: keep managed-tier definitions when conflicts exist.
+- `prefer_latest`: keep the highest lifecycle version / most recent lifecycle timestamp.
+
 `GET /datapoints` returns DataPoints currently loaded in the vector store
 (the same effective set used during retrieval/chat), deduplicated by
 `datapoint_id` with priority:
@@ -191,6 +208,16 @@ List item shape includes:
 - `name`
 - `source_tier` (for example `managed`, `example`, `custom`)
 - `source_path` (source file path when available)
+- `lifecycle_version`
+- `lifecycle_reviewer`
+- `lifecycle_changed_by`
+- `lifecycle_changed_reason`
+- `lifecycle_changed_at`
+
+`POST /datapoints` and `PUT /datapoints/{id}` auto-populate `metadata.lifecycle`
+for authoring auditability:
+
+- `owner`, `reviewer`, `version`, `changed_by`, `changed_reason`, `changed_at`
 
 ## Tools
 

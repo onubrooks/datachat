@@ -11,7 +11,15 @@ import pytest
 from backend.sync.orchestrator import SyncOrchestrator
 
 
-def _schema_datapoint(datapoint_id: str) -> dict:
+def _schema_datapoint(datapoint_id: str, *, table_name: str | None = None) -> dict:
+    resolved_table_name = table_name
+    if not resolved_table_name:
+        slug = datapoint_id
+        if slug.startswith("table_"):
+            slug = slug[len("table_") :]
+        if "_" in slug:
+            slug = slug.rsplit("_", 1)[0]
+        resolved_table_name = f"public.{slug}"
     return {
         "datapoint_id": datapoint_id,
         "type": "Schema",
@@ -23,7 +31,7 @@ def _schema_datapoint(datapoint_id: str) -> dict:
             "exclusions": "None documented",
             "confidence_notes": "Validated in unit test fixtures",
         },
-        "table_name": "public.orders",
+        "table_name": resolved_table_name,
         "schema": "public",
         "business_purpose": "Orders table for testing.",
         "key_columns": [
@@ -47,6 +55,46 @@ def _write_datapoint(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle)
+
+
+def _business_datapoint(
+    datapoint_id: str,
+    *,
+    owner: str = "data@example.com",
+    source_tier: str = "managed",
+    version: str | None = None,
+) -> dict:
+    metadata = {
+        "grain": "daily_store",
+        "exclusions": "Refunded orders are excluded",
+        "confidence_notes": "Validated against finance monthly close",
+        "freshness": "daily",
+        "source_tier": source_tier,
+    }
+    lifecycle = {
+        "owner": owner,
+        "reviewer": "reviewer@example.com",
+        "changed_by": "sync-test",
+        "changed_reason": "fixture",
+        "changed_at": "2026-02-20T00:00:00+00:00",
+    }
+    if version:
+        lifecycle["version"] = version
+    metadata["lifecycle"] = lifecycle
+    return {
+        "datapoint_id": datapoint_id,
+        "type": "Business",
+        "name": "Total Revenue",
+        "owner": owner,
+        "tags": [],
+        "metadata": metadata,
+        "calculation": "SUM(public.orders.amount)",
+        "synonyms": ["revenue"],
+        "business_rules": ["Completed transactions only"],
+        "related_tables": ["public.orders"],
+        "unit": "USD",
+        "aggregation": "SUM",
+    }
 
 
 @pytest.mark.asyncio
@@ -261,3 +309,90 @@ async def test_full_sync_fails_when_contracts_are_invalid(tmp_path: Path):
     assert job.status == "failed"
     assert job.error is not None
     assert "contract" in job.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_full_sync_rejects_semantic_conflicts_without_resolution_mode(tmp_path: Path):
+    vector_store = AsyncMock()
+    vector_store.clear = AsyncMock()
+    vector_store.add_datapoints = AsyncMock()
+
+    graph = MagicMock()
+    graph.clear = MagicMock()
+    graph.add_datapoint = MagicMock()
+
+    datapoints_dir = tmp_path / "datapoints"
+    _write_datapoint(
+        datapoints_dir / "managed" / "metric_revenue_managed_001.json",
+        _business_datapoint(
+            "metric_revenue_managed_001",
+            owner="managed@example.com",
+            source_tier="managed",
+            version="1.0.0",
+        ),
+    )
+    _write_datapoint(
+        datapoints_dir / "user" / "metric_revenue_user_001.json",
+        _business_datapoint(
+            "metric_revenue_user_001",
+            owner="user@example.com",
+            source_tier="user",
+            version="1.0.1",
+        ),
+    )
+
+    orchestrator = SyncOrchestrator(
+        vector_store=vector_store,
+        knowledge_graph=graph,
+        datapoints_dir=datapoints_dir,
+    )
+
+    job = await orchestrator.sync_all()
+
+    assert job.status == "failed"
+    assert job.error is not None
+    assert "conflict" in job.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_full_sync_resolves_semantic_conflicts_with_prefer_user_mode(tmp_path: Path):
+    vector_store = AsyncMock()
+    vector_store.clear = AsyncMock()
+    vector_store.add_datapoints = AsyncMock()
+
+    graph = MagicMock()
+    graph.clear = MagicMock()
+    graph.add_datapoint = MagicMock()
+
+    datapoints_dir = tmp_path / "datapoints"
+    _write_datapoint(
+        datapoints_dir / "managed" / "metric_revenue_managed_001.json",
+        _business_datapoint(
+            "metric_revenue_managed_001",
+            owner="managed@example.com",
+            source_tier="managed",
+            version="1.0.0",
+        ),
+    )
+    _write_datapoint(
+        datapoints_dir / "user" / "metric_revenue_user_001.json",
+        _business_datapoint(
+            "metric_revenue_user_001",
+            owner="user@example.com",
+            source_tier="user",
+            version="1.0.1",
+        ),
+    )
+
+    orchestrator = SyncOrchestrator(
+        vector_store=vector_store,
+        knowledge_graph=graph,
+        datapoints_dir=datapoints_dir,
+    )
+
+    job = await orchestrator.sync_all(conflict_mode="prefer_user")
+
+    assert job.status == "completed"
+    synced = vector_store.add_datapoints.await_args.args[0]
+    assert len(synced) == 1
+    assert synced[0].datapoint_id == "metric_revenue_user_001"

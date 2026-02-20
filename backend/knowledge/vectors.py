@@ -577,12 +577,24 @@ class VectorStore:
             source_tier = datapoint.metadata.get("source_tier")
             source_path = datapoint.metadata.get("source_path")
             connection_id = datapoint.metadata.get("connection_id")
+            lifecycle = datapoint.metadata.get("lifecycle")
             if source_tier:
                 metadata["source_tier"] = str(source_tier)
             if source_path:
                 metadata["source_path"] = str(source_path)
             if connection_id:
                 metadata["connection_id"] = str(connection_id)
+            if isinstance(lifecycle, dict):
+                if lifecycle.get("version"):
+                    metadata["lifecycle_version"] = str(lifecycle["version"])
+                if lifecycle.get("reviewer"):
+                    metadata["lifecycle_reviewer"] = str(lifecycle["reviewer"])
+                if lifecycle.get("changed_by"):
+                    metadata["lifecycle_changed_by"] = str(lifecycle["changed_by"])
+                if lifecycle.get("changed_reason"):
+                    metadata["lifecycle_changed_reason"] = str(lifecycle["changed_reason"])
+                if lifecycle.get("changed_at"):
+                    metadata["lifecycle_changed_at"] = str(lifecycle["changed_at"])
 
         # Add type-specific metadata
         if hasattr(datapoint, "table_name"):
