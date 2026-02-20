@@ -14,7 +14,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Send,
   Trash2,
@@ -29,16 +29,14 @@ import {
   PanelLeftClose,
   PanelRightOpen,
   PanelRightClose,
-  ChevronDown,
-  ChevronRight,
-  History,
   Plus,
-  Table2,
   Keyboard,
-  Search,
   FileCode2,
 } from "lucide-react";
 import { Message, type MessageFeedbackPayload } from "./Message";
+import { ConversationHistorySidebar } from "./ConversationHistorySidebar";
+import { SchemaExplorerSidebar } from "./SchemaExplorerSidebar";
+import type { ConversationSnapshot, SerializedMessage } from "./chatTypes";
 import { AgentStatus } from "../agents/AgentStatus";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -47,6 +45,7 @@ import { useChatStore, type Message as ChatStoreMessage } from "@/lib/stores/cha
 import {
   apiClient,
   wsClient,
+  type ConversationSnapshotPayload,
   type DatabaseConnection,
   type DatabaseSchemaTable,
   type SetupStep,
@@ -67,20 +66,29 @@ const CONVERSATION_HISTORY_STORAGE_KEY = "datachat.conversation.history.v1";
 const MAX_CONVERSATION_HISTORY = 20;
 const MAX_CONVERSATION_MESSAGES = 80;
 
-type SerializedMessage = Omit<ChatStoreMessage, "timestamp"> & {
-  timestamp: string;
-};
+const serializeMessages = (items: ChatStoreMessage[]): SerializedMessage[] =>
+  items.slice(-MAX_CONVERSATION_MESSAGES).map((message) => ({
+    ...message,
+    timestamp:
+      message.timestamp instanceof Date
+        ? message.timestamp.toISOString()
+        : new Date(message.timestamp).toISOString(),
+  }));
 
-interface ConversationSnapshot {
-  frontendSessionId: string;
-  title: string;
-  targetDatabaseId: string | null;
-  conversationId: string | null;
-  sessionSummary: string | null;
-  sessionState: Record<string, unknown> | null;
-  updatedAt: string;
-  messages: SerializedMessage[];
-}
+const deserializeMessages = (items: SerializedMessage[]): ChatStoreMessage[] =>
+  items.map((message) => ({
+    ...message,
+    timestamp: new Date(message.timestamp),
+  }));
+
+const buildConversationTitle = (items: ChatStoreMessage[]): string => {
+  const firstUserMessage = items.find((message) => message.role === "user")?.content?.trim();
+  if (!firstUserMessage) {
+    return "Untitled conversation";
+  }
+  const compact = firstUserMessage.replace(/\s+/g, " ");
+  return compact.length > 70 ? `${compact.slice(0, 67)}...` : compact;
+};
 
 const QUERY_TEMPLATES: Array<{ id: string; label: string; build: (selectedTable?: string | null) => string }> = [
   {
@@ -141,6 +149,7 @@ const QUERY_TEMPLATES: Array<{ id: string; label: string; build: (selectedTable?
 export function ChatInterface() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const queryClient = useQueryClient();
   const {
     messages,
     conversationId,
@@ -212,6 +221,9 @@ export function ChatInterface() {
   const shortcutsCloseButtonRef = useRef<HTMLButtonElement>(null);
   const toolApprovalApproveButtonRef = useRef<HTMLButtonElement>(null);
   const loadedShareTokenRef = useRef<string | null>(null);
+  const schemaDiscoveryStartRef = useRef<number>(Date.now());
+  const schemaDiscoveryTrackedRef = useRef(false);
+  const schemaLoadedTrackedRef = useRef(false);
   const restoreInputFocus = useCallback((targetMode?: "nl" | "sql") => {
     const mode = targetMode || composerModeRef.current;
     window.requestAnimationFrame(() => {
@@ -242,29 +254,11 @@ export function ChatInterface() {
     enabled: Boolean(targetDatabaseId),
   });
 
-  const serializeMessages = (items: ChatStoreMessage[]): SerializedMessage[] =>
-    items.slice(-MAX_CONVERSATION_MESSAGES).map((message) => ({
-      ...message,
-      timestamp:
-        message.timestamp instanceof Date
-          ? message.timestamp.toISOString()
-          : new Date(message.timestamp).toISOString(),
-    }));
-
-  const deserializeMessages = (items: SerializedMessage[]): ChatStoreMessage[] =>
-    items.map((message) => ({
-      ...message,
-      timestamp: new Date(message.timestamp),
-    }));
-
-  const buildConversationTitle = (items: ChatStoreMessage[]): string => {
-    const firstUserMessage = items.find((message) => message.role === "user")?.content?.trim();
-    if (!firstUserMessage) {
-      return "Untitled conversation";
-    }
-    const compact = firstUserMessage.replace(/\s+/g, " ");
-    return compact.length > 70 ? `${compact.slice(0, 67)}...` : compact;
-  };
+  const conversationHistoryQuery = useQuery({
+    queryKey: ["ui-conversations"],
+    queryFn: async () => apiClient.listConversations(MAX_CONVERSATION_HISTORY),
+    retry: false,
+  });
 
   const persistConversationHistory = (items: ConversationSnapshot[]) => {
     window.localStorage.setItem(
@@ -274,56 +268,157 @@ export function ChatInterface() {
     setConversationHistory(items);
   };
 
-  const upsertConversationSnapshot = (
-    override: {
-      frontendSessionId?: string;
-      messages?: ChatStoreMessage[];
-      conversationId?: string | null;
-      sessionSummary?: string | null;
-      sessionState?: Record<string, unknown> | null;
-      targetDatabaseId?: string | null;
-    } = {}
-  ) => {
-    const snapshotMessages = override.messages || messages;
-    if (!snapshotMessages.some((message) => message.role === "user")) {
-      return;
-    }
-    const nowIso = new Date().toISOString();
-    const snapshot: ConversationSnapshot = {
-      frontendSessionId: override.frontendSessionId || frontendSessionId,
-      title: buildConversationTitle(snapshotMessages),
-      targetDatabaseId:
-        override.targetDatabaseId === undefined
-          ? targetDatabaseId
-          : override.targetDatabaseId,
-      conversationId:
-        override.conversationId === undefined
-          ? conversationId
-          : override.conversationId,
-      sessionSummary:
-        override.sessionSummary === undefined
-          ? sessionSummary
-          : override.sessionSummary,
-      sessionState:
-        override.sessionState === undefined ? sessionState : override.sessionState,
-      updatedAt: nowIso,
-      messages: serializeMessages(snapshotMessages),
-    };
+  const normalizeConversationPayload = useCallback(
+    (payload: ConversationSnapshotPayload): ConversationSnapshot => ({
+      frontendSessionId: payload.frontend_session_id,
+      title: payload.title || "Untitled conversation",
+      targetDatabaseId: payload.target_database_id ?? null,
+      conversationId: payload.conversation_id ?? null,
+      sessionSummary: payload.session_summary ?? null,
+      sessionState: payload.session_state || null,
+      updatedAt: payload.updated_at || new Date().toISOString(),
+      createdAt: payload.created_at || null,
+      messages: (payload.messages || [])
+        .filter((item) => item && typeof item === "object")
+        .map((item) => item as SerializedMessage),
+    }),
+    []
+  );
 
-    setConversationHistory((previous) => {
-      const merged = [
-        snapshot,
-        ...previous.filter(
-          (entry) => entry.frontendSessionId !== snapshot.frontendSessionId
-        ),
-      ].slice(0, MAX_CONVERSATION_HISTORY);
-      window.localStorage.setItem(
-        CONVERSATION_HISTORY_STORAGE_KEY,
-        JSON.stringify(merged)
-      );
-      return merged;
-    });
-  };
+  const toConversationUpsertPayload = useCallback(
+    (snapshot: ConversationSnapshot) => ({
+      title: snapshot.title,
+      target_database_id: snapshot.targetDatabaseId,
+      conversation_id: snapshot.conversationId,
+      session_summary: snapshot.sessionSummary,
+      session_state: snapshot.sessionState || {},
+      messages: snapshot.messages as Array<Record<string, unknown>>,
+      updated_at: snapshot.updatedAt,
+    }),
+    []
+  );
+
+  const mergeConversationSnapshots = useCallback(
+    (
+      incoming: ConversationSnapshot[],
+      existing: ConversationSnapshot[]
+    ): ConversationSnapshot[] => {
+      const bySession = new Map<string, ConversationSnapshot>();
+      for (const item of [...incoming, ...existing]) {
+        const previous = bySession.get(item.frontendSessionId);
+        if (!previous) {
+          bySession.set(item.frontendSessionId, item);
+          continue;
+        }
+        const previousTime = new Date(previous.updatedAt).getTime();
+        const nextTime = new Date(item.updatedAt).getTime();
+        const nextItem =
+          !item.createdAt && previous.createdAt
+            ? { ...item, createdAt: previous.createdAt }
+            : item;
+        if (Number.isNaN(previousTime) || nextTime > previousTime) {
+          bySession.set(nextItem.frontendSessionId, nextItem);
+        }
+      }
+      return Array.from(bySession.values())
+        .sort(
+          (a, b) =>
+            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        )
+        .slice(0, MAX_CONVERSATION_HISTORY);
+    },
+    []
+  );
+
+  const upsertConversationSnapshot = useCallback(
+    (
+      override: {
+        frontendSessionId?: string;
+        messages?: ChatStoreMessage[];
+        conversationId?: string | null;
+        sessionSummary?: string | null;
+        sessionState?: Record<string, unknown> | null;
+        targetDatabaseId?: string | null;
+      } = {}
+    ) => {
+      const snapshotMessages = override.messages || messages;
+      if (!snapshotMessages.some((message) => message.role === "user")) {
+        return;
+      }
+      const nowIso = new Date().toISOString();
+      const snapshot: ConversationSnapshot = {
+        frontendSessionId: override.frontendSessionId || frontendSessionId,
+        title: buildConversationTitle(snapshotMessages),
+        targetDatabaseId:
+          override.targetDatabaseId === undefined
+            ? targetDatabaseId
+            : override.targetDatabaseId,
+        conversationId:
+          override.conversationId === undefined
+            ? conversationId
+            : override.conversationId,
+        sessionSummary:
+          override.sessionSummary === undefined
+            ? sessionSummary
+            : override.sessionSummary,
+        sessionState:
+          override.sessionState === undefined ? sessionState : override.sessionState,
+        updatedAt: nowIso,
+        createdAt: null,
+        messages: serializeMessages(snapshotMessages),
+      };
+
+      setConversationHistory((previous) => {
+        const merged = mergeConversationSnapshots([snapshot], previous);
+        window.localStorage.setItem(
+          CONVERSATION_HISTORY_STORAGE_KEY,
+          JSON.stringify(merged)
+        );
+        return merged;
+      });
+
+      void apiClient
+        .upsertConversation(snapshot.frontendSessionId, toConversationUpsertPayload(snapshot))
+        .then((saved) => {
+          const normalized = normalizeConversationPayload(saved);
+          queryClient.setQueryData(
+            ["ui-conversations"],
+            (existing: ConversationSnapshotPayload[] | undefined) => {
+              const mergedPayload = [
+                saved,
+                ...(existing || []).filter(
+                  (item) => item.frontend_session_id !== saved.frontend_session_id
+                ),
+              ].slice(0, MAX_CONVERSATION_HISTORY);
+              return mergedPayload;
+            }
+          );
+          setConversationHistory((previous) => {
+            const merged = mergeConversationSnapshots([normalized], previous);
+            window.localStorage.setItem(
+              CONVERSATION_HISTORY_STORAGE_KEY,
+              JSON.stringify(merged)
+            );
+            return merged;
+          });
+        })
+        .catch(() => {
+          // Local storage fallback stays active when backend persistence is unavailable.
+        });
+    },
+    [
+      conversationId,
+      frontendSessionId,
+      mergeConversationSnapshots,
+      messages,
+      normalizeConversationPayload,
+      queryClient,
+      sessionState,
+      sessionSummary,
+      targetDatabaseId,
+      toConversationUpsertPayload,
+    ]
+  );
 
   const categorizeError = (errorMessage: string): "network" | "timeout" | "validation" | "database" | "unknown" => {
     const lower = errorMessage.toLowerCase();
@@ -395,6 +490,29 @@ export function ChatInterface() {
     }
   };
 
+  const trackSchemaDiscovery = useCallback(
+    (action: string, metadata?: Record<string, unknown>) => {
+      if (schemaDiscoveryTrackedRef.current) {
+        return;
+      }
+      schemaDiscoveryTrackedRef.current = true;
+      const elapsedMs = Math.max(0, Date.now() - schemaDiscoveryStartRef.current);
+      void apiClient.emitEntryEvent({
+        flow: "schema_discovery",
+        step: "first_schema_interaction",
+        status: "completed",
+        source: "ui",
+        metadata: {
+          action,
+          elapsed_ms: elapsedMs,
+          target_database_id: targetDatabaseId,
+          ...(metadata || {}),
+        },
+      });
+    },
+    [targetDatabaseId]
+  );
+
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -412,6 +530,10 @@ export function ChatInterface() {
         setConversationHistory(
           parsed
             .filter((entry) => entry && Array.isArray(entry.messages))
+            .map((entry) => ({
+              ...entry,
+              createdAt: entry.createdAt ?? null,
+            }))
             .slice(0, MAX_CONVERSATION_HISTORY)
         );
       }
@@ -419,6 +541,27 @@ export function ChatInterface() {
       setConversationHistory([]);
     }
   }, []);
+
+  useEffect(() => {
+    if (!conversationHistoryQuery.data) {
+      return;
+    }
+    const normalizedRemote = conversationHistoryQuery.data.map(
+      normalizeConversationPayload
+    );
+    setConversationHistory((previous) => {
+      const merged = mergeConversationSnapshots(normalizedRemote, previous);
+      window.localStorage.setItem(
+        CONVERSATION_HISTORY_STORAGE_KEY,
+        JSON.stringify(merged)
+      );
+      return merged;
+    });
+  }, [
+    conversationHistoryQuery.data,
+    mergeConversationSnapshots,
+    normalizeConversationPayload,
+  ]);
 
   useEffect(() => {
     if (!bootstrapQuery.data) {
@@ -507,6 +650,12 @@ export function ChatInterface() {
   }, [conversationId, targetDatabaseId, conversationDatabaseId]);
 
   useEffect(() => {
+    schemaDiscoveryStartRef.current = Date.now();
+    schemaDiscoveryTrackedRef.current = false;
+    schemaLoadedTrackedRef.current = false;
+  }, [targetDatabaseId]);
+
+  useEffect(() => {
     if (!targetDatabaseId) {
       setSchemaLoading(false);
       setSchemaTables([]);
@@ -516,6 +665,20 @@ export function ChatInterface() {
     }
     setSchemaLoading(schemaQuery.isLoading || schemaQuery.isFetching);
     if (schemaQuery.data) {
+      if (!schemaLoadedTrackedRef.current) {
+        schemaLoadedTrackedRef.current = true;
+        void apiClient.emitEntryEvent({
+          flow: "schema_discovery",
+          step: "schema_loaded",
+          status: "completed",
+          source: "ui",
+          metadata: {
+            target_database_id: targetDatabaseId,
+            table_count: (schemaQuery.data.tables || []).length,
+            elapsed_ms: Math.max(0, Date.now() - schemaDiscoveryStartRef.current),
+          },
+        });
+      }
       setSchemaError(null);
       setSchemaTables(schemaQuery.data.tables || []);
       setSelectedSchemaTable((prev) => {
@@ -881,6 +1044,38 @@ export function ChatInterface() {
       (entry) => entry.frontendSessionId !== sessionId
     );
     persistConversationHistory(remaining);
+    void apiClient.deleteConversation(sessionId).catch(() => {
+      // Local storage fallback stays active when backend persistence is unavailable.
+    });
+    queryClient.setQueryData(
+      ["ui-conversations"],
+      (existing: ConversationSnapshotPayload[] | undefined) =>
+        (existing || []).filter((item) => item.frontend_session_id !== sessionId)
+    );
+  };
+
+  const handleSchemaSearchChange = (value: string) => {
+    setSchemaSearch(value);
+    if (value.trim()) {
+      trackSchemaDiscovery("schema_search", { search_length: value.trim().length });
+    }
+  };
+
+  const handleSchemaSelectTable = (fullName: string) => {
+    setSelectedSchemaTable(fullName);
+    trackSchemaDiscovery("schema_table_open", { table: fullName });
+  };
+
+  const handleSchemaUseTable = (fullName: string) => {
+    setSelectedSchemaTable(fullName);
+    trackSchemaDiscovery("schema_use_in_query", { table: fullName, composer_mode: composerMode });
+    if (composerMode === "sql") {
+      setSqlDraft(`SELECT *\nFROM ${fullName}\nLIMIT 100;`);
+      restoreInputFocus("sql");
+      return;
+    }
+    setInput(`Show first 100 rows from ${fullName}.`);
+    restoreInputFocus("nl");
   };
 
   const handleSubmitFeedback = async (payload: MessageFeedbackPayload) => {
@@ -1205,115 +1400,18 @@ export function ChatInterface() {
         </div>
 
         <div className="flex min-h-0 flex-1">
-          <aside
-            className={`hidden border-r border-border/70 bg-muted/30 transition-all duration-200 lg:flex lg:flex-col ${
-              isHistorySidebarOpen ? "w-72" : "w-14"
-            }`}
-            role="complementary"
-            aria-label="Conversation history sidebar"
-          >
-            <div className="flex items-center justify-between border-b px-2 py-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setIsHistorySidebarOpen((prev) => !prev)}
-                aria-label="Toggle conversation history sidebar"
-              >
-                {isHistorySidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-              </Button>
-              {isHistorySidebarOpen && (
-                <>
-                  <div className="text-xs font-medium">Conversations</div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={handleStartNewConversation}
-                    aria-label="Start new conversation"
-                  >
-                    <Plus size={15} />
-                  </Button>
-                </>
-              )}
-            </div>
-            {isHistorySidebarOpen ? (
-              <div className="flex min-h-0 flex-1 flex-col p-2">
-                <div className="mb-2 flex items-center gap-1 rounded-md border border-border/70 bg-background/80 px-2">
-                  <Search size={12} className="text-muted-foreground" />
-                  <input
-                    type="text"
-                    value={conversationSearch}
-                    onChange={(event) => setConversationSearch(event.target.value)}
-                    placeholder="Search conversations..."
-                    className="h-8 w-full bg-transparent text-xs outline-none"
-                    aria-label="Search saved conversations"
-                  />
-                </div>
-                <div className="mb-2 text-[11px] text-muted-foreground">
-                  {sortedConversationHistory.length} conversation
-                  {sortedConversationHistory.length === 1 ? "" : "s"}
-                </div>
-                <div className="min-h-0 flex-1 overflow-y-auto" role="list" aria-label="Saved conversations">
-                  {sortedConversationHistory.length === 0 ? (
-                    <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
-                      {conversationSearch.trim()
-                        ? "No conversations matched your search."
-                        : "No saved conversations yet."}
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {sortedConversationHistory.map((snapshot) => {
-                        const isActive = snapshot.frontendSessionId === frontendSessionId;
-                        return (
-                          <div
-                            key={snapshot.frontendSessionId}
-                            className={`rounded border ${
-                              isActive ? "border-primary/40 bg-primary/5" : "border-border/70 bg-background/60"
-                            }`}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => handleLoadConversation(snapshot)}
-                              className="w-full px-2 py-2 text-left"
-                              aria-label={`Load conversation ${snapshot.title}`}
-                              aria-current={isActive ? "true" : undefined}
-                            >
-                              <p className="truncate text-xs font-medium">{snapshot.title}</p>
-                              <p className="mt-1 text-[11px] text-muted-foreground">
-                                {formatSnapshotTime(snapshot.updatedAt)}
-                              </p>
-                              {snapshot.targetDatabaseId && (
-                                <p className="mt-1 text-[11px] text-muted-foreground">
-                                  DB: {snapshot.targetDatabaseId}
-                                </p>
-                              )}
-                            </button>
-                            <div className="flex justify-end border-t border-border/60 px-1 py-1">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 px-2 text-[11px]"
-                                aria-label={`Delete conversation ${snapshot.title}`}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleDeleteConversation(snapshot.frontendSessionId);
-                                }}
-                              >
-                                <Trash2 size={12} />
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-1 items-center justify-center text-muted-foreground">
-                <History size={16} />
-              </div>
-            )}
-          </aside>
+          <ConversationHistorySidebar
+            isOpen={isHistorySidebarOpen}
+            frontendSessionId={frontendSessionId}
+            conversationSearch={conversationSearch}
+            sortedConversationHistory={sortedConversationHistory}
+            formatSnapshotTime={formatSnapshotTime}
+            onToggle={() => setIsHistorySidebarOpen((prev) => !prev)}
+            onStartNewConversation={handleStartNewConversation}
+            onSearchChange={setConversationSearch}
+            onLoadConversation={handleLoadConversation}
+            onDeleteConversation={handleDeleteConversation}
+          />
 
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex-1 overflow-y-auto px-4 py-5">
@@ -1576,130 +1674,18 @@ export function ChatInterface() {
             </div>
           </div>
 
-          <aside
-            className={`hidden border-l border-border/70 bg-muted/30 transition-all duration-200 xl:flex xl:flex-col ${
-              isSchemaSidebarOpen ? "w-80" : "w-14"
-            }`}
-            role="complementary"
-            aria-label="Schema explorer sidebar"
-          >
-            <div className="flex items-center justify-between border-b px-2 py-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setIsSchemaSidebarOpen((prev) => !prev)}
-                aria-label="Toggle schema sidebar"
-              >
-                {isSchemaSidebarOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-              </Button>
-              {isSchemaSidebarOpen && <div className="text-xs font-medium">Schema Explorer</div>}
-            </div>
-            {isSchemaSidebarOpen ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="border-b p-2">
-                  <Input
-                    value={schemaSearch}
-                    onChange={(event) => setSchemaSearch(event.target.value)}
-                    placeholder="Search table or column..."
-                    className="h-8 text-xs"
-                    aria-label="Search schema tables and columns"
-                  />
-                </div>
-                <div className="min-h-0 flex-1 overflow-y-auto p-2">
-                  {schemaLoading && (
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      Loading schema...
-                    </div>
-                  )}
-                  {!schemaLoading && schemaError && (
-                    <div className="rounded border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
-                      {schemaError}
-                    </div>
-                  )}
-                  {!schemaLoading && !schemaError && filteredSchemaTables.length === 0 && (
-                    <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
-                      No tables matched your search.
-                    </div>
-                  )}
-                  <div className="space-y-2">
-                    {filteredSchemaTables.map((table) => {
-                      const fullName = `${table.schema_name}.${table.table_name}`;
-                      const isSelected = selectedSchemaTable === fullName;
-                      return (
-                        <details key={fullName} className="rounded border border-border bg-background">
-                          <summary
-                            className={`cursor-pointer list-none px-2 py-2 text-xs ${
-                              isSelected ? "bg-primary/5" : ""
-                            }`}
-                            aria-label={`Toggle schema table ${fullName}`}
-                            onClick={() => setSelectedSchemaTable(fullName)}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className="truncate font-medium">{fullName}</div>
-                                <div className="text-[11px] text-muted-foreground">
-                                  {table.table_type}
-                                  {typeof table.row_count === "number"
-                                    ? ` · ~${table.row_count} rows`
-                                    : ""}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1 text-muted-foreground">
-                                <ChevronDown size={12} />
-                                <ChevronRight size={12} />
-                              </div>
-                            </div>
-                          </summary>
-                          <div className="border-t px-2 py-2">
-                            <button
-                              type="button"
-                              className="mb-2 inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] hover:bg-muted"
-                              aria-label={`Use table ${fullName} in query`}
-                              onClick={() => {
-                                setSelectedSchemaTable(fullName);
-                                if (composerMode === "sql") {
-                                  setSqlDraft(`SELECT *\nFROM ${fullName}\nLIMIT 100;`);
-                                } else {
-                                  setInput(`Show first 100 rows from ${fullName}.`);
-                                }
-                                restoreInputFocus();
-                              }}
-                            >
-                              <Table2 size={12} />
-                              Use In Query
-                            </button>
-                            <ul className="space-y-1 text-[11px]">
-                              {table.columns.map((column) => (
-                                <li key={`${fullName}.${column.name}`} className="flex flex-wrap gap-1">
-                                  <span className="font-medium">{column.name}</span>
-                                  <span className="text-muted-foreground">({column.data_type})</span>
-                                  {column.is_primary_key && (
-                                    <span className="rounded bg-blue-100 px-1 text-[10px] text-blue-800">
-                                      PK
-                                    </span>
-                                  )}
-                                  {column.is_foreign_key && (
-                                    <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-900">
-                                      FK
-                                    </span>
-                                  )}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        </details>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-1 items-center justify-center text-muted-foreground">
-                <Database size={16} />
-              </div>
-            )}
-          </aside>
+          <SchemaExplorerSidebar
+            isOpen={isSchemaSidebarOpen}
+            schemaSearch={schemaSearch}
+            schemaLoading={schemaLoading}
+            schemaError={schemaError}
+            filteredSchemaTables={filteredSchemaTables}
+            selectedSchemaTable={selectedSchemaTable}
+            onToggle={() => setIsSchemaSidebarOpen((prev) => !prev)}
+            onSearchChange={handleSchemaSearchChange}
+            onSelectTable={handleSchemaSelectTable}
+            onUseTable={handleSchemaUseTable}
+          />
         </div>
       </div>
       {shortcutsOpen && (

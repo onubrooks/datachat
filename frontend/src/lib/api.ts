@@ -265,6 +265,28 @@ export interface DatabaseConnection {
   datapoint_count: number;
 }
 
+export interface ConversationSnapshotPayload {
+  frontend_session_id: string;
+  title: string;
+  target_database_id: string | null;
+  conversation_id: string | null;
+  session_summary: string | null;
+  session_state: Record<string, unknown>;
+  messages: Array<Record<string, unknown>>;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ConversationUpsertRequest {
+  title: string;
+  target_database_id: string | null;
+  conversation_id: string | null;
+  session_summary: string | null;
+  session_state: Record<string, unknown>;
+  messages: Array<Record<string, unknown>>;
+  updated_at?: string;
+}
+
 export interface DatabaseConnectionCreate {
   name: string;
   database_url: string;
@@ -486,6 +508,51 @@ export class DataChatAPI {
       throw new Error(`List databases failed: ${response.statusText}`);
     }
     return response.json();
+  }
+
+  async listConversations(limit = 20): Promise<ConversationSnapshotPayload[]> {
+    const response = await fetch(`${this.baseUrl}/api/v1/conversations?limit=${limit}`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      const message =
+        error.message || error.detail || response.statusText || `HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return response.json();
+  }
+
+  async upsertConversation(
+    frontendSessionId: string,
+    payload: ConversationUpsertRequest
+  ): Promise<ConversationSnapshotPayload> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/conversations/${encodeURIComponent(frontendSessionId)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      const message =
+        error.message || error.detail || response.statusText || `HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return response.json();
+  }
+
+  async deleteConversation(frontendSessionId: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/conversations/${encodeURIComponent(frontendSessionId)}`,
+      { method: "DELETE" }
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      const message =
+        error.message || error.detail || response.statusText || `HTTP ${response.status}`;
+      throw new Error(message);
+    }
   }
 
   async createDatabase(
@@ -889,7 +956,7 @@ export class DataChatAPI {
     source?: string;
     metadata?: Record<string, unknown>;
   }): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/api/v1/events/entry`, {
+    const response = await fetch(`${this.baseUrl}/api/v1/system/entry-event`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

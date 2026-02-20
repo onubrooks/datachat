@@ -37,7 +37,7 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 | Visualizations | Bar, line, scatter, pie charts (SVG) | ✅ Implemented |
 | Clarifying Questions | Interactive question prompts | ✅ Implemented |
 | Multi-Question Support | Sub-answers with Q1/Q2 selector | ✅ Implemented |
-| Conversation Persistence | localStorage backup with data recovery | ✅ Implemented |
+| Conversation Persistence | Backend-synced snapshots with localStorage fallback | ✅ Implemented |
 | Error Recovery | Retry button with error categorization | ✅ Implemented |
 | Conversation History Sidebar | Resume prior local sessions | ✅ Implemented |
 | Schema Explorer Sidebar | Browse tables/columns with search | ✅ Implemented |
@@ -101,7 +101,7 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 | Issue | Impact | Recommendation |
 |-------|--------|----------------|
 | ✅ **Schema Explorer Added** | Users can inspect tables/columns directly | Collapsible schema browser sidebar with search |
-| ✅ **Conversation History Added** | Users can resume past sessions | Collapsible conversation list sidebar with local restore |
+| ✅ **Conversation History Added** | Users can resume past sessions across reloads/devices (shared backend) | Collapsible conversation list sidebar with search + backend persistence |
 | ✅ **Query Templates Added** | Faster repeated workflows | Quick-action buttons for common query patterns |
 
 ### P3: Visualization Polish
@@ -176,7 +176,7 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 | Location | Issue | Action |
 |----------|-------|--------|
 | ✅ `loadingUx.ts` | Multiple modes removed | Consolidated to single waiting status label logic |
-| Redundant job state | Multiple similar state variables | Consolidate into single `jobs` object |
+| ✅ Redundant job state | Multiple similar state variables removed | Consolidated async flags into a single `jobs` object |
 
 ### Technical Debt
 
@@ -206,7 +206,7 @@ const { data: connections, isLoading, error } = useQuery({
 
 ### Conversation Persistence
 
-✅ **Implemented** - Chat store uses Zustand's persist middleware with localStorage.
+✅ **Implemented** - Chat sessions now use backend conversation snapshots (system DB) with localStorage fallback.
 
 ```typescript
 // In chat store - currently implemented
@@ -231,7 +231,7 @@ export const useChatStore = create<ChatState>()(
 );
 ```
 
-**What's persisted:**
+**What's persisted (backend + fallback local cache):**
 
 - Last 60 messages (compacted)
 - SQL queries and results (up to 50 rows)
@@ -240,8 +240,7 @@ export const useChatStore = create<ChatState>()(
 - Agent timing metrics
 - Sub-answers (up to 5)
 - Conversation ID and session state
-
-**Future enhancement:** Backend persistence for cross-device access.
+- Snapshot timestamps for cross-device ordering and resume
 
 ### Error Recovery
 
@@ -286,7 +285,8 @@ const categorizeError = (errorMessage: string) => {
 | Item | Scope | Status |
 |------|-------|--------|
 | ✅ Visualization extraction | `Message.tsx` chart rendering moved into dedicated components | Done |
-| Remaining extraction | Break down other large UI surfaces (chat message actions, feedback panel, table/export actions) | Pending |
+| ✅ Chat sidebar extraction | Conversation history + schema explorer moved to dedicated components | Done |
+| Remaining extraction | Break down more `Message.tsx` sections (actions/feedback blocks) | Pending |
 
 Implemented visualization structure:
 
@@ -327,10 +327,10 @@ frontend/src/components/visualizations/
 
 | Item | Priority | Status | Notes |
 |------|----------|--------|-------|
-| Consolidate redundant job state into a single `jobs` object | Medium | ⏳ Remaining | Database manager still has multiple related state slices |
-| Backend conversation persistence (cross-device/session) | Medium | ⏳ Remaining | Current conversation history is browser-local only |
-| Continue component extraction beyond charts | Low | ⏳ Remaining | Some large `Message`/chat sections still centralized |
-| Validate and improve schema discovery-time KPI | Low | ⏳ Remaining | Metrics row still marked pending |
+| Consolidate redundant job state into a single `jobs` object | Medium | ✅ Done | `DatabaseManager` async state now uses unified `jobs` object |
+| Backend conversation persistence (cross-device/session) | Medium | ✅ Done | `/api/v1/conversations` backed by system DB with local fallback |
+| Continue component extraction beyond charts | Low | ✅ Done (phase 1) | Chat sidebars extracted; additional `Message` extraction remains optional |
+| Validate and improve schema discovery-time KPI | Low | ✅ Done | Added `schema_loaded` + first-interaction telemetry events |
 
 ---
 
@@ -397,7 +397,7 @@ frontend/src/components/visualizations/
 | Time to first query | ~30s (setup) | <10s (with saved connection) | ✅ |
 | Query recovery rate | 0% (no retry) | 80% (with retry button) | ✅ Implemented |
 | Session continuation | 0% (no persistence) | 60% (with localStorage) | ✅ Implemented |
-| Schema discovery time | Ask → Wait → Answer | Browse sidebar → Instant | Pending |
+| Schema discovery time | Ask → Wait → Answer | Browse sidebar → Instant + event telemetry (`schema_loaded`, `first_schema_interaction`) | ✅ Instrumented |
 
 ---
 
@@ -413,9 +413,12 @@ frontend/src/
 ├── components/
 │   ├── chat/
 │   │   ├── ChatInterface.tsx # Main chat component
+│   │   ├── ConversationHistorySidebar.tsx
+│   │   ├── SchemaExplorerSidebar.tsx
 │   │   ├── Message.tsx       # Message display
 │   │   ├── loadingUx.ts      # Loading states
-│   │   └── AgentStatus.tsx   # Agent progress
+│   │   ├── AgentStatus.tsx   # Agent progress
+│   │   └── chatTypes.ts
 │   ├── system/
 │   │   ├── DatabaseManager.tsx
 │   │   └── SystemSetup.tsx

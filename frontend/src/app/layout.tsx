@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import "./globals.css";
 import { ReactQueryProvider } from "@/components/providers/ReactQueryProvider";
 
@@ -16,19 +15,27 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <Script id="datachat-theme-init" strategy="beforeInteractive">
-          {`
-            (function() {
-              try {
-                var key = "datachat.themeMode";
-                var mode = window.localStorage.getItem(key) || "system";
-                var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-                var useDark = mode === "dark" || (mode === "system" && prefersDark);
-                document.documentElement.classList.toggle("dark", useDark);
-              } catch (_) {}
-            })();
-          `}
-        </Script>
+        <script
+          id="datachat-theme-init"
+          // Execute as early as possible to avoid first-paint theme flash.
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                try {
+                  var key = "datachat.themeMode";
+                  var mode = window.localStorage.getItem(key) || "system";
+                  var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+                  var useDark = mode === "dark" || (mode === "system" && prefersDark);
+                  if (useDark) {
+                    document.documentElement.classList.add("dark");
+                  } else {
+                    document.documentElement.classList.remove("dark");
+                  }
+                } catch (_) {}
+              })();
+            `,
+          }}
+        />
       </head>
       <body className="font-sans">
         <ReactQueryProvider>{children}</ReactQueryProvider>

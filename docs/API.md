@@ -109,6 +109,17 @@ Notes:
 - `GET /databases/{id}/schema` opens a read-only connector, introspects live
   schema metadata, and returns table + column details (including PK/FK flags).
 
+## Conversation History
+
+- `GET /conversations?limit=20` - List saved UI conversation snapshots ordered by `updated_at`.
+- `PUT /conversations/{frontend_session_id}` - Upsert a conversation snapshot.
+- `DELETE /conversations/{frontend_session_id}` - Delete a saved snapshot.
+
+Notes:
+
+- Backed by `ui_conversations` in the system database when `SYSTEM_DATABASE_URL` is configured.
+- If system DB persistence is unavailable, upserts fall back to logs-only behavior and clients can still use local cache.
+
 ## Profiling and DataPoint Generation
 
 - `POST /databases/{id}/profile` - Start profiling a database.

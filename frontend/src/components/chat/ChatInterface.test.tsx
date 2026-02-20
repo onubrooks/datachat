@@ -10,12 +10,20 @@ import { useChatStore } from "@/lib/stores/chat";
 const {
   mockSystemStatus,
   mockListDatabases,
+  mockListConversations,
+  mockUpsertConversation,
+  mockDeleteConversation,
+  mockEmitEntryEvent,
   mockGetDatabaseSchema,
   mockStreamChat,
   mockSearchParamGet,
 } = vi.hoisted(() => ({
   mockSystemStatus: vi.fn(),
   mockListDatabases: vi.fn(),
+  mockListConversations: vi.fn(),
+  mockUpsertConversation: vi.fn(),
+  mockDeleteConversation: vi.fn(),
+  mockEmitEntryEvent: vi.fn(),
   mockGetDatabaseSchema: vi.fn(),
   mockStreamChat: vi.fn(),
   mockSearchParamGet: vi.fn(),
@@ -34,6 +42,10 @@ vi.mock("@/lib/api", async () => {
       ...actual.apiClient,
       systemStatus: mockSystemStatus,
       listDatabases: mockListDatabases,
+      listConversations: mockListConversations,
+      upsertConversation: mockUpsertConversation,
+      deleteConversation: mockDeleteConversation,
+      emitEntryEvent: mockEmitEntryEvent,
       getDatabaseSchema: mockGetDatabaseSchema,
     },
     wsClient: {
@@ -102,6 +114,20 @@ describe("ChatInterface target database", () => {
       fetched_at: new Date().toISOString(),
       tables: [],
     });
+    mockListConversations.mockResolvedValue([]);
+    mockUpsertConversation.mockResolvedValue({
+      frontend_session_id: "session-test",
+      title: "Test conversation",
+      target_database_id: "db_mysql",
+      conversation_id: null,
+      session_summary: null,
+      session_state: {},
+      messages: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    mockDeleteConversation.mockResolvedValue(undefined);
+    mockEmitEntryEvent.mockResolvedValue(undefined);
   });
 
   it("sends the default selected connection as target_database", async () => {
