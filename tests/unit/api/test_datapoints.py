@@ -154,3 +154,58 @@ class TestDatapointEndpoints:
         payload = response.json()
         assert payload["datapoint_id"] == "query_top_customers_001"
         assert payload["type"] == "Query"
+
+    def test_create_datapoint_rejects_contract_gaps(self, client):
+        payload = {
+            "datapoint_id": "query_contract_gap_001",
+            "type": "Query",
+            "name": "Contract gap query",
+            "owner": "data-team@example.com",
+            "tags": ["manual"],
+            "metadata": {},
+            "description": "Contract gap validation test query.",
+            "sql_template": "SELECT 1 AS value",
+            "related_tables": ["public.orders"],
+        }
+
+        response = client.post("/api/v1/datapoints", json=payload)
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["message"] == "DataPoint contract validation failed."
+        assert detail["datapoint_id"] == "query_contract_gap_001"
+        codes = {issue["code"] for issue in detail["contract_errors"]}
+        assert "missing_grain" in codes
+        assert "missing_exclusions" in codes
+        assert "missing_confidence_notes" in codes
+
+    def test_create_datapoint_accepts_contract_complete_payload(self, client, tmp_path):
+        payload = {
+            "datapoint_id": "query_contract_pass_001",
+            "type": "Query",
+            "name": "Contract pass query",
+            "owner": "data-team@example.com",
+            "tags": ["manual"],
+            "metadata": {
+                "grain": "row-level",
+                "exclusions": "None documented",
+                "confidence_notes": "Validated with staging data",
+            },
+            "description": "Contract-complete datapoint creation test query.",
+            "sql_template": "SELECT 1 AS value",
+            "related_tables": ["public.orders"],
+        }
+        target_path = tmp_path / "query_contract_pass_001.json"
+        orchestrator = AsyncMock()
+
+        with (
+            patch("backend.api.routes.datapoints._file_path", return_value=target_path),
+            patch("backend.api.routes.datapoints._get_orchestrator", return_value=orchestrator),
+        ):
+            response = client.post("/api/v1/datapoints", json=payload)
+
+        assert response.status_code == 201
+        assert response.json()["datapoint_id"] == "query_contract_pass_001"
+        orchestrator.enqueue_sync_incremental.assert_called_once_with(
+            ["query_contract_pass_001"]
+        )

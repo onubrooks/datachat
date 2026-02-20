@@ -18,7 +18,11 @@ def _schema_datapoint(datapoint_id: str) -> dict:
         "name": "Orders",
         "owner": "data@example.com",
         "tags": [],
-        "metadata": {},
+        "metadata": {
+            "grain": "row-level",
+            "exclusions": "None documented",
+            "confidence_notes": "Validated in unit test fixtures",
+        },
         "table_name": "public.orders",
         "schema": "public",
         "business_purpose": "Orders table for testing.",
@@ -34,7 +38,7 @@ def _schema_datapoint(datapoint_id: str) -> dict:
         "relationships": [],
         "common_queries": [],
         "gotchas": [],
-        "freshness": None,
+        "freshness": "daily",
         "row_count": 100,
     }
 
@@ -111,6 +115,42 @@ async def test_incremental_sync_updates_specific_ids(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_incremental_sync_preserves_valid_ids_when_one_id_is_invalid(tmp_path: Path):
+    vector_store = AsyncMock()
+    vector_store.delete = AsyncMock()
+    vector_store.add_datapoints = AsyncMock()
+
+    graph = MagicMock()
+    graph.remove_datapoint = MagicMock()
+    graph.add_datapoint = MagicMock()
+
+    datapoints_dir = tmp_path / "datapoints"
+    invalid_payload = _schema_datapoint("table_bad_001")
+    invalid_payload["metadata"] = {}
+    _write_datapoint(datapoints_dir / "table_bad_001.json", invalid_payload)
+    _write_datapoint(datapoints_dir / "table_good_001.json", _schema_datapoint("table_good_001"))
+
+    orchestrator = SyncOrchestrator(
+        vector_store=vector_store,
+        knowledge_graph=graph,
+        datapoints_dir=datapoints_dir,
+    )
+
+    job = await orchestrator.sync_incremental(["table_bad_001", "table_good_001"])
+
+    # Only valid IDs should be deleted/replaced.
+    vector_store.delete.assert_awaited_once_with(["table_good_001"])
+    graph.remove_datapoint.assert_called_once_with("table_good_001")
+    vector_store.add_datapoints.assert_awaited_once()
+    added = vector_store.add_datapoints.await_args.args[0]
+    assert len(added) == 1
+    assert added[0].datapoint_id == "table_good_001"
+    assert job.status == "failed"
+    assert job.error is not None
+    assert "table_bad_001" in job.error
+
+
+@pytest.mark.asyncio
 async def test_status_tracking_updates(tmp_path: Path):
     vector_store = AsyncMock()
     vector_store.clear = AsyncMock()
@@ -166,3 +206,58 @@ async def test_full_sync_applies_database_scope_metadata(tmp_path: Path):
     synced_datapoints = vector_store.add_datapoints.await_args.args[0]
     assert synced_datapoints[0].metadata["scope"] == "database"
     assert synced_datapoints[0].metadata["connection_id"] == "conn-fintech"
+
+
+@pytest.mark.asyncio
+async def test_full_sync_allows_demo_datapoints_with_advisory_metadata_gaps(tmp_path: Path):
+    vector_store = AsyncMock()
+    vector_store.clear = AsyncMock()
+    vector_store.add_datapoints = AsyncMock()
+
+    graph = MagicMock()
+    graph.clear = MagicMock()
+    graph.add_datapoint = MagicMock()
+
+    datapoints_dir = tmp_path / "datapoints"
+    demo_payload = _schema_datapoint("table_demo_users_001")
+    demo_payload["metadata"] = {"source": "demo-seed"}
+    _write_datapoint(datapoints_dir / "demo" / "table_demo_users_001.json", demo_payload)
+
+    orchestrator = SyncOrchestrator(
+        vector_store=vector_store,
+        knowledge_graph=graph,
+        datapoints_dir=datapoints_dir,
+    )
+
+    job = await orchestrator.sync_all()
+
+    assert job.status == "completed"
+    vector_store.add_datapoints.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_full_sync_fails_when_contracts_are_invalid(tmp_path: Path):
+    vector_store = AsyncMock()
+    vector_store.clear = AsyncMock()
+    vector_store.add_datapoints = AsyncMock()
+
+    graph = MagicMock()
+    graph.clear = MagicMock()
+    graph.add_datapoint = MagicMock()
+
+    datapoints_dir = tmp_path / "datapoints"
+    invalid_payload = _schema_datapoint("table_orders_001")
+    invalid_payload["metadata"] = {}
+    _write_datapoint(datapoints_dir / "table_orders_001.json", invalid_payload)
+
+    orchestrator = SyncOrchestrator(
+        vector_store=vector_store,
+        knowledge_graph=graph,
+        datapoints_dir=datapoints_dir,
+    )
+
+    job = await orchestrator.sync_all()
+
+    assert job.status == "failed"
+    assert job.error is not None
+    assert "contract" in job.error.lower()

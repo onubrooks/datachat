@@ -11,6 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, TypeAdapter
 
+from backend.knowledge.contracts import ContractIssue, validate_datapoint_contract
 from backend.models.datapoint import DataPoint
 from backend.sync.orchestrator import save_datapoint_to_disk
 
@@ -23,6 +24,7 @@ SOURCE_PRIORITY = {
     "managed": 3,
     "custom": 2,
     "unknown": 2,
+    "demo": 1,
     "example": 1,
 }
 datapoint_adapter = TypeAdapter(DataPoint)
@@ -95,9 +97,33 @@ async def _resolve_maybe_awaitable(value):
     return value
 
 
+def _issue_to_dict(issue: ContractIssue) -> dict[str, str]:
+    return {
+        "code": issue.code,
+        "message": issue.message,
+        "severity": issue.severity,
+        "field": issue.field or "",
+    }
+
+
+def _validate_datapoint_contract_or_400(datapoint: DataPoint) -> None:
+    report = validate_datapoint_contract(datapoint, strict=True)
+    if report.is_valid:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "message": "DataPoint contract validation failed.",
+            "datapoint_id": report.datapoint_id,
+            "contract_errors": [_issue_to_dict(issue) for issue in report.errors],
+        },
+    )
+
+
 @router.post("/datapoints", status_code=status.HTTP_201_CREATED)
 async def create_datapoint(payload: dict) -> dict:
     datapoint = datapoint_adapter.validate_python(payload)
+    _validate_datapoint_contract_or_400(datapoint)
     path = _file_path(datapoint.datapoint_id)
     if path.exists():
         raise HTTPException(
@@ -115,6 +141,7 @@ async def create_datapoint(payload: dict) -> dict:
 @router.put("/datapoints/{datapoint_id}")
 async def update_datapoint(datapoint_id: str, payload: dict) -> dict:
     datapoint = datapoint_adapter.validate_python(payload)
+    _validate_datapoint_contract_or_400(datapoint)
     if datapoint.datapoint_id != datapoint_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

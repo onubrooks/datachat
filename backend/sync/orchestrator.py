@@ -28,6 +28,15 @@ class SyncJob:
     error: str | None = None
 
 
+@dataclass
+class IncrementalLoadResult:
+    """Incremental load outputs for safe update semantics."""
+
+    datapoints: list[DataPoint]
+    ids_to_delete: list[str]
+    errors: list[str]
+
+
 class SyncOrchestrator:
     """Coordinate syncing DataPoints into vector store and knowledge graph."""
 
@@ -42,7 +51,7 @@ class SyncOrchestrator:
         self._vector_store = vector_store
         self._knowledge_graph = knowledge_graph
         self._datapoints_dir = Path(datapoints_dir)
-        self._loader = loader or DataPointLoader()
+        self._loader = loader or DataPointLoader(strict_contracts=True)
         self._loop = loop
         self._current_job: SyncJob | None = None
         self._lock = asyncio.Lock()
@@ -170,21 +179,34 @@ class SyncOrchestrator:
         async with self._lock:
             try:
                 job.total_datapoints = len(datapoint_ids)
+                load_result = self._load_datapoints_by_id(datapoint_ids)
 
-                if datapoint_ids:
-                    await self._vector_store.delete(datapoint_ids)
-                    for datapoint_id in datapoint_ids:
+                if load_result.ids_to_delete:
+                    await self._vector_store.delete(load_result.ids_to_delete)
+                    for datapoint_id in load_result.ids_to_delete:
                         if hasattr(self._knowledge_graph, "remove_datapoint"):
                             self._knowledge_graph.remove_datapoint(datapoint_id)
 
-                datapoints = self._load_datapoints_by_id(datapoint_ids)
-                if datapoints:
-                    await self._vector_store.add_datapoints(datapoints)
-                    for datapoint in datapoints:
+                if load_result.datapoints:
+                    await self._vector_store.add_datapoints(load_result.datapoints)
+                    for datapoint in load_result.datapoints:
                         self._knowledge_graph.add_datapoint(datapoint)
                         job.processed_datapoints += 1
 
-                job.status = "completed"
+                if load_result.errors:
+                    job.status = "failed"
+                    sample = "; ".join(load_result.errors[:5])
+                    suffix = (
+                        ""
+                        if len(load_result.errors) <= 5
+                        else f"; ... +{len(load_result.errors) - 5} more"
+                    )
+                    job.error = (
+                        "Incremental sync completed with contract/validation failures: "
+                        f"{sample}{suffix}"
+                    )
+                else:
+                    job.status = "completed"
             except Exception as exc:
                 job.status = "failed"
                 job.error = str(exc)
@@ -199,29 +221,69 @@ class SyncOrchestrator:
     ) -> list[DataPoint]:
         datapoint_files = self._collect_datapoint_files()
         datapoints: list[DataPoint] = []
+        load_errors: list[str] = []
         for file_path in datapoint_files:
             try:
                 datapoint = self._loader.load_file(file_path)
                 self._apply_scope(datapoint, scope=scope, connection_id=connection_id)
                 datapoints.append(datapoint)
-            except Exception:
-                continue
+            except Exception as exc:
+                load_errors.append(f"{file_path}: {exc}")
+        if load_errors:
+            sample = "; ".join(load_errors[:5])
+            suffix = "" if len(load_errors) <= 5 else f"; ... +{len(load_errors) - 5} more"
+            raise RuntimeError(
+                "DataPoint sync aborted: "
+                f"{len(load_errors)} file(s) failed validation or loading. "
+                f"{sample}{suffix}"
+            )
         return datapoints
 
-    def _load_datapoints_by_id(self, datapoint_ids: Iterable[str]) -> list[DataPoint]:
-        if not datapoint_ids:
-            return []
-        id_set = {str(item) for item in datapoint_ids}
+    def _load_datapoints_by_id(self, datapoint_ids: Iterable[str]) -> IncrementalLoadResult:
+        requested_ids: list[str] = []
+        seen: set[str] = set()
+        for item in datapoint_ids:
+            item_id = str(item).strip()
+            if not item_id or item_id in seen:
+                continue
+            seen.add(item_id)
+            requested_ids.append(item_id)
+
+        if not requested_ids:
+            return IncrementalLoadResult(datapoints=[], ids_to_delete=[], errors=[])
+
+        id_set = set(requested_ids)
         datapoint_files = self._collect_datapoint_files()
+        files_by_stem = {path.stem: path for path in datapoint_files if path.stem in id_set}
         datapoints: list[DataPoint] = []
-        for file_path in datapoint_files:
+        ids_to_delete: list[str] = []
+        load_errors: list[str] = []
+
+        for requested_id in requested_ids:
+            file_path = files_by_stem.get(requested_id)
+            if file_path is None:
+                # Missing file is treated as a delete signal.
+                ids_to_delete.append(requested_id)
+                continue
             try:
                 datapoint = self._loader.load_file(file_path)
-            except Exception:
+            except Exception as exc:
+                load_errors.append(f"{file_path}: {exc}")
                 continue
-            if datapoint.datapoint_id in id_set:
-                datapoints.append(datapoint)
-        return datapoints
+            if datapoint.datapoint_id != requested_id:
+                load_errors.append(
+                    f"{file_path}: datapoint_id mismatch (expected {requested_id}, "
+                    f"found {datapoint.datapoint_id})"
+                )
+                continue
+            datapoints.append(datapoint)
+            ids_to_delete.append(requested_id)
+
+        return IncrementalLoadResult(
+            datapoints=datapoints,
+            ids_to_delete=ids_to_delete,
+            errors=load_errors,
+        )
 
     def _collect_datapoint_files(self) -> list[Path]:
         if not self._datapoints_dir.exists():

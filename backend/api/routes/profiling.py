@@ -198,7 +198,7 @@ def _issue_to_dict(issue: ContractIssue) -> dict[str, str]:
 
 
 def _validate_datapoint_contract_or_400(datapoint) -> None:
-    report = validate_datapoint_contract(datapoint, strict=False)
+    report = validate_datapoint_contract(datapoint, strict=True)
     if report.is_valid:
         return
     raise HTTPException(

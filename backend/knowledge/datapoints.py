@@ -11,6 +11,7 @@ from pathlib import Path
 
 from pydantic import TypeAdapter, ValidationError
 
+from backend.knowledge.contracts import validate_datapoint_contract
 from backend.models.datapoint import DataPoint
 
 logger = logging.getLogger(__name__)
@@ -49,11 +50,18 @@ class DataPointLoader:
         stats = loader.get_stats()
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        strict_contracts: bool = False,
+        fail_on_contract_warnings: bool = False,
+    ):
         """Initialize the DataPoint loader."""
         self.loaded_count = 0
         self.failed_count = 0
         self.failed_files: list[tuple[Path, str]] = []
+        self.strict_contracts = strict_contracts
+        self.fail_on_contract_warnings = fail_on_contract_warnings
 
         logger.info("DataPointLoader initialized")
 
@@ -74,6 +82,8 @@ class DataPointLoader:
                 return "managed"
             if tier_segment == "examples":
                 return "example"
+            if tier_segment == "demo":
+                return "demo"
         return "custom"
 
     @classmethod
@@ -111,6 +121,7 @@ class DataPointLoader:
             # Validate against Pydantic model using TypeAdapter
             datapoint = datapoint_adapter.validate_python(data)
             self._annotate_source_metadata(datapoint, file_path)
+            self._validate_contract(datapoint, file_path)
 
             self.loaded_count += 1
             logger.info(
@@ -144,6 +155,34 @@ class DataPointLoader:
             self.failed_files.append((file_path, str(e)))
             logger.error(f"Unexpected error loading {file_path}: {e}")
             raise DataPointLoadError(file_path, f"Unexpected error: {e}", e) from e
+
+    def _validate_contract(self, datapoint: DataPoint, file_path: Path) -> None:
+        """Validate metadata contract if contract checks are enabled."""
+        if not self.strict_contracts and not self.fail_on_contract_warnings:
+            return
+
+        source_tier = str((datapoint.metadata or {}).get("source_tier", "")).lower()
+        effective_strict = self.strict_contracts and source_tier != "demo"
+        report = validate_datapoint_contract(datapoint, strict=effective_strict)
+        contract_errors = list(report.errors)
+
+        if self.fail_on_contract_warnings:
+            contract_errors.extend(report.warnings)
+
+        if not contract_errors:
+            return
+
+        issue_parts = [
+            f"{issue.code} ({issue.field or 'metadata'}): {issue.message}"
+            for issue in contract_errors[:5]
+        ]
+        if len(contract_errors) > 5:
+            issue_parts.append(f"... +{len(contract_errors) - 5} more")
+        message = (
+            f"Contract validation failed for {datapoint.datapoint_id}: "
+            + "; ".join(issue_parts)
+        )
+        raise DataPointLoadError(file_path, message)
 
     def load_directory(
         self,

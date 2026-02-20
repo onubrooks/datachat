@@ -4,6 +4,7 @@ DataChat CLI
 Command-line interface for interacting with DataChat.
 
 Usage:
+    datachat cheat-sheet                   # Quick command reference
     datachat chat                          # Interactive REPL mode
     datachat ask "What's the revenue?"     # Single query mode
     datachat quickstart                    # Guided one-command bootstrap
@@ -95,6 +96,54 @@ QUERY_TEMPLATES: dict[str, str] = {
     "breakdown": "Give me a category breakdown from {table}.",
 }
 DEFAULT_TEMPLATE_TABLE = "public.grocery_sales_transactions"
+CLI_CHEAT_SHEET_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
+    (
+        "Setup",
+        [
+            ("datachat setup", "Interactive setup for target and system databases."),
+            ("datachat status", "Show initialization status and active connections."),
+            ("datachat connect <db_url>", "Set default target database URL."),
+        ],
+    ),
+    (
+        "Ask and Chat",
+        [
+            ("datachat ask \"list tables\"", "Run one question and print result."),
+            ("datachat ask --list-templates", "Show quick query templates."),
+            ("datachat chat", "Start interactive terminal chat session."),
+            ("datachat chat --session-id my-run", "Start/resume a named session."),
+        ],
+    ),
+    (
+        "Schema and SQL",
+        [
+            ("datachat schema tables", "List discoverable tables."),
+            ("datachat schema columns public.orders", "Show columns for one table."),
+            (
+                "datachat ask --execution-mode direct_sql \"SELECT * FROM public.orders LIMIT 10\"",
+                "Run read-only SQL directly.",
+            ),
+        ],
+    ),
+    (
+        "DataPoints",
+        [
+            ("datachat dp sync --datapoints-dir datapoints", "Load/sync DataPoints."),
+            ("datachat dp lint --datapoints-dir datapoints", "Validate DataPoint contracts."),
+            ("datachat dp pending list", "List generated pending DataPoints."),
+            ("datachat dp pending approve-all --latest", "Approve latest pending batch."),
+        ],
+    ),
+    (
+        "Sessions and Helpers",
+        [
+            ("datachat session list", "List saved CLI sessions."),
+            ("datachat session resume <id>", "Resume a saved session."),
+            ("datachat quickstart", "Guided bootstrap wrapper."),
+            ("datachat train --mode sync", "Thin wrapper over sync/profile workflows."),
+        ],
+    ),
+]
 
 
 def configure_cli_logging() -> None:
@@ -1200,6 +1249,23 @@ def cli():
     """DataChat - Natural language interface for data warehouses."""
     configure_cli_logging()
     pass
+
+
+@cli.command(name="cheat-sheet")
+def cheat_sheet():
+    """Show a quick CLI command cheat sheet."""
+    console.print(Panel.fit("DataChat CLI Cheat Sheet", style="cyan"))
+    for section_title, rows in CLI_CHEAT_SHEET_SECTIONS:
+        table = Table(title=section_title, show_header=True, header_style="bold cyan")
+        table.add_column("Command", style="green")
+        table.add_column("What it does", style="white")
+        for command, description in rows:
+            table.add_row(command, description)
+        console.print(table)
+    console.print(
+        "[dim]Tip: add --help to any command for full options "
+        "(for example: datachat ask --help).[/dim]"
+    )
 
 
 @cli.command()
@@ -3530,7 +3596,8 @@ def generation_status(job_id: str):
 @click.argument("file", type=click.Path(exists=True))
 @click.option(
     "--strict-contracts/--no-strict-contracts",
-    default=False,
+    default=True,
+    show_default=True,
     help="Treat advisory contract gaps as errors.",
 )
 @click.option(
@@ -3617,7 +3684,8 @@ def add_datapoint(
 )
 @click.option(
     "--strict-contracts/--no-strict-contracts",
-    default=False,
+    default=True,
+    show_default=True,
     help="Treat advisory contract gaps as errors.",
 )
 @click.option(
@@ -3746,7 +3814,8 @@ def sync_datapoints(
 )
 @click.option(
     "--strict-contracts/--no-strict-contracts",
-    default=False,
+    default=True,
+    show_default=True,
     help="Treat advisory contract gaps as errors.",
 )
 @click.option(

@@ -18,6 +18,7 @@ from backend.models.datapoint import (
 
 # Path to test fixtures
 FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures" / "datapoints"
+EXAMPLES_DIR = Path(__file__).parent.parent.parent.parent / "datapoints" / "examples"
 
 
 @pytest.fixture
@@ -155,6 +156,7 @@ class TestLoadFile:
             ("datapoints/user/table_fact_sales_001.json", "user"),
             ("datapoints/managed/table_fact_sales_001.json", "managed"),
             ("datapoints/examples/table_fact_sales_001.json", "example"),
+            ("datapoints/demo/table_fact_sales_001.json", "demo"),
             ("home/user/project/datapoints/managed/table_fact_sales_001.json", "managed"),
             ("fixtures/table_fact_sales_001.json", "custom"),
         ],
@@ -171,6 +173,39 @@ class TestLoadFile:
 
         assert datapoint.metadata["source_tier"] == expected_tier
         assert datapoint.metadata["source_path"].endswith(destination.name)
+
+    def test_load_file_strict_contracts_rejects_advisory_gaps(self, valid_business_file):
+        """Strict contract mode should fail when advisory metadata is missing."""
+        strict_loader = DataPointLoader(strict_contracts=True)
+
+        with pytest.raises(DataPointLoadError) as exc_info:
+            strict_loader.load_file(valid_business_file)
+
+        assert "Contract validation failed" in str(exc_info.value)
+        assert "missing_grain" in str(exc_info.value)
+
+    def test_load_file_strict_contracts_accepts_contract_complete_examples(self):
+        """Strict contract mode should allow contract-complete example datapoints."""
+        strict_loader = DataPointLoader(strict_contracts=True)
+        example_file = EXAMPLES_DIR / "grocery_store" / "table_grocery_stores_001.json"
+
+        datapoint = strict_loader.load_file(example_file)
+
+        assert datapoint.datapoint_id == "table_grocery_stores_001"
+
+    def test_load_file_strict_contracts_exempts_demo_datapoints(self, valid_schema_file, tmp_path):
+        """Bundled demo datapoints should not fail strict mode on advisory metadata gaps."""
+        demo_file = tmp_path / "datapoints" / "demo" / "table_fact_sales_001.json"
+        demo_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.loads(valid_schema_file.read_text(encoding="utf-8"))
+        payload["metadata"] = {"source": "demo-seed"}
+        demo_file.write_text(json.dumps(payload), encoding="utf-8")
+
+        strict_loader = DataPointLoader(strict_contracts=True)
+        datapoint = strict_loader.load_file(demo_file)
+
+        assert datapoint.datapoint_id == "table_fact_sales_001"
+        assert datapoint.metadata["source_tier"] == "demo"
 
 
 class TestLoadDirectory:

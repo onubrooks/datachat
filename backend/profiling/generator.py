@@ -105,6 +105,33 @@ class DataPointGenerator:
                 payload["metadata"] = metadata
             metadata["connection_id"] = connection_id
 
+    @staticmethod
+    def _contract_metadata(
+        table: TableProfile,
+        *,
+        source: str,
+        grain: str,
+        freshness: str = "unknown",
+    ) -> dict[str, str]:
+        table_key = f"{table.schema_name}.{table.name}"
+        return {
+            "source": source,
+            "table_key": table_key,
+            "grain": grain,
+            "freshness": freshness,
+            "exclusions": "No explicit exclusions documented by auto-profiler.",
+            "confidence_notes": (
+                "Auto-generated datapoint. Human validation is recommended "
+                "before production-critical use."
+            ),
+        }
+
+    @staticmethod
+    def _default_metric_unit(aggregation: str | None) -> str:
+        if aggregation and aggregation.upper() == "COUNT":
+            return "count"
+        return "unknown"
+
     async def _generate_schema_datapoint(
         self, table: TableProfile, index: int
     ) -> GeneratedDataPoint:
@@ -145,6 +172,8 @@ class DataPointGenerator:
         common_queries = self._normalize_list(payload.get("common_queries"))
         gotchas = self._normalize_list(payload.get("gotchas"))
         freshness = payload.get("freshness") if isinstance(payload, dict) else None
+        if not isinstance(freshness, str) or not freshness.strip():
+            freshness = "unknown"
 
         if self._has_time_series(table) and not any("DATE_TRUNC" in q for q in common_queries):
             common_queries.append(
@@ -169,7 +198,12 @@ class DataPointGenerator:
             row_count=row_count,
             owner=_DEFAULT_OWNER,
             tags=["auto-profiled"],
-            metadata={"source": "auto-profiler-llm", "table_key": f"{table.schema_name}.{table.name}"},
+            metadata=self._contract_metadata(
+                table,
+                source="auto-profiler-llm",
+                grain="row-level",
+                freshness=freshness,
+            ),
         )
 
         return GeneratedDataPoint(
@@ -207,11 +241,16 @@ class DataPointGenerator:
             ],
             common_queries=[],
             gotchas=[],
-            freshness=None,
+            freshness="unknown",
             row_count=table.row_count if table.row_count is not None else None,
             owner=_DEFAULT_OWNER,
             tags=["auto-profiled"],
-            metadata={"source": "auto-profiler-basic", "table_key": f"{table.schema_name}.{table.name}"},
+            metadata=self._contract_metadata(
+                table,
+                source="auto-profiler-basic",
+                grain="row-level",
+                freshness="unknown",
+            ),
         )
         return GeneratedDataPoint(
             datapoint=schema_datapoint.model_dump(mode="json", by_alias=True),
@@ -256,14 +295,18 @@ class DataPointGenerator:
                 synonyms=synonyms,
                 business_rules=business_rules,
                 related_tables=[f"{table.schema_name}.{table.name}"],
-                unit=metric.get("unit"),
+                unit=metric.get("unit") or self._default_metric_unit(
+                    self._normalize_aggregation(metric.get("aggregation"))
+                ),
                 aggregation=self._normalize_aggregation(metric.get("aggregation")),
                 owner=_DEFAULT_OWNER,
                 tags=["auto-profiled"],
-                metadata={
-                    "source": "auto-profiler-llm",
-                    "table_key": f"{table.schema_name}.{table.name}",
-                },
+                metadata=self._contract_metadata(
+                    table,
+                    source="auto-profiler-llm",
+                    grain="table-level",
+                    freshness="unknown",
+                ),
             )
             generated.append(
                 GeneratedDataPoint(
@@ -348,14 +391,16 @@ class DataPointGenerator:
                 synonyms=[],
                 business_rules=[],
                 related_tables=[f"{table.schema_name}.{table.name}"],
-                unit=None,
+                unit=self._default_metric_unit(aggregation),
                 aggregation=aggregation,
                 owner=_DEFAULT_OWNER,
                 tags=["auto-profiled", "basic"],
-                metadata={
-                    "source": "auto-profiler-basic",
-                    "table_key": f"{table.schema_name}.{table.name}",
-                },
+                metadata=self._contract_metadata(
+                    table,
+                    source="auto-profiler-basic",
+                    grain="table-level",
+                    freshness="unknown",
+                ),
             )
             generated.append(
                 GeneratedDataPoint(
@@ -410,15 +455,19 @@ class DataPointGenerator:
                         synonyms=synonyms,
                         business_rules=business_rules,
                         related_tables=[f"{table.schema_name}.{table.name}"],
-                        unit=metric.get("unit"),
+                        unit=metric.get("unit") or self._default_metric_unit(
+                            self._normalize_aggregation(metric.get("aggregation"))
+                        ),
                         aggregation=self._normalize_aggregation(metric.get("aggregation")),
                         owner=_DEFAULT_OWNER,
-                    tags=["auto-profiled"],
-                    metadata={
-                        "source": "auto-profiler-llm",
-                        "table_key": f"{table.schema_name}.{table.name}",
-                    },
-                )
+                        tags=["auto-profiled"],
+                        metadata=self._contract_metadata(
+                            table,
+                            source="auto-profiler-llm",
+                            grain="table-level",
+                            freshness="unknown",
+                        ),
+                    )
                     generated.append(
                         GeneratedDataPoint(
                             datapoint=business_datapoint.model_dump(

@@ -37,6 +37,12 @@ Type-specific expectations:
 `datachat dp add` and `datachat dp sync` now run contract lint checks after model validation.
 `datachat dp lint` runs the same checks without mutating vector store/graph.
 
+Current defaults:
+
+- `datachat dp add`: strict contracts enabled by default
+- `datachat dp sync`: strict contracts enabled by default
+- `datachat dp lint`: strict contracts enabled by default
+
 Options:
 
 - `--strict-contracts`: escalate advisory gaps to errors
@@ -62,6 +68,14 @@ Fail on warnings:
 python scripts/lint_datapoints.py --path datapoints --recursive --fail-on-warnings
 ```
 
+## API and sync enforcement
+
+- `POST /api/v1/datapoints` and `PUT /api/v1/datapoints/{id}` reject contract violations.
+- Pending approval endpoints (`approve`, `bulk-approve`) apply strict contract validation.
+- Background sync orchestrator runs with strict contract checks and fails the sync job when files violate contracts.
+- Bundled `datapoints/demo/` files are exempt from strict advisory-field escalation in sync mode
+  so default demo deployments do not fail on non-critical metadata gaps.
+
 ## Roadmap
 
-Next increment will apply contract checks to pending DataPoint approval paths and wire thresholded contract metrics into CI gates.
+Next increment wires thresholded contract quality metrics into CI gates and release dashboards.
