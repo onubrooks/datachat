@@ -108,6 +108,7 @@ class TestExecutorAgent:
         assert result.success is True
         assert result.executed_query.query_result.row_count == 2
         assert len(result.executed_query.query_result.rows) == 2
+        assert result.executed_query.executed_sql == sample_input.validated_sql.sql
         mock_postgres_connector.execute.assert_called_once()
 
     @pytest.mark.asyncio
@@ -704,6 +705,32 @@ Insights:
 
         with pytest.raises(QueryError):
             await executor_agent.execute(sample_input)
+
+    @pytest.mark.asyncio
+    async def test_returns_corrected_sql_when_executor_repairs_query(
+        self, executor_agent, sample_input, mock_postgres_connector, mock_llm_provider
+    ):
+        """Final response should expose the repaired SQL that actually executed."""
+        corrected_sql = "SELECT customer_id, SUM(amount) AS total FROM fact_sales GROUP BY customer_id"
+        mock_postgres_connector.execute = AsyncMock(
+            side_effect=[
+                QueryError("column missing"),
+                ConnectorQueryResult(
+                    rows=[{"customer_id": 123, "total": 5000.0}],
+                    row_count=1,
+                    columns=["customer_id", "total"],
+                    execution_time_ms=12.0,
+                ),
+            ]
+        )
+        executor_agent._attempt_sql_correction = AsyncMock(return_value=corrected_sql)
+        mock_llm_provider.set_response("Answer: Corrected query worked.")
+
+        result = await executor_agent.execute(sample_input)
+
+        assert result.success is True
+        assert result.executed_query.executed_sql == corrected_sql
+        assert mock_postgres_connector.execute.await_count == 2
 
     @pytest.mark.asyncio
     async def test_handles_connection_error(self, executor_agent, sample_input):

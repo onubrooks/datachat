@@ -225,6 +225,34 @@ class TestPipelineExecution:
         assert result["query_result"]["row_count"] == 1
 
     @pytest.mark.asyncio
+    async def test_pipeline_surfaces_executor_final_sql(self, mock_agents):
+        mock_agents.executor.execute = AsyncMock(
+            return_value=ExecutorAgentOutput(
+                success=True,
+                executed_query=ExecutedQuery(
+                    query_result=QueryResult(
+                        rows=[{"id": 1, "name": "test"}],
+                        row_count=1,
+                        columns=["id", "name"],
+                        execution_time_ms=25.0,
+                        was_truncated=False,
+                    ),
+                    executed_sql="SELECT id, name FROM fixed_table",
+                    natural_language_answer="Found 1 result.",
+                    visualization_hint="table",
+                    key_insights=[],
+                    source_citations=["table_001"],
+                ),
+                metadata=AgentMetadata(agent_name="ExecutorAgent", llm_calls=0),
+            )
+        )
+
+        result = await mock_agents.run("test query")
+
+        assert result["validated_sql"] == "SELECT id, name FROM fixed_table"
+        assert result["generated_sql"] == "SELECT id, name FROM fixed_table"
+
+    @pytest.mark.asyncio
     async def test_pipeline_decomposes_multi_question_prompt(self, mock_agents):
         mock_agents._plan_multi_sql_for_parts = AsyncMock(return_value=({}, 0, 0.0))
         result = await mock_agents.run("Show me top rows? What is total revenue?")

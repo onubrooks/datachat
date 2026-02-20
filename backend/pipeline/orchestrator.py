@@ -1536,6 +1536,11 @@ class DataChatPipeline:
             )
 
             output = await self.executor.execute(input_data)
+            executed_sql = (
+                getattr(output.executed_query, "executed_sql", None)
+                or state.get("validated_sql")
+                or state.get("generated_sql")
+            )
 
             # Update state
             state["query_result"] = {
@@ -1545,6 +1550,11 @@ class DataChatPipeline:
                 "execution_time_ms": output.executed_query.query_result.execution_time_ms,
                 "was_truncated": output.executed_query.query_result.was_truncated,
             }
+            state["validated_sql"] = executed_sql
+            state["generated_sql"] = executed_sql
+            validated_sql_object = state.get("validated_sql_object")
+            if validated_sql_object is not None:
+                validated_sql_object.sql = executed_sql
             state["natural_language_answer"] = output.executed_query.natural_language_answer
             state["visualization_hint"] = output.executed_query.visualization_hint
             state["visualization_note"] = getattr(output.executed_query, "visualization_note", None)
