@@ -184,7 +184,7 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 |-------|--------|--------|
 | ✅ React Query Migration | Server-state loading no longer relies on manual refresh orchestration | Chat + Database Manager now use query/invalidation flows for connections, schema, profiling, pending/approved DataPoints, sync, and generation jobs |
 | ✅ Error boundaries missing | Crashes killed whole app | Added app-level error boundary with retry/back-to-chat recovery |
-| Inline chart rendering | Hard to maintain | Extract to separate components |
+| ✅ Inline chart rendering | Hard to maintain | Extracted to dedicated `visualizations/` components |
 
 ---
 
@@ -299,40 +299,33 @@ frontend/src/components/visualizations/
 
 ## Roadmap
 
-### Sprint 1: Persistence & Discovery (P1)
+### Completed
 
-| Task | Effort | Priority | Status |
-|------|--------|----------|--------|
-| Add conversation persistence (localStorage) | 8h | P1 | ✅ Done |
-| Add table pagination (default 10 rows/page + user-settable page size) | 4h | P1 | ✅ Done |
-| Add retry button for errors | 4h | P1 | ✅ Done |
-| Add schema browser sidebar | 12h | P1 | ✅ Done |
+| Item | Priority | Status |
+|------|----------|--------|
+| Conversation persistence (localStorage) | P1 | ✅ Done |
+| Table pagination (default 10 + user-settable) | P1 | ✅ Done |
+| Retry button + categorized error recovery | P1 | ✅ Done |
+| Schema browser sidebar | P1 | ✅ Done |
+| Conversation history sidebar + search | P2 | ✅ Done |
+| Query templates | P2 | ✅ Done |
+| Keyboard shortcuts + focus management | P2 | ✅ Done |
+| Light/dark/system theme toggle | P2 | ✅ Done |
+| Chart tooltips, zoom, legend toggles | P3 | ✅ Done |
+| Chart settings panel (per chart type) | P3 | ✅ Done |
+| Export JSON / markdown (CSV existed) | P3 | ✅ Done |
+| Answer feedback / issue reports / suggestions | P4 | ✅ Done |
+| Chart component extraction (`visualizations/`) | P3 | ✅ Done |
+| App-level error boundary | P3 | ✅ Done |
 
-**Total Remaining: 0h**
+### Remaining
 
-### Sprint 2: Productivity (P2)
-
-| Task | Effort | Priority | Status |
-|------|--------|----------|--------|
-| Add conversation history sidebar | 16h | P2 | ✅ Done |
-| Add query templates | 8h | P2 | ✅ Done |
-| Add keyboard shortcuts | 4h | P2 | Pending |
-| Add dark mode toggle | 2h | P2 | Pending |
-
-**Total Remaining: 6h**
-
-### Sprint 3: Polish (P3)
-
-| Task | Effort | Priority |
-|------|--------|----------|
-| Add chart tooltips | 4h | P3 |
-| Add chart configuration | 6h | P3 |
-| Add export JSON/markdown | 3h | P3 |
-| Add answer feedback | 4h | P3 |
-| Extract chart components | 4h | P3 |
-| Add error boundaries | 4h | P3 |
-
-**Total: 25h**
+| Item | Priority | Status | Notes |
+|------|----------|--------|-------|
+| Consolidate redundant job state into a single `jobs` object | Medium | ⏳ Remaining | Database manager still has multiple related state slices |
+| Backend conversation persistence (cross-device/session) | Medium | ⏳ Remaining | Current conversation history is browser-local only |
+| Continue component extraction beyond charts | Low | ⏳ Remaining | Some large `Message`/chat sections still centralized |
+| Validate and improve schema discovery-time KPI | Low | ⏳ Remaining | Metrics row still marked pending |
 
 ---
 
