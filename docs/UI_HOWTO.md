@@ -113,7 +113,8 @@ On the left sidebar:
 4. Delete old entries with the trash action.
 
 Storage note:
-- Conversation history is persisted in browser local storage for that browser profile.
+- Primary persistence: backend `ui_conversations` table (system database), so sessions can be resumed across browser reloads/devices that point to the same backend.
+- Fallback: browser local storage cache (`datachat.conversation.history.v1`) if backend persistence is unavailable.
 
 ---
 

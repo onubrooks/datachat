@@ -40,6 +40,19 @@ const inferDatabaseTypeFromUrl = (value: string): string | null => {
 
 type QuickstartStatus = "done" | "ready" | "blocked";
 
+type JobsState = {
+  generating: boolean;
+  bulkApproving: boolean;
+  syncing: boolean;
+  resetting: boolean;
+  toolProfiling: boolean;
+  qualityReport: boolean;
+  editorLoading: boolean;
+  editorSaving: boolean;
+  editorDeleting: boolean;
+  editSaving: boolean;
+};
+
 const DATAPOINT_EDITOR_TEMPLATE = `{
   "datapoint_id": "query_top_customers_001",
   "type": "Query",
@@ -72,29 +85,32 @@ export function DatabaseManager() {
   const [syncScopeConnectionId, setSyncScopeConnectionId] = useState<string | null>(null);
   const [expandedPendingId, setExpandedPendingId] = useState<string | null>(null);
   const [pendingEdits, setPendingEdits] = useState<Record<string, string>>({});
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [isBulkApproving, setIsBulkApproving] = useState(false);
   const [approvingId, setApprovingId] = useState<string | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [isResetting, setIsResetting] = useState(false);
+  const [jobs, setJobs] = useState<JobsState>({
+    generating: false,
+    bulkApproving: false,
+    syncing: false,
+    resetting: false,
+    toolProfiling: false,
+    qualityReport: false,
+    editorLoading: false,
+    editorSaving: false,
+    editorDeleting: false,
+    editSaving: false,
+  });
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
   const [toolProfileMessage, setToolProfileMessage] = useState<string | null>(null);
   const [toolProfileError, setToolProfileError] = useState<string | null>(null);
-  const [toolProfileRunning, setToolProfileRunning] = useState(false);
   const [toolApprovalOpen, setToolApprovalOpen] = useState(false);
   const [qualityReport, setQualityReport] = useState<Record<string, unknown> | null>(null);
   const [qualityError, setQualityError] = useState<string | null>(null);
-  const [qualityRunning, setQualityRunning] = useState(false);
   const [editorDatapointId, setEditorDatapointId] = useState("");
   const [editorPayload, setEditorPayload] = useState(DATAPOINT_EDITOR_TEMPLATE);
   const [editorNotice, setEditorNotice] = useState<string | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
-  const [editorLoading, setEditorLoading] = useState(false);
-  const [editorSaving, setEditorSaving] = useState(false);
-  const [editorDeleting, setEditorDeleting] = useState(false);
 
   const [name, setName] = useState("");
   const [databaseUrl, setDatabaseUrl] = useState("");
@@ -106,7 +122,6 @@ export function DatabaseManager() {
   const [editingDatabaseUrl, setEditingDatabaseUrl] = useState("");
   const [editingDatabaseType, setEditingDatabaseType] = useState("postgresql");
   const [editingDescription, setEditingDescription] = useState("");
-  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [depth, setDepth] = useState("metrics_basic");
   const addConnectionRef = useRef<HTMLDivElement | null>(null);
@@ -145,6 +160,10 @@ export function DatabaseManager() {
       noticeTimerRef.current = null;
     }, 5000);
   };
+
+  const setJobState = useCallback((job: keyof JobsState, value: boolean) => {
+    setJobs((current) => ({ ...current, [job]: value }));
+  }, []);
 
   const emitEntryEvent = useCallback(
     async (
@@ -312,7 +331,7 @@ export function DatabaseManager() {
   const handleToolProfileApprove = async () => {
     setToolProfileError(null);
     setToolProfileMessage(null);
-    setToolProfileRunning(true);
+    setJobState("toolProfiling", true);
     try {
       const response = await api.executeTool({
         name: "profile_and_generate_datapoints",
@@ -333,14 +352,14 @@ export function DatabaseManager() {
     } catch (err) {
       setToolProfileError((err as Error).message);
     } finally {
-      setToolProfileRunning(false);
+      setJobState("toolProfiling", false);
       setToolApprovalOpen(false);
     }
   };
 
   const handleQualityReport = async () => {
     setQualityError(null);
-    setQualityRunning(true);
+    setJobState("qualityReport", true);
     try {
       const response = await api.executeTool({
         name: "datapoint_quality_report",
@@ -350,7 +369,7 @@ export function DatabaseManager() {
     } catch (err) {
       setQualityError((err as Error).message);
     } finally {
-      setQualityRunning(false);
+      setJobState("qualityReport", false);
     }
   };
 
@@ -519,7 +538,7 @@ export function DatabaseManager() {
   const handleSaveEdit = async () => {
     if (!editingConnectionId) return;
     setError(null);
-    setIsSavingEdit(true);
+    setJobState("editSaving", true);
     try {
       const payload: {
         name?: string;
@@ -546,7 +565,7 @@ export function DatabaseManager() {
     } catch (err) {
       setError((err as Error).message);
     } finally {
-      setIsSavingEdit(false);
+      setJobState("editSaving", false);
     }
   };
 
@@ -561,7 +580,7 @@ export function DatabaseManager() {
         return false;
       }
     }
-    setIsGenerating(true);
+    setJobState("generating", true);
     try {
       const generation = await api.startDatapointGeneration({
         profile_id: job.profile_id,
@@ -579,7 +598,7 @@ export function DatabaseManager() {
       setError((err as Error).message);
       return false;
     } finally {
-      setIsGenerating(false);
+      setJobState("generating", false);
     }
   };
 
@@ -630,7 +649,7 @@ export function DatabaseManager() {
 
   const handleBulkApprove = async (): Promise<boolean> => {
     setError(null);
-    setIsBulkApproving(true);
+    setJobState("bulkApproving", true);
     try {
       const scopeConnectionId =
         selectedConnection && !isEnvironmentConnection(selectedConnection)
@@ -648,13 +667,13 @@ export function DatabaseManager() {
       setError((err as Error).message);
       return false;
     } finally {
-      setIsBulkApproving(false);
+      setJobState("bulkApproving", false);
     }
   };
 
   const handleSync = async (): Promise<boolean> => {
     setSyncError(null);
-    setIsSyncing(true);
+    setJobState("syncing", true);
     try {
       if (syncScopeMode === "database" && !syncScopeConnectionId) {
         throw new Error("Select a connection for database-scoped sync.");
@@ -670,7 +689,7 @@ export function DatabaseManager() {
       setSyncError((err as Error).message);
       return false;
     } finally {
-      setIsSyncing(false);
+      setJobState("syncing", false);
     }
   };
 
@@ -682,7 +701,7 @@ export function DatabaseManager() {
     ) {
       return;
     }
-    setIsResetting(true);
+    setJobState("resetting", true);
     setError(null);
     try {
       await api.systemReset();
@@ -691,7 +710,7 @@ export function DatabaseManager() {
     } catch (err) {
       setError((err as Error).message);
     } finally {
-      setIsResetting(false);
+      setJobState("resetting", false);
     }
   };
 
@@ -732,7 +751,7 @@ export function DatabaseManager() {
       setEditorError("Enter a DataPoint ID to load.");
       return;
     }
-    setEditorLoading(true);
+    setJobState("editorLoading", true);
     setEditorError(null);
     setEditorNotice(null);
     try {
@@ -742,12 +761,12 @@ export function DatabaseManager() {
     } catch (err) {
       setEditorError(err instanceof Error ? err.message : "Failed to load DataPoint.");
     } finally {
-      setEditorLoading(false);
+      setJobState("editorLoading", false);
     }
   };
 
   const handleCreateDatapoint = async () => {
-    setEditorSaving(true);
+    setJobState("editorSaving", true);
     setEditorError(null);
     setEditorNotice(null);
     try {
@@ -759,12 +778,12 @@ export function DatabaseManager() {
     } catch (err) {
       setEditorError(err instanceof Error ? err.message : "Failed to create DataPoint.");
     } finally {
-      setEditorSaving(false);
+      setJobState("editorSaving", false);
     }
   };
 
   const handleUpdateDatapoint = async () => {
-    setEditorSaving(true);
+    setJobState("editorSaving", true);
     setEditorError(null);
     setEditorNotice(null);
     try {
@@ -776,7 +795,7 @@ export function DatabaseManager() {
     } catch (err) {
       setEditorError(err instanceof Error ? err.message : "Failed to update DataPoint.");
     } finally {
-      setEditorSaving(false);
+      setJobState("editorSaving", false);
     }
   };
 
@@ -789,7 +808,7 @@ export function DatabaseManager() {
     if (!confirm(`Delete managed DataPoint ${datapointId}?`)) {
       return;
     }
-    setEditorDeleting(true);
+    setJobState("editorDeleting", true);
     setEditorError(null);
     setEditorNotice(null);
     try {
@@ -799,7 +818,7 @@ export function DatabaseManager() {
     } catch (err) {
       setEditorError(err instanceof Error ? err.message : "Failed to delete DataPoint.");
     } finally {
-      setEditorDeleting(false);
+      setJobState("editorDeleting", false);
     }
   };
 
@@ -949,8 +968,8 @@ export function DatabaseManager() {
           <Button asChild variant="secondary">
             <Link href="/">Back to Chat</Link>
           </Button>
-          <Button variant="outline" onClick={handleSystemReset} disabled={isResetting}>
-            {isResetting ? "Resetting..." : "Reset System"}
+          <Button variant="outline" onClick={handleSystemReset} disabled={jobs.resetting}>
+            {jobs.resetting ? "Resetting..." : "Reset System"}
           </Button>
           <Button onClick={invalidateManagerQueries} disabled={isLoading}>
             Refresh
@@ -1009,7 +1028,7 @@ export function DatabaseManager() {
             variant="secondary"
             size="sm"
             onClick={runQuickstartGenerate}
-            disabled={!hasProfileCompleted || hasPendingDatapoints || isGenerating}
+            disabled={!hasProfileCompleted || hasPendingDatapoints || jobs.generating}
           >
             3) Generate
           </Button>
@@ -1017,7 +1036,7 @@ export function DatabaseManager() {
             variant="secondary"
             size="sm"
             onClick={runQuickstartApprove}
-            disabled={!hasPendingDatapoints || isBulkApproving}
+            disabled={!hasPendingDatapoints || jobs.bulkApproving}
           >
             4) Approve
           </Button>
@@ -1025,7 +1044,7 @@ export function DatabaseManager() {
             variant="secondary"
             size="sm"
             onClick={runQuickstartSync}
-            disabled={(!hasApprovedDatapoints && !hasPendingDatapoints) || isSyncing}
+            disabled={(!hasApprovedDatapoints && !hasPendingDatapoints) || jobs.syncing}
           >
             5) Sync
           </Button>
@@ -1211,16 +1230,16 @@ export function DatabaseManager() {
                     <Button
                       onClick={handleSaveEdit}
                       disabled={
-                        isSavingEdit ||
+                        jobs.editSaving ||
                         !editingName.trim()
                       }
                     >
-                      {isSavingEdit ? "Saving..." : "Save"}
+                      {jobs.editSaving ? "Saving..." : "Save"}
                     </Button>
                     <Button
                       variant="outline"
                       onClick={handleCancelEdit}
-                      disabled={isSavingEdit}
+                      disabled={jobs.editSaving}
                     >
                       Cancel
                     </Button>
@@ -1270,9 +1289,9 @@ export function DatabaseManager() {
           <Button
             variant="secondary"
             onClick={handleSync}
-            disabled={syncStatus?.status === "running" || isSyncing}
+            disabled={syncStatus?.status === "running" || jobs.syncing}
           >
-            {isSyncing
+            {jobs.syncing
               ? "Syncing..."
               : syncStatus?.status === "completed"
                 ? "Sync Again"
@@ -1469,12 +1488,12 @@ export function DatabaseManager() {
                 <Button
                   onClick={handleGenerate}
                   disabled={
-                    isGenerating ||
+                    jobs.generating ||
                     !hasSelection ||
                     generationJob?.status === "running"
                   }
                 >
-                  {isGenerating ? (
+                  {jobs.generating ? (
                     <span className="flex items-center gap-2">
                       <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
                       Generating...
@@ -1483,7 +1502,7 @@ export function DatabaseManager() {
                     "Generate DataPoints"
                   )}
                 </Button>
-                {isGenerating && (
+                {jobs.generating && (
                   <div className="text-xs text-muted-foreground">
                     Hang tight while we draft DataPoints and evaluate metrics.
                   </div>
@@ -1498,9 +1517,9 @@ export function DatabaseManager() {
                 <Button
                   variant="secondary"
                   onClick={handleToolProfile}
-                  disabled={toolProfileRunning}
+                  disabled={jobs.toolProfiling}
                 >
-                  {toolProfileRunning ? "Running..." : "Profile + Generate (Tool)"}
+                  {jobs.toolProfiling ? "Running..." : "Profile + Generate (Tool)"}
                 </Button>
                 {toolProfileMessage && (
                   <div className="text-xs text-muted-foreground">
@@ -1535,9 +1554,9 @@ export function DatabaseManager() {
             variant="secondary"
             size="sm"
             onClick={handleQualityReport}
-            disabled={qualityRunning}
+            disabled={jobs.qualityReport}
           >
-            {qualityRunning ? "Checking..." : "Run Quality Report"}
+            {jobs.qualityReport ? "Checking..." : "Run Quality Report"}
           </Button>
           {qualityError && <span className="text-destructive">{qualityError}</span>}
         </div>
@@ -1657,15 +1676,15 @@ export function DatabaseManager() {
             onChange={(event) => setEditorDatapointId(event.target.value)}
             placeholder="DataPoint ID (e.g. query_top_customers_001)"
           />
-          <Button variant="secondary" onClick={handleLoadDatapoint} disabled={editorLoading}>
-            {editorLoading ? "Loading..." : "Load"}
+          <Button variant="secondary" onClick={handleLoadDatapoint} disabled={jobs.editorLoading}>
+            {jobs.editorLoading ? "Loading..." : "Load"}
           </Button>
           <Button
             variant="destructive"
             onClick={handleDeleteDatapoint}
-            disabled={editorDeleting}
+            disabled={jobs.editorDeleting}
           >
-            {editorDeleting ? "Deleting..." : "Delete"}
+            {jobs.editorDeleting ? "Deleting..." : "Delete"}
           </Button>
         </div>
         <textarea
@@ -1675,16 +1694,16 @@ export function DatabaseManager() {
           aria-label="Managed DataPoint editor"
         />
         <div className="flex flex-wrap gap-2">
-          <Button onClick={handleCreateDatapoint} disabled={editorSaving}>
-            {editorSaving ? "Saving..." : "Create New"}
+          <Button onClick={handleCreateDatapoint} disabled={jobs.editorSaving}>
+            {jobs.editorSaving ? "Saving..." : "Create New"}
           </Button>
-          <Button variant="secondary" onClick={handleUpdateDatapoint} disabled={editorSaving}>
-            {editorSaving ? "Saving..." : "Update Existing"}
+          <Button variant="secondary" onClick={handleUpdateDatapoint} disabled={jobs.editorSaving}>
+            {jobs.editorSaving ? "Saving..." : "Update Existing"}
           </Button>
           <Button
             variant="outline"
             onClick={() => setEditorPayload(DATAPOINT_EDITOR_TEMPLATE)}
-            disabled={editorSaving || editorLoading}
+            disabled={jobs.editorSaving || jobs.editorLoading}
           >
             Reset Template
           </Button>
@@ -1702,12 +1721,12 @@ export function DatabaseManager() {
             onClick={handleBulkApprove}
             disabled={
               pending.length === 0 ||
-              isBulkApproving ||
+              jobs.bulkApproving ||
               !selectedConnection ||
               isEnvironmentConnection(selectedConnection)
             }
           >
-            {isBulkApproving ? "Approving..." : "Bulk Approve"}
+            {jobs.bulkApproving ? "Approving..." : "Bulk Approve"}
           </Button>
         </div>
         {selectedConnection && isEnvironmentConnection(selectedConnection) && (
@@ -1795,14 +1814,14 @@ export function DatabaseManager() {
             <div className="mt-4 flex gap-2">
               <Button
                 onClick={handleToolProfileApprove}
-                disabled={toolProfileRunning}
+                disabled={jobs.toolProfiling}
               >
-                {toolProfileRunning ? "Running..." : "Approve & Run"}
+                {jobs.toolProfiling ? "Running..." : "Approve & Run"}
               </Button>
               <Button
                 variant="secondary"
                 onClick={() => setToolApprovalOpen(false)}
-                disabled={toolProfileRunning}
+                disabled={jobs.toolProfiling}
               >
                 Cancel
               </Button>

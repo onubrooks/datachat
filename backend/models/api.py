@@ -4,6 +4,7 @@ API Request/Response Models
 Pydantic models for FastAPI endpoints.
 """
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -372,6 +373,39 @@ class EntryEventResponse(BaseModel):
     """Entry-layer telemetry response."""
 
     ok: bool = Field(default=True, description="Whether event ingestion succeeded")
+
+
+class ConversationSnapshotPayload(BaseModel):
+    """Persisted UI conversation snapshot."""
+
+    frontend_session_id: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1)
+    target_database_id: str | None = Field(default=None)
+    conversation_id: str | None = Field(default=None)
+    session_summary: str | None = Field(default=None)
+    session_state: dict[str, Any] = Field(default_factory=dict)
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: datetime | None = Field(default=None)
+    updated_at: datetime | None = Field(default=None)
+
+
+class ConversationUpsertRequest(BaseModel):
+    """Upsert payload for persisted UI conversation snapshots."""
+
+    title: str = Field(..., min_length=1)
+    target_database_id: str | None = Field(default=None)
+    conversation_id: str | None = Field(default=None)
+    session_summary: str | None = Field(default=None)
+    session_state: dict[str, Any] = Field(default_factory=dict)
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    updated_at: datetime | None = Field(default=None)
+
+
+class ConversationDeleteResponse(BaseModel):
+    """Delete result for a persisted conversation snapshot."""
+
+    ok: bool = True
+    deleted: bool = False
 
 
 class FeedbackSubmitRequest(BaseModel):
