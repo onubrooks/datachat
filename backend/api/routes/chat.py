@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from backend.api.database_context import resolve_database_type_and_url
 from backend.api.visualization import infer_direct_sql_visualization
+from backend.api.workflow_packaging import build_workflow_artifacts
 from backend.config import get_settings
 from backend.connectors.base import (
     ConnectionError as ConnectorConnectionError,
@@ -24,7 +25,12 @@ from backend.connectors.base import (
 )
 from backend.connectors.factory import create_connector
 from backend.initialization.initializer import SystemInitializer
-from backend.models.api import ChatMetrics, ChatRequest, ChatResponse, DataSource
+from backend.models.api import (
+    ChatMetrics,
+    ChatRequest,
+    ChatResponse,
+    DataSource,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +170,17 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
                 llm_calls=0,
                 retry_count=0,
             )
+            workflow_artifacts = build_workflow_artifacts(
+                query=chat_request.message or sql_query,
+                answer=answer,
+                answer_source="sql",
+                data=data,
+                sources=[],
+                validation_warnings=[],
+                clarifying_questions=[],
+                has_datapoints=status_state.has_datapoints,
+                workflow_mode=chat_request.workflow_mode,
+            )
             return ChatResponse(
                 answer=answer,
                 clarifying_questions=[],
@@ -185,6 +202,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
                 session_summary=chat_request.session_summary,
                 session_state=chat_request.session_state,
                 sub_answers=[],
+                workflow_artifacts=workflow_artifacts,
                 decision_trace=[
                     {
                         "stage": "execution_mode",
@@ -214,6 +232,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             database_url=database_url,
             target_connection_id=chat_request.target_database,
             synthesize_simple_sql=chat_request.synthesize_simple_sql,
+            workflow_mode=chat_request.workflow_mode,
         )
 
         # Extract data from pipeline state
@@ -251,6 +270,17 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
 
         # Build metrics
         metrics = _build_metrics(result)
+        workflow_artifacts = build_workflow_artifacts(
+            query=chat_request.message,
+            answer=answer,
+            answer_source=answer_source,
+            data=data,
+            sources=sources,
+            validation_warnings=result.get("validation_warnings", []),
+            clarifying_questions=result.get("clarifying_questions", []),
+            has_datapoints=status_state.has_datapoints,
+            workflow_mode=chat_request.workflow_mode,
+        )
 
         response = ChatResponse(
             answer=answer,
@@ -273,6 +303,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             session_summary=result.get("session_summary"),
             session_state=result.get("session_state"),
             sub_answers=result.get("sub_answers", []),
+            workflow_artifacts=workflow_artifacts,
             decision_trace=result.get("decision_trace", []),
         )
 

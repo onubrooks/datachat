@@ -7,6 +7,30 @@ This document is the single source of truth for **delivery status, sequencing, a
 
 ---
 
+## Must-Win Workflow Charter (Finance)
+
+Current product wedge:
+
+- **Workflow:** Revenue variance and liquidity risk investigation.
+- **Buyer persona:** Head of Finance / CFO delegate.
+- **Operator persona:** FP&A lead, finance manager, treasury/risk analyst.
+- **Business problem:** slow, low-trust cross-system reconciliation for decision-grade finance answers.
+
+Workflow steps to optimize:
+
+1. Ask: submit finance question with period/segment context.
+2. Ground: resolve canonical metric definitions + ownership.
+3. Retrieve: gather evidence across DataPoints, docs, and governed sources.
+4. Verify: run checks, surface caveats, and produce confidence.
+5. Decide: return answer package with drill-down and audit trail.
+
+Hard prioritization rule:
+
+- roadmap items must map to at least one workflow step above and one charter KPI in `docs/PRD.md`.
+- if no direct mapping, item moves to backlog.
+
+---
+
 ## Ownership Model
 
 - `docs/PRD.md` owns product intent (`what` and `why`).
@@ -62,6 +86,51 @@ Current operator model:
 | DYN-005 | Checkpoints, memory layers, replayable traces | Dynamic Agent | Planned | DYN-001 | [DYN-005](specs/DYN-005.md) |
 | DYN-006 | Domain subagents + skills | Dynamic Agent | Planned | DYN-001..DYN-005 | [DYN-006](specs/DYN-006.md) |
 | DYN-007 | Dynamic-agent eval gates and operational scorecards | Dynamic Agent | Planned | DYN-001..DYN-005 | [DYN-007](specs/DYN-007.md) |
+| WDG-001 | Finance wedge workflow v1 (revenue variance + liquidity risk) | Product | In Progress | FND-001, FND-005 | [WDG-001](specs/WDG-001.md) |
+
+---
+
+## Initiative-to-Workflow Mapping (Finance Wedge)
+
+| Initiative IDs | Workflow Step(s) | Expected KPI Movement |
+|----------------|------------------|-----------------------|
+| FND-001, FND-002, FND-004 | Ground | reduce wrong-definition incidents, reduce rework |
+| FND-003, FND-005, FND-006 | Verify | increase attribution coverage, reduce clarification loops |
+| SMP-001, SMP-002 | Ask, Decide | reduce time-to-answer package |
+| PLT-001, PLT-002 | Retrieve | improve coverage/speed across systems |
+| PLT-003 | Verify, Decide | improve answer quality in low-context runs |
+| DYN-001, DYN-002, DYN-003 | Ask, Retrieve, Verify | reduce latency + operator effort |
+| DYN-004, DYN-005 | Ground, Verify | improve trust, auditability, replayability |
+| DYN-006, DYN-007 | Decide | stabilize outcome quality and operational scorecards |
+| WDG-001 | Ask, Ground, Retrieve, Verify, Decide | reduce time-to-trusted-answer and rework |
+
+---
+
+## Prioritization Scoring Rubric
+
+Use this rubric before moving any initiative from `Planned` to `In Progress`.
+
+Score each dimension from 1 to 5:
+
+- **Workflow Impact:** expected improvement to finance wedge workflow outcome.
+- **Trust/Risk Reduction:** improvement to provenance, governance, or wrong-answer prevention.
+- **Speed/Operator Efficiency:** reduction in time-to-trusted-answer.
+- **Feasibility (Solo):** realistic implementation/test burden for a single maintainer.
+- **Reusability:** value of capability beyond first wedge without diluting wedge focus.
+
+Composite score:
+
+- `Priority Score = 0.35*Workflow Impact + 0.25*Trust + 0.20*Speed + 0.15*Feasibility + 0.05*Reusability`
+
+Promotion threshold:
+
+- `>= 3.8`: eligible for next active slot.
+- `3.0-3.7`: keep planned, needs tighter scope.
+- `< 3.0`: backlog.
+
+Mandatory gate:
+
+- any item with Trust/Risk Reduction `< 3` cannot be promoted, regardless of composite score.
 
 ---
 

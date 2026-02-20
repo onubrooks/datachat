@@ -393,6 +393,11 @@ class SQLAgent(BaseAgent):
             runtime_stats["query_datapoint_template"] = True
             return self._apply_row_limit_policy(query_dp_sql, input.query)
 
+        finance_flow_sql = self._build_finance_net_flow_template(input)
+        if finance_flow_sql:
+            runtime_stats["finance_net_flow_template"] = True
+            return self._apply_row_limit_policy(finance_flow_sql, input.query)
+
         prompt, compiler_plan = await self._build_generation_prompt(
             input,
             runtime_stats=runtime_stats,
@@ -460,8 +465,15 @@ class SQLAgent(BaseAgent):
             )
 
             return generated_sql
-
         except SQLClarificationNeeded:
+            if self._pipeline_flag("sql_force_best_effort_on_clarify", True):
+                forced_sql = await self._retry_best_effort_sql_generation(
+                    input=input,
+                    compiler_plan=compiler_plan,
+                    runtime_stats=runtime_stats,
+                )
+                if forced_sql is not None and forced_sql.sql.strip():
+                    return forced_sql.model_copy(update={"clarifying_questions": []})
             raise
         except Exception as e:
             logger.error(f"LLM call failed: {e}", exc_info=True)
@@ -539,9 +551,10 @@ class SQLAgent(BaseAgent):
     ) -> bool:
         if not self._pipeline_flag("sql_force_best_effort_on_clarify", True):
             return False
-        if generated_sql.sql.strip():
-            return False
         if not generated_sql.clarifying_questions:
+            return False
+        sql_text = generated_sql.sql.strip().rstrip(";").upper()
+        if sql_text and sql_text not in {"SELECT 1"}:
             return False
         lowered_query = (query or "").lower()
         if self._extract_explicit_table_name(lowered_query):
@@ -969,14 +982,12 @@ class SQLAgent(BaseAgent):
         text = query.lower()
         patterns = [
             r"\bshow\b.*\brows\b",
-            r"\bfirst\s+\d+\b",
-            r"\btop\s+\d+\b",
+            r"\b(?:first|top|limit)\s+\d+\s+(?:rows?|records?)\b",
             r"\bpreview\b",
-            r"\bsample\b",
+            r"\bsample\s+(?:rows?|records?)\b",
             r"\bexample\b",
             r"\bshow me\b.*\brows\b",
             r"\bdisplay\b.*\brows\b",
-            r"\blimit\b",
         ]
         return any(re.search(pattern, text) for pattern in patterns)
 
@@ -2519,6 +2530,8 @@ class SQLAgent(BaseAgent):
             try:
                 data = json.loads(json_str)
                 sql_value = data.get("sql") or data.get("query")
+                if isinstance(sql_value, str):
+                    sql_value = sql_value.strip()
                 if sql_value:
                     explanation = (
                         data.get("explanation")
@@ -2535,6 +2548,30 @@ class SQLAgent(BaseAgent):
                         clarifying_questions=data.get("clarifying_questions", []),
                     )
                     return self._apply_row_limit_policy(generated, input.query)
+                raw_questions = data.get("clarifying_questions", [])
+                if isinstance(raw_questions, str):
+                    clarifying_questions = [raw_questions.strip()] if raw_questions.strip() else []
+                elif isinstance(raw_questions, list):
+                    clarifying_questions = [str(item).strip() for item in raw_questions if str(item).strip()]
+                else:
+                    clarifying_questions = []
+                if clarifying_questions:
+                    confidence = data.get("confidence", 0.2)
+                    try:
+                        parsed_confidence = float(confidence)
+                    except (TypeError, ValueError):
+                        parsed_confidence = 0.2
+                    return GeneratedSQL(
+                        sql="SELECT 1",
+                        explanation=(
+                            data.get("explanation")
+                            or "Model requested clarification before generating executable SQL."
+                        ),
+                        used_datapoints=data.get("used_datapoints", []),
+                        confidence=max(0.0, min(1.0, parsed_confidence)),
+                        assumptions=data.get("assumptions", []),
+                        clarifying_questions=clarifying_questions[:2],
+                    )
             except json.JSONDecodeError as e:
                 logger.debug(f"Invalid JSON in LLM response: {e}")
 
@@ -2566,6 +2603,132 @@ class SQLAgent(BaseAgent):
         logger.warning("Failed to parse LLM response: Response missing 'sql' field")
         logger.debug(f"LLM response content: {normalized_content}")
         raise ValueError("Failed to parse LLM response: Response missing 'sql' field")
+
+    def _build_finance_net_flow_template(self, input: SQLAgentInput) -> GeneratedSQL | None:
+        """Return deterministic SQL for weekly deposits/withdrawals/net-flow by segment."""
+        query = (input.query or "").lower()
+        required_signals = ("deposit", "withdraw", "net flow", "segment", "week")
+        if not all(signal in query for signal in required_signals):
+            return None
+
+        table_name_map = self._collect_available_table_names(input)
+        required_tables = ("bank_transactions", "bank_accounts", "bank_customers")
+        resolved: dict[str, str] = {}
+        for required in required_tables:
+            matched = next(
+                (
+                    table_name
+                    for key, table_name in table_name_map.items()
+                    if key == required or key.endswith(f".{required}")
+                ),
+                None,
+            )
+            if not matched:
+                return None
+            resolved[required] = matched
+
+        db_type = input.database_type or getattr(self.config.database, "db_type", "postgresql")
+        if db_type != "postgresql":
+            return None
+
+        transactions_table = self.catalog.format_table_reference(
+            resolved["bank_transactions"], db_type=db_type
+        )
+        accounts_table = self.catalog.format_table_reference(resolved["bank_accounts"], db_type=db_type)
+        customers_table = self.catalog.format_table_reference(
+            resolved["bank_customers"], db_type=db_type
+        )
+        if not transactions_table or not accounts_table or not customers_table:
+            return None
+
+        sql = (
+            "WITH anchor AS ("
+            f" SELECT MAX(t.business_date) AS max_business_date FROM {transactions_table} t"
+            " WHERE t.status = 'posted'"
+            "), weekly_segment_flow AS ("
+            " SELECT"
+            "   DATE_TRUNC('week', t.business_date)::date AS week_start,"
+            "   c.segment AS segment,"
+            "   SUM(CASE WHEN t.direction = 'credit' THEN t.amount ELSE 0 END) AS deposits,"
+            "   SUM(CASE WHEN t.direction = 'debit' THEN t.amount ELSE 0 END) AS withdrawals,"
+            "   SUM(CASE WHEN t.direction = 'credit' THEN t.amount ELSE -t.amount END) AS net_flow"
+            f" FROM {transactions_table} t"
+            f" JOIN {accounts_table} a ON a.account_id = t.account_id"
+            f" JOIN {customers_table} c ON c.customer_id = a.customer_id"
+            " CROSS JOIN anchor"
+            " WHERE t.status = 'posted'"
+            "   AND t.business_date >= (anchor.max_business_date - INTERVAL '7 weeks')"
+            " GROUP BY 1, 2"
+            "), with_wow AS ("
+            " SELECT"
+            "   week_start,"
+            "   segment,"
+            "   deposits,"
+            "   withdrawals,"
+            "   net_flow,"
+            "   net_flow - LAG(net_flow) OVER (PARTITION BY segment ORDER BY week_start)"
+            "     AS wow_net_flow_change"
+            " FROM weekly_segment_flow"
+            "), segment_decline AS ("
+            " SELECT"
+            "   segment,"
+            "   SUM(CASE WHEN wow_net_flow_change < 0 THEN wow_net_flow_change ELSE 0 END)"
+            "     AS total_wow_decline,"
+            "   ROW_NUMBER() OVER ("
+            "     ORDER BY SUM(CASE WHEN wow_net_flow_change < 0 THEN wow_net_flow_change ELSE 0 END)"
+            "   ) AS decline_rank"
+            " FROM with_wow"
+            " GROUP BY segment"
+            ")"
+            " SELECT"
+            "   w.week_start,"
+            "   w.segment,"
+            "   w.deposits,"
+            "   w.withdrawals,"
+            "   w.net_flow,"
+            "   w.wow_net_flow_change,"
+            "   (COALESCE(d.decline_rank, 999) <= 2) AS top_decline_driver"
+            " FROM with_wow w"
+            " LEFT JOIN segment_decline d ON d.segment = w.segment"
+            " ORDER BY w.week_start DESC, w.segment"
+        )
+        return GeneratedSQL(
+            sql=sql,
+            explanation=(
+                "Computed weekly deposits, withdrawals, and net flow by segment over the latest 8 weeks, "
+                "then flagged top 2 segments with largest cumulative week-over-week net-flow decline."
+            ),
+            used_datapoints=[],
+            confidence=0.78,
+            assumptions=[
+                "Deposits are inferred as transactions where direction = 'credit'.",
+                "Withdrawals are inferred as transactions where direction = 'debit'.",
+                "Window anchors to latest posted business_date in bank_transactions.",
+            ],
+            clarifying_questions=[],
+        )
+
+    def _collect_available_table_names(self, input: SQLAgentInput) -> dict[str, str]:
+        table_map: dict[str, str] = {}
+        for datapoint in getattr(input.investigation_memory, "datapoints", []) or []:
+            metadata = datapoint.metadata if isinstance(datapoint.metadata, dict) else {}
+            table_name = metadata.get("table_name") or metadata.get("table")
+            if not isinstance(table_name, str) or not table_name.strip():
+                continue
+            normalized = table_name.strip().lower()
+            table_map.setdefault(normalized, table_name.strip())
+
+        db_type = input.database_type or getattr(self.config.database, "db_type", "postgresql")
+        db_url = input.database_url or (
+            str(self.config.database.url) if self.config.database.url else None
+        )
+        if db_url:
+            schema_key = f"{db_type}::{db_url}"
+            for table_name in self._live_schema_tables_cache.get(schema_key, set()):
+                if isinstance(table_name, str) and table_name.strip():
+                    normalized = table_name.strip().lower()
+                    table_map.setdefault(normalized, table_name.strip())
+        return table_map
 
     def _coerce_response_content(self, content: Any) -> str:
         if isinstance(content, str):

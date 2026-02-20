@@ -382,11 +382,9 @@ class CatalogIntelligence:
     def is_sample_rows_query(self, query: str) -> bool:
         patterns = (
             r"\bshow\b.*\brows\b",
-            r"\bfirst\s+\d+\b",
-            r"\btop\s+\d+\b",
-            r"\blimit\s+\d+\b",
+            r"\b(?:first|top|limit)\s+\d+\s+(?:rows?|records?)\b",
             r"\bpreview\b",
-            r"\bsample\b",
+            r"\bsample\s+(?:rows?|records?)\b",
             r"\bexample rows?\b",
         )
         return any(re.search(pattern, query) for pattern in patterns)

@@ -1,5 +1,7 @@
 # DataChat
 
+DataChat solves the trust and speed gap between raw enterprise data and business decisions by turning fragmented data plus domain knowledge into governed, actionable, context-aware answers and workflows.
+
 AI-powered natural language interface for your database.
 
 DataChat lets you ask questions in plain English and get SQL, results, and clarifications. It supports a credentials-only path (no DataPoints required) and a richer path with DataPoints for business context.

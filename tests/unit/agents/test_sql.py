@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from backend.agents.sql import QueryCompilerPlan, SQLAgent
+from backend.agents.sql import QueryCompilerPlan, SQLAgent, SQLClarificationNeeded
 from backend.llm.models import LLMResponse, LLMUsage
 from backend.models.agent import (
     AgentMetadata,
@@ -403,6 +403,58 @@ class TestExecution:
                 sql_agent,
                 "_request_sql_from_llm",
                 new=AsyncMock(side_effect=[first, second]),
+            ) as mock_request,
+        ):
+            output = await sql_agent(sample_sql_agent_input)
+
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "FROM analytics.fact_sales" in output.generated_sql.sql
+        assert output.generated_sql.clarifying_questions == []
+        assert mock_request.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_force_best_effort_retry_after_sql_clarification_exception(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        compiler_plan = QueryCompilerPlan(
+            query=sample_sql_agent_input.query,
+            operators=[],
+            candidate_tables=["analytics.fact_sales"],
+            selected_tables=["analytics.fact_sales"],
+            join_hypotheses=[],
+            column_hints=["analytics.fact_sales.amount", "analytics.fact_sales.date"],
+            confidence=0.82,
+            path="deterministic",
+            reason="table_match",
+        )
+        forced = GeneratedSQL(
+            sql=(
+                "SELECT DATE_TRUNC('month', date) AS month, SUM(amount) AS total_sales "
+                "FROM analytics.fact_sales GROUP BY 1 ORDER BY 1 LIMIT 10"
+            ),
+            explanation="Best-effort SQL generated from selected tables.",
+            confidence=0.74,
+            used_datapoints=[],
+            assumptions=["Assumed sales are stored in analytics.fact_sales."],
+            clarifying_questions=[],
+        )
+
+        with (
+            patch.object(
+                sql_agent,
+                "_build_generation_prompt",
+                new=AsyncMock(return_value=("prompt", compiler_plan)),
+            ),
+            patch.object(
+                sql_agent,
+                "_request_sql_from_llm",
+                new=AsyncMock(
+                    side_effect=[
+                        SQLClarificationNeeded(["Which table should I use to answer this?"]),
+                        forced,
+                    ]
+                ),
             ) as mock_request,
         ):
             output = await sql_agent(sample_sql_agent_input)
@@ -1259,6 +1311,7 @@ class TestErrorHandling:
             sql_prompt_budget_enabled=False,
             schema_snapshot_cache_enabled=False,
             sql_formatter_fallback_enabled=False,
+            sql_force_best_effort_on_clarify=False,
         )
 
         with (
@@ -1322,6 +1375,23 @@ class TestErrorHandling:
         )
 
         assert generated.sql == "SELECT COUNT(*) FROM analytics.fact_sales"
+
+    def test_parse_llm_response_handles_clarification_only_json(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        content = json.dumps(
+            {
+                "sql": "",
+                "explanation": "Need more detail before generating SQL.",
+                "confidence": 0.25,
+                "clarifying_questions": ["Which table should I use?"],
+            }
+        )
+
+        generated = sql_agent._parse_llm_response(content, sample_sql_agent_input)
+
+        assert generated.sql == "SELECT 1"
+        assert generated.clarifying_questions == ["Which table should I use?"]
 
     @pytest.mark.asyncio
     async def test_handles_non_string_retry_payload_without_type_error(
@@ -1557,6 +1627,57 @@ class TestErrorHandling:
         generated = sql_agent._parse_llm_response(content, sql_input)
 
         assert generated.sql.endswith("LIMIT 5")
+
+    @pytest.mark.asyncio
+    async def test_uses_finance_net_flow_template_for_segment_variance(self, sql_agent):
+        memory = InvestigationMemory(
+            query="seed",
+            datapoints=[
+                RetrievedDataPoint(
+                    datapoint_id="table_bank_transactions_001",
+                    datapoint_type="Schema",
+                    name="Bank Transactions",
+                    score=0.95,
+                    source="hybrid",
+                    metadata={"table_name": "public.bank_transactions", "key_columns": []},
+                ),
+                RetrievedDataPoint(
+                    datapoint_id="table_bank_accounts_001",
+                    datapoint_type="Schema",
+                    name="Bank Accounts",
+                    score=0.94,
+                    source="hybrid",
+                    metadata={"table_name": "public.bank_accounts", "key_columns": []},
+                ),
+                RetrievedDataPoint(
+                    datapoint_id="table_bank_customers_001",
+                    datapoint_type="Schema",
+                    name="Bank Customers",
+                    score=0.93,
+                    source="hybrid",
+                    metadata={"table_name": "public.bank_customers", "key_columns": []},
+                ),
+            ],
+            total_retrieved=3,
+            retrieval_mode="hybrid",
+            sources_used=[],
+        )
+        sql_input = SQLAgentInput(
+            query=(
+                "Show total deposits, withdrawals, and net flow by segment for the last 8 weeks, "
+                "then identify the top 2 segments driving week-over-week net flow decline."
+            ),
+            investigation_memory=memory,
+            database_type="postgresql",
+        )
+
+        output = await sql_agent(sql_input)
+
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "weekly_segment_flow" in output.generated_sql.sql
+        assert "top_decline_driver" in output.generated_sql.sql
+        assert output.metadata.llm_calls == 0
 
 
 class TestInputValidation:

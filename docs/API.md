@@ -54,7 +54,8 @@ Request body:
   "session_state": {
     "last_goal": "What was revenue last quarter?"
   },
-  "synthesize_simple_sql": true
+  "synthesize_simple_sql": true,
+  "workflow_mode": "auto"
 }
 ```
 
@@ -65,6 +66,9 @@ Notes:
 - If `target_database` is omitted, the default registry connection is used when set.
 - `synthesize_simple_sql` is optional. When `false`, simple SQL answers skip
   response synthesis for lower latency.
+- `workflow_mode` is optional:
+  - `auto` (default): infer workflow packaging from query/source signals.
+  - `finance_variance_v1`: force finance-brief packaging when possible.
 - `session_summary` and `session_state` are optional turn-to-turn memory fields.
   Clients should echo these from one response into the next request to improve
   follow-up continuity with bounded token usage.
@@ -90,6 +94,13 @@ Response fields (selected):
 - `session_summary`: compact summary to pass into the next turn.
 - `session_state`: structured memory object to pass into the next turn.
 - `decision_trace`: deterministic routing trace entries used by eval/ops gates.
+- `workflow_artifacts` (optional): decision-ready finance brief package with:
+  - `summary`
+  - `metrics` (label/value pairs)
+  - `drivers` (top contributors)
+  - `caveats`
+  - `sources`
+  - `follow_ups`
 
 ## Database Connections
 

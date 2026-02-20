@@ -52,3 +52,4 @@ Readiness rule before implementation:
 | DYN-005 | [DYN-005.md](DYN-005.md) |
 | DYN-006 | [DYN-006.md](DYN-006.md) |
 | DYN-007 | [DYN-007.md](DYN-007.md) |
+| WDG-001 | [WDG-001.md](WDG-001.md) |

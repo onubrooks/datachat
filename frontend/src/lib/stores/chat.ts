@@ -60,6 +60,16 @@ export interface Message extends ChatMessage {
     query_compiler_llm_refinements?: number;
     query_compiler_latency_ms?: number;
   };
+  workflow_artifacts?: {
+    package_version: string;
+    domain: string;
+    summary: string;
+    metrics: Array<{ label: string; value: string }>;
+    drivers: Array<{ dimension: string; value: string; contribution: string }>;
+    caveats: string[];
+    sources: Array<{ datapoint_id: string; name: string; source_type: string }>;
+    follow_ups: string[];
+  } | null;
 }
 
 type PersistedMessage = Pick<
@@ -79,6 +89,7 @@ type PersistedMessage = Pick<
   | "evidence"
   | "metrics"
   | "sub_answers"
+  | "workflow_artifacts"
 > & {
   timestamp: string | Date;
   data?: Record<string, unknown[]> | null;
@@ -157,6 +168,18 @@ const compactMessageForPersistence = (message: Message): PersistedMessage => {
       sql: sub.sql,
       visualization_hint: sub.visualization_hint,
     })),
+    workflow_artifacts: message.workflow_artifacts
+      ? {
+          package_version: message.workflow_artifacts.package_version,
+          domain: message.workflow_artifacts.domain,
+          summary: message.workflow_artifacts.summary.slice(0, 500),
+          metrics: message.workflow_artifacts.metrics.slice(0, 6),
+          drivers: message.workflow_artifacts.drivers.slice(0, 5),
+          caveats: message.workflow_artifacts.caveats.slice(0, 6),
+          sources: message.workflow_artifacts.sources.slice(0, 6),
+          follow_ups: message.workflow_artifacts.follow_ups.slice(0, 6),
+        }
+      : null,
     data: compactedData,
     timestamp: message.timestamp,
   };
@@ -339,6 +362,7 @@ export const useChatStore = create<ChatState>()(
         tool_approval_required: response.tool_approval_required,
         tool_approval_message: response.tool_approval_message,
         tool_approval_calls: response.tool_approval_calls,
+        workflow_artifacts: response.workflow_artifacts,
       };
 
       return {

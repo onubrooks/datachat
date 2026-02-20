@@ -1666,6 +1666,7 @@ class TestIntentGate:
             database_url=None,
             target_connection_id=None,
             synthesize_simple_sql=None,
+            workflow_mode="auto",
             correlation_prefix="test",
         )
         state["retrieved_datapoints"] = []
