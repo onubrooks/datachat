@@ -11,6 +11,7 @@ Use the CLI to initialize DataChat, profile a database, and ask questions from t
 ```bash
 pip install -e .
 datachat --help
+datachat cheat-sheet
 ```
 
 ## 1) Configure Databases

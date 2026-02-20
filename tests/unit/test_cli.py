@@ -63,6 +63,20 @@ class TestCLIBasics:
         assert result.exit_code == 0
         assert "Interactive REPL mode" in result.output
 
+    def test_cheat_sheet_command_exists(self, runner):
+        """Test that cheat-sheet command exists."""
+        result = runner.invoke(cli, ["cheat-sheet", "--help"])
+        assert result.exit_code == 0
+        assert "quick cli command cheat sheet" in result.output.lower()
+
+    def test_cheat_sheet_command_outputs_reference(self, runner):
+        """Test cheat-sheet output includes key command references."""
+        result = runner.invoke(cli, ["cheat-sheet"])
+        assert result.exit_code == 0
+        assert "DataChat CLI Cheat Sheet" in result.output
+        assert "datachat ask \"list tables\"" in result.output
+        assert "datachat dp sync" in result.output
+
     def test_ask_command_exists(self, runner):
         """Test that ask command exists."""
         result = runner.invoke(cli, ["ask", "--help"])
