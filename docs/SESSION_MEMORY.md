@@ -50,9 +50,14 @@ On each turn:
 
 ## Current Scope
 
-- session memory is in-client (UI local storage + CLI process memory)
+- session memory is in-client (UI local storage + CLI local files under `~/.datachat/sessions.json`)
 - no durable server-side history yet
-- memory resets when chat is cleared (UI) or process ends (CLI)
+- CLI supports explicit persistence and resume via:
+  - `datachat chat --session-id <id>`
+  - `datachat session list`
+  - `datachat session resume <id>`
+  - `datachat session clear <id>`
+- memory resets when chat is cleared (UI) or when CLI sessions are explicitly cleared
 
 ## Manual Testing (UI)
 
@@ -88,3 +93,12 @@ datachat chat
 
 6. Expected:
 - no prior memory should exist after restart; assistant asks clarifying question or treats as new intent.
+
+7. Persist and resume:
+
+```bash
+datachat chat --session-id memory-test
+datachat session list
+datachat session resume memory-test
+datachat session clear memory-test
+```

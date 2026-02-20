@@ -8,14 +8,20 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import click
 import pytest
 from click.testing import CliRunner
 
 from backend.cli import (
     _apply_datapoint_scope,
+    _apply_display_pagination,
     _emit_entry_event_cli,
+    _is_read_only_sql,
+    _normalize_target_database,
     _register_cli_connection,
+    _render_template_query,
     _resolve_registry_connection_id_for_url,
+    _resolve_schema_table_match,
     _resolve_target_database_url,
     _should_exit_chat,
     _split_sql_statements,
@@ -93,6 +99,24 @@ class TestCLIBasics:
         assert result.exit_code == 0
         assert "sync/profile generation flows" in result.output.lower()
 
+    def test_schema_command_exists(self, runner):
+        """Test that schema group exists."""
+        result = runner.invoke(cli, ["schema", "--help"])
+        assert result.exit_code == 0
+        assert "Browse live database schema" in result.output
+
+    def test_template_command_exists(self, runner):
+        """Test that template group exists."""
+        result = runner.invoke(cli, ["template", "--help"])
+        assert result.exit_code == 0
+        assert "query templates" in result.output.lower()
+
+    def test_session_command_exists(self, runner):
+        """Test that session group exists."""
+        result = runner.invoke(cli, ["session", "--help"])
+        assert result.exit_code == 0
+        assert "saved cli sessions" in result.output.lower()
+
     def test_reset_command_exposes_datapoint_clear_flags(self, runner):
         """Reset command should expose datapoint clear/keep options."""
         result = runner.invoke(cli, ["reset", "--help"])
@@ -136,6 +160,75 @@ class TestCLIBasics:
         _apply_datapoint_scope([datapoint], global_scope=True)
         assert "connection_id" not in datapoint.metadata
         assert datapoint.metadata["scope"] == "global"
+
+    def test_read_only_sql_guard(self):
+        assert _is_read_only_sql("SELECT * FROM users LIMIT 10")
+        assert _is_read_only_sql("WITH x AS (SELECT 1) SELECT * FROM x")
+        assert not _is_read_only_sql("DELETE FROM users")
+        assert not _is_read_only_sql("SELECT 1; SELECT 2;")
+
+    def test_display_pagination_slices_rows(self):
+        data = {"id": [1, 2, 3, 4, 5], "name": ["a", "b", "c", "d", "e"]}
+        page, info = _apply_display_pagination(data, page=2, page_size=2)
+        assert page == {"id": [3, 4], "name": ["c", "d"]}
+        assert info == {
+            "total_rows": 5,
+            "page": 2,
+            "page_size": 2,
+            "start_row": 3,
+            "end_row": 4,
+            "total_pages": 3,
+        }
+
+    def test_render_template_query_uses_default_table(self):
+        rendered = _render_template_query("sample-rows")
+        assert "grocery_sales_transactions" in rendered
+
+    def test_normalize_target_database_treats_none_like_missing(self):
+        assert _normalize_target_database(None) is None
+        assert _normalize_target_database("") is None
+        assert _normalize_target_database("None") is None
+        assert _normalize_target_database("null") is None
+        assert _normalize_target_database(" conn-123 ") == "conn-123"
+
+    def test_resolve_schema_table_match_without_schema_uses_unique_match(self):
+        table = MagicMock()
+        table.schema_name = "analytics"
+        table.table_name = "orders"
+        resolved = _resolve_schema_table_match(
+            [table],
+            requested_table="orders",
+            requested_schema=None,
+        )
+        assert resolved is table
+
+    def test_resolve_schema_table_match_without_schema_rejects_ambiguous(self):
+        first = MagicMock()
+        first.schema_name = "public"
+        first.table_name = "orders"
+        second = MagicMock()
+        second.schema_name = "analytics"
+        second.table_name = "orders"
+        with pytest.raises(click.ClickException, match="ambiguous"):
+            _resolve_schema_table_match(
+                [first, second],
+                requested_table="orders",
+                requested_schema=None,
+            )
+
+    def test_resolve_schema_table_match_with_schema_filters_match(self):
+        first = MagicMock()
+        first.schema_name = "public"
+        first.table_name = "orders"
+        second = MagicMock()
+        second.schema_name = "analytics"
+        second.table_name = "orders"
+        resolved = _resolve_schema_table_match(
+            [first, second],
+            requested_table="orders",
+            requested_schema="analytics",
+        )
+        assert resolved is second
 
 
 class TestDemoCommand:
@@ -578,6 +671,19 @@ class TestAskCommand:
         result = runner.invoke(ask, ["--help"])
         assert result.exit_code == 0
         assert "Ask a single question" in result.output
+        assert "--template" in result.output
+        assert "--target-database" in result.output
+        assert "--execution-mode" in result.output
+
+    def test_ask_rejects_query_and_template_together(self, runner):
+        result = runner.invoke(cli, ["ask", "show users", "--template", "list-tables"])
+        assert result.exit_code != 0
+        assert "either QUERY or --template" in result.output
+
+    def test_ask_lists_templates(self, runner):
+        result = runner.invoke(cli, ["ask", "--list-templates"])
+        assert result.exit_code == 0
+        assert "list-tables" in result.output
 
 
 class TestDataPointCommands:
@@ -798,6 +904,25 @@ class TestCLIState:
                 assert payload["step"] == "start"
                 assert payload["status"] == "started"
 
+    def test_cli_state_persists_sessions(self, temp_config_dir):
+        from backend.cli import CLIState
+
+        with patch("pathlib.Path.home", return_value=temp_config_dir.parent):
+            cli_state = CLIState()
+            cli_state.upsert_session(
+                {
+                    "session_id": "session-1",
+                    "title": "Revenue check",
+                    "conversation_history": [{"role": "user", "content": "hello"}],
+                    "updated_at": "2026-02-19T00:00:00+00:00",
+                }
+            )
+            loaded = cli_state.get_session("session-1")
+            assert loaded is not None
+            assert loaded["title"] == "Revenue check"
+            assert cli_state.delete_session("session-1") is True
+            assert cli_state.get_session("session-1") is None
+
 
 class TestQuickstartAndTrainCommands:
     """Test quickstart/train wrappers."""
@@ -920,6 +1045,9 @@ class TestCLIIntegration:
             ["--help"],
             ["chat", "--help"],
             ["ask", "--help"],
+            ["schema", "--help"],
+            ["template", "--help"],
+            ["session", "--help"],
             ["connect", "--help"],
             ["setup", "--help"],
             ["status", "--help"],
@@ -946,6 +1074,9 @@ class TestCLIIntegration:
         assert "setup" in result.output
         assert "status" in result.output
         assert "dp" in result.output
+        assert "schema" in result.output
+        assert "session" in result.output
+        assert "template" in result.output
 
     def test_datapoint_subcommands(self, runner):
         """Test that dp group has expected subcommands."""

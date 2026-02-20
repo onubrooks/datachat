@@ -107,6 +107,58 @@ Start an interactive session:
 datachat chat --pager --max-clarifications 3
 ```
 
+Use built-in query templates:
+
+```bash
+datachat ask --list-templates
+datachat ask --template list-tables
+datachat ask --template sample-rows --table public.orders
+```
+
+Run direct SQL mode (read-only):
+
+```bash
+datachat ask --execution-mode direct_sql "SELECT * FROM public.orders LIMIT 10"
+```
+
+In interactive chat, switch modes at runtime:
+
+```text
+/mode sql
+SELECT * FROM public.orders LIMIT 10
+/mode nl
+```
+
+Target a specific registry connection for one request/session:
+
+```bash
+datachat ask --target-database <connection_uuid> "Show total revenue this month"
+datachat chat --target-database <connection_uuid>
+```
+
+Control table output pagination in terminal:
+
+```bash
+datachat ask --page 1 --page-size 10 "Show first 100 rows from public.orders"
+```
+
+Use schema explorer commands from CLI:
+
+```bash
+datachat schema tables --search orders
+datachat schema columns public.orders
+datachat schema sample public.orders --rows 25 --offset 0
+```
+
+Persist and resume CLI sessions:
+
+```bash
+datachat chat --session-id sales-debug
+datachat session list
+datachat session resume sales-debug
+datachat session clear sales-debug
+```
+
 ## 5) Troubleshooting
 
 - **Auto-profiling unavailable**

@@ -21,6 +21,7 @@ Planned (not yet implemented as full product features):
 ## Document Map
 
 - `../GETTING_STARTED.md` - setup paths and first-run flow.
+- `CLI_QUICKSTART.md` - terminal how-to for ask/chat/templates/schema/session commands.
 - `ARCHITECTURE.md` - system architecture and engineering design guide.
 - `API.md` - API endpoints and payloads.
 - `UI_HOWTO.md` - step-by-step user guide for chat UI workflows (ask mode, SQL mode, sidebars, charts, pagination, shortcuts).
