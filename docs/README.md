@@ -20,9 +20,20 @@ Planned (not yet implemented as full product features):
 
 ## Document Map
 
+Planning hierarchy:
+
+- `PRD.md` = what/why
+- `ARCHITECTURE.md` = how
+- `LEVELS.md` = maturity definitions
+- `ROADMAP.md` = sequencing/status/dependencies
+- `specs/` = per-initiative implementation details (execution contract)
+
 - `../GETTING_STARTED.md` - setup paths and first-run flow.
 - `CLI_QUICKSTART.md` - terminal how-to for ask/chat/templates/schema/session commands.
 - `ARCHITECTURE.md` - system architecture and engineering design guide.
+- `ARCHITECTURE_DYNAMIC_DATA_AGENT.md` - accepted target architecture for dynamic data-agent harness (data + business logic + organizational knowledge).
+- `ROADMAP.md` - unified initiative tracker (single source of truth for status/timing/dependencies).
+- `specs/README.md` - spec authoring workflow and required implementation-spec sections.
 - `API.md` - API endpoints and payloads.
 - `UI_HOWTO.md` - step-by-step user guide for chat UI workflows (ask mode, SQL mode, sidebars, charts, pagination, shortcuts).
 - `CREDENTIALS_ONLY_MODE.md` - capabilities/limits for credentials-only mode.

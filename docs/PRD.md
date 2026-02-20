@@ -4,6 +4,16 @@ Version: 1.1
 Date: February 8, 2026
 Status: Active (delivery-tracking)
 
+## Document Role
+
+`PRD.md` is the source of truth for product intent:
+
+- problem statements
+- user value
+- priorities and success criteria
+
+Status sequencing, dependencies, and delivery phase tracking live in `docs/ROADMAP.md`.
+
 ## Product Vision
 
 DataChat provides a natural-language interface for operational and analytics databases, with progressive enhancement:
@@ -44,6 +54,8 @@ DataChat provides a natural-language interface for operational and analytics dat
 
 ### Priority 0: MetadataOps Foundation (Ship before major Level 3-5 expansion)
 
+Roadmap references: `FND-001`..`FND-006`
+
 1. **Metadata contracts + linting (authoring quality gate)**
    - Enforce required metadata fields (grain, units, freshness, owner, exclusions, confidence notes).
    - Fail DataPoint ingest/sync when contracts are violated.
@@ -72,11 +84,15 @@ Decision:
 
 Phase 1.4 (allowed scope):
 
+Roadmap reference: `SMP-001`
+
 - simple entry UX/wrappers (for example, quickstart or train-style helper commands)
 - no new retrieval/routing semantics
 - no bypass of metadata/eval/trace controls
 
 Phase 1.6 (full package scope):
+
+Roadmap reference: `SMP-002`
 
 - deterministic template/function execution lane for repeated business questions
 - embed-ready SDK/surface for app integration
@@ -88,6 +104,8 @@ Rationale:
 - avoid introducing convenience paths that drift from metadata truth
 
 ### Priority 1: Platform expansion after foundation KPIs are green
+
+Roadmap references: `PLT-001`..`PLT-003`
 
 1. Connector expansion beyond current runtime engines.
 2. Improved deterministic handling for additional catalog intents.
@@ -162,59 +180,6 @@ The YAML-based schema described in DATAPOINT_SCHEMA.md is the target architectur
 
 ---
 
-## Phase Tracking
+## Delivery Tracking
 
-### Phase 1: Doc Reconciliation ✅
-- [x] Update ARCHITECTURE.md with current implementation flow
-- [x] Add current vs target state sections to DATAPOINT_SCHEMA.md
-- [x] Add Level 2.5 (QueryDataPoints) to LEVELS.md
-- [x] Add Knowledge Graph column-level edges to foundation
-- [x] Create DATAPOINT_MIGRATION.md
-- [x] Add current DataPoint type system to PRD.md
-- [x] Add Phase Tracking section
-
-### Phase 2: QueryDataPoint Implementation ✅
-- [x] Add QueryDataPoint model to backend/models/datapoint.py
-- [x] Add QueryDataPoint loader support in backend/knowledge/datapoints.py
-- [x] Add QueryDataPoint to vector store (document/metadata generation)
-- [x] Add QueryDataPoint contract validation
-- [x] Update retriever conflict key for Query type
-- [x] Add CLI commands: `datachat dp add query`, `datachat dp list --type Query`
-- [x] Update RetrievedDataPoint model to include Query type
-- [x] Add tests for QueryDataPoint model validation
-- [x] Add tests for QueryDataPoint contract validation
-- [x] Integrate with SQLAgent for template use (auto-use QueryDataPoint SQL templates)
-- [x] Add tests for SQLAgent QueryDataPoint template matching
-
-### Phase 2.1: Routing Fixes ✅
-- [x] Fix P1: Add 'clarification' route to intent_gate check
-- [x] Fix P2: Add explicit 'tool' route handling in orchestrator
-- [x] Improve QueryAnalyzerAgent prompt to prefer sql route over clarification
-- [x] Remove unreachable dead code in orchestrator
-- [x] Add 'route' field to PipelineState
-
-### Phase 3: Contract v2 Expansion
-- [ ] Add business_meaning column validation
-- [ ] Add calculation SQL fragment validation
-- [ ] Add synonym coverage validation
-- [ ] Add CI integration for contract gates
-
-### Phase 4: Feedback Telemetry Loop
-- [ ] Create backend/pipeline/telemetry.py
-- [ ] Track wrong-table selections
-- [ ] Track clarification churn
-- [ ] Add CLI: `datachat telemetry report`
-- [ ] Add CLI: `datachat dp suggest --datapoint <id>`
-
-### Phase 5: Knowledge Graph Enhancement
-- [ ] Add column-level edges (DERIVES_FROM, COMPUTES, FILTERS_BY)
-- [ ] Add semantic edges (metric → column)
-- [ ] Add grain edges (table → granularity)
-- [ ] Integrate graph traversal into ContextAgent
-- [ ] Add CLI: `datachat graph show`, `datachat graph lineage`
-
-### Phase 6: Session Memory Enhancement
-- [ ] Add entity_memory to SessionContext
-- [ ] Add temporal_context handling
-- [ ] Implement pronoun resolution ("it", "that table")
-- [ ] Implement filter continuation ("same filter as before")
+For active initiative status, sequencing, and dependencies, use `docs/ROADMAP.md`.

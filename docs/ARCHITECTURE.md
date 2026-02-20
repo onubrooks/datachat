@@ -6,6 +6,40 @@ DataChat is a data-native agent operating system that enables natural language i
 
 **Core Differentiator:** DataChat is the only AI assistant that understands your database schema, business metrics definitions, AND the code that implements them—all in one unified system.
 
+## Document Role
+
+`ARCHITECTURE.md` is the source of truth for technical design decisions and runtime architecture.
+
+- It answers: "How does the system work?"
+- It does not own delivery status sequencing.
+
+For initiative sequencing/status/dependencies, use `docs/ROADMAP.md`.
+For product intent/prioritization, use `docs/PRD.md`.
+For maturity definitions, use `docs/LEVELS.md`.
+
+---
+
+## Accepted Direction: Dynamic Data Agent Harness
+
+Accepted target direction:
+
+- DataChat evolves into a **dynamic data agent harness** (not a coding agent).
+- Core capability focus:
+  - databases/datastores
+  - business logic in docs/files
+  - organizational knowledge context
+- Runtime shift:
+  - from fixed linear pipeline to bounded plan/act/verify/adapt loops
+  - with policy classes, approvals, and replayable traces
+
+Canonical target-design reference:
+
+- `docs/ARCHITECTURE_DYNAMIC_DATA_AGENT.md` (accepted)
+
+Roadmap linkage:
+
+- `DYN-001`..`DYN-007` in `docs/ROADMAP.md`
+
 ---
 
 ## Implementation Status Snapshot (February 2026)
@@ -203,6 +237,8 @@ The DATAPOINT_SCHEMA.md describes a YAML-based system with richer types:
 ---
 
 ## The Value Ladder (Progressive Enhancement)
+
+Note: level boundaries and maturity status are canonical in `docs/LEVELS.md`. This section focuses on technical implications of each level.
 
 ### Level 1: Schema-Aware Querying (Zero Setup)
 
@@ -1298,66 +1334,19 @@ datachat/
 
 ---
 
-## Implementation Phases
+## Delivery Sequencing Contract
 
-### Phase 1: Core Runtime (Current)
+Architecture sequencing is tracked by initiative IDs in `docs/ROADMAP.md`.
 
-**Goal:** Stable, deterministic querying with progressive enhancement.
+This document enforces technical gating constraints:
 
-**Delivered:**
-
-- Multi-agent NLQ -> SQL pipeline
-- Level 1 credentials-only querying + deterministic catalog intents
-- Level 2 DataPoint ingestion/retrieval (partial semantic quality)
-- Multi-database routing + tooling reliability hardening
-
-**Current gap:**
-
-- metadata quality and observability need to mature before scaling advanced automation.
-
----
-
-### Phase 1.5: MetadataOps Foundation (Next Priority)
-
-**Goal:** Improve metadata authoring quality and observability loops before deeper agent complexity.
-
-**Focus areas:**
-
-- metadata contracts + linting gates for DataPoints
-- metadata authoring lifecycle (ownership/review/versioning)
-- CI evaluation gates (retrieval, qa, intent, catalog)
-- retrieval/answer provenance and trace surfaces
-- runtime telemetry loops (clarification churn, fallback patterns, low-confidence hotspots)
-
-**Exit criteria:**
-
-- foundation KPI thresholds are stable across at least one release cycle
-- no critical deterministic-intent regressions in CI
-- retrieval/source provenance is inspectable for the vast majority of answers
-
----
-
-### Phase 2: Advanced Semantics and Performance (After Phase 1.5 gate)
-
-**Goal:** Expand Level 3-4 capabilities on top of reliable metadata foundations.
-
-**Planned scope:**
-
-- Level 3 executable metric templates
-- Level 4 materialization and optimization policies
-- deeper workspace/code-aware retrieval workflows
-
----
-
-### Phase 3: Intelligence Automation (Later)
-
-**Goal:** Level 5 diagnostics and autonomous optimization workflows.
-
-**Planned scope:**
-
-- dependency-aware diagnosis
-- anomaly and root-cause automation
-- remediation recommendations/workflows
+1. MetadataOps foundation (`FND-*`) must stabilize before broad semantic automation.
+2. Deterministic runtime paths (`SMP-*`) should precede deeper autonomous loops.
+3. Dynamic data-agent initiatives (`DYN-*`) must be introduced with:
+   - strict policy classes
+   - bounded loop budgets
+   - replayable traces
+   - verification-first recovery behavior
 
 ---
 
