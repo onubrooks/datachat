@@ -82,6 +82,8 @@ class DataPointLoader:
                 return "managed"
             if tier_segment == "examples":
                 return "example"
+            if tier_segment == "demo":
+                return "demo"
         return "custom"
 
     @classmethod
@@ -159,7 +161,9 @@ class DataPointLoader:
         if not self.strict_contracts and not self.fail_on_contract_warnings:
             return
 
-        report = validate_datapoint_contract(datapoint, strict=self.strict_contracts)
+        source_tier = str((datapoint.metadata or {}).get("source_tier", "")).lower()
+        effective_strict = self.strict_contracts and source_tier != "demo"
+        report = validate_datapoint_contract(datapoint, strict=effective_strict)
         contract_errors = list(report.errors)
 
         if self.fail_on_contract_warnings:

@@ -156,6 +156,7 @@ class TestLoadFile:
             ("datapoints/user/table_fact_sales_001.json", "user"),
             ("datapoints/managed/table_fact_sales_001.json", "managed"),
             ("datapoints/examples/table_fact_sales_001.json", "example"),
+            ("datapoints/demo/table_fact_sales_001.json", "demo"),
             ("home/user/project/datapoints/managed/table_fact_sales_001.json", "managed"),
             ("fixtures/table_fact_sales_001.json", "custom"),
         ],
@@ -191,6 +192,20 @@ class TestLoadFile:
         datapoint = strict_loader.load_file(example_file)
 
         assert datapoint.datapoint_id == "table_grocery_stores_001"
+
+    def test_load_file_strict_contracts_exempts_demo_datapoints(self, valid_schema_file, tmp_path):
+        """Bundled demo datapoints should not fail strict mode on advisory metadata gaps."""
+        demo_file = tmp_path / "datapoints" / "demo" / "table_fact_sales_001.json"
+        demo_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.loads(valid_schema_file.read_text(encoding="utf-8"))
+        payload["metadata"] = {"source": "demo-seed"}
+        demo_file.write_text(json.dumps(payload), encoding="utf-8")
+
+        strict_loader = DataPointLoader(strict_contracts=True)
+        datapoint = strict_loader.load_file(demo_file)
+
+        assert datapoint.datapoint_id == "table_fact_sales_001"
+        assert datapoint.metadata["source_tier"] == "demo"
 
 
 class TestLoadDirectory:

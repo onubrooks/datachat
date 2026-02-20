@@ -73,6 +73,8 @@ python scripts/lint_datapoints.py --path datapoints --recursive --fail-on-warnin
 - `POST /api/v1/datapoints` and `PUT /api/v1/datapoints/{id}` reject contract violations.
 - Pending approval endpoints (`approve`, `bulk-approve`) apply strict contract validation.
 - Background sync orchestrator runs with strict contract checks and fails the sync job when files violate contracts.
+- Bundled `datapoints/demo/` files are exempt from strict advisory-field escalation in sync mode
+  so default demo deployments do not fail on non-critical metadata gaps.
 
 ## Roadmap
 

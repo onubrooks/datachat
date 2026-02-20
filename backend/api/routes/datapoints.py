@@ -24,6 +24,7 @@ SOURCE_PRIORITY = {
     "managed": 3,
     "custom": 2,
     "unknown": 2,
+    "demo": 1,
     "example": 1,
 }
 datapoint_adapter = TypeAdapter(DataPoint)
