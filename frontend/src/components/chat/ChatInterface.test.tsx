@@ -1,18 +1,29 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
 
 import { ChatInterface } from "@/components/chat/ChatInterface";
+import { buildShareUrl } from "@/lib/share";
 import { useChatStore } from "@/lib/stores/chat";
 
-const { mockSystemStatus, mockListDatabases, mockGetDatabaseSchema, mockStreamChat } = vi.hoisted(() => ({
+const {
+  mockSystemStatus,
+  mockListDatabases,
+  mockGetDatabaseSchema,
+  mockStreamChat,
+  mockSearchParamGet,
+} = vi.hoisted(() => ({
   mockSystemStatus: vi.fn(),
   mockListDatabases: vi.fn(),
   mockGetDatabaseSchema: vi.fn(),
   mockStreamChat: vi.fn(),
+  mockSearchParamGet: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
+  useSearchParams: () => ({ get: mockSearchParamGet }),
 }));
 
 vi.mock("@/lib/api", async () => {
@@ -32,9 +43,19 @@ vi.mock("@/lib/api", async () => {
   };
 });
 
+const renderWithProviders = (ui: ReactElement) => {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, staleTime: 0 },
+    },
+  });
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+};
+
 describe("ChatInterface target database", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSearchParamGet.mockReturnValue(null);
     window.localStorage.clear();
     Element.prototype.scrollIntoView = vi.fn();
 
@@ -84,7 +105,7 @@ describe("ChatInterface target database", () => {
   });
 
   it("sends the default selected connection as target_database", async () => {
-    render(<ChatInterface />);
+    renderWithProviders(<ChatInterface />);
 
     await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
 
@@ -98,7 +119,7 @@ describe("ChatInterface target database", () => {
   });
 
   it("uses the user-selected connection id for chat", async () => {
-    render(<ChatInterface />);
+    renderWithProviders(<ChatInterface />);
 
     await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
 
@@ -125,7 +146,7 @@ describe("ChatInterface target database", () => {
       handlers = callbacks;
     });
 
-    render(<ChatInterface />);
+    renderWithProviders(<ChatInterface />);
 
     await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
 
@@ -152,7 +173,7 @@ describe("ChatInterface target database", () => {
   });
 
   it("applies quick query templates into the input", async () => {
-    render(<ChatInterface />);
+    renderWithProviders(<ChatInterface />);
     await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mockGetDatabaseSchema).toHaveBeenCalled());
 
@@ -163,7 +184,7 @@ describe("ChatInterface target database", () => {
   });
 
   it("opens and closes keyboard shortcuts modal from keyboard shortcut", async () => {
-    render(<ChatInterface />);
+    renderWithProviders(<ChatInterface />);
     await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
 
     fireEvent.keyDown(window, { key: "/", ctrlKey: true });
@@ -206,7 +227,7 @@ describe("ChatInterface target database", () => {
       ])
     );
 
-    render(<ChatInterface />);
+    renderWithProviders(<ChatInterface />);
     await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mockGetDatabaseSchema).toHaveBeenCalled());
 
@@ -222,7 +243,7 @@ describe("ChatInterface target database", () => {
   });
 
   it("sends SQL editor content as direct SQL execution request", async () => {
-    render(<ChatInterface />);
+    renderWithProviders(<ChatInterface />);
     await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole("button", { name: /SQL Editor/i }));
@@ -249,7 +270,7 @@ describe("ChatInterface target database", () => {
       handlers = callbacks;
     });
 
-    render(<ChatInterface />);
+    renderWithProviders(<ChatInterface />);
     await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
 
     const prompt =
@@ -275,7 +296,7 @@ describe("ChatInterface target database", () => {
   });
 
   it("restores focus to natural-language input after switching from SQL mode via template", async () => {
-    render(<ChatInterface />);
+    renderWithProviders(<ChatInterface />);
     await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole("button", { name: /SQL Editor/i }));
@@ -289,6 +310,34 @@ describe("ChatInterface target database", () => {
     ) as HTMLInputElement;
     await waitFor(() => {
       expect(document.activeElement).toBe(input);
+    });
+  });
+
+  it("loads a shared result payload from the URL", async () => {
+    const sharedUrl = buildShareUrl(
+      {
+        created_at: new Date().toISOString(),
+        answer: "Shared result answer",
+        sql: "SELECT business_date, revenue FROM public.daily_revenue",
+        data: {
+          business_date: ["2026-01-01", "2026-01-02"],
+          revenue: [100, 125],
+        },
+        visualization_hint: "line_chart",
+        visualization_metadata: { deterministic: "line_chart" },
+        sources: [],
+        answer_source: "sql",
+        answer_confidence: 1,
+      },
+      "http://localhost:3000/"
+    );
+    const token = new URL(sharedUrl).searchParams.get("share");
+    mockSearchParamGet.mockImplementation((key: string) => (key === "share" ? token : null));
+
+    renderWithProviders(<ChatInterface />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Shared result answer")).toBeInTheDocument();
     });
   });
 });

@@ -13,7 +13,8 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import {
   Send,
   Trash2,
@@ -37,7 +38,7 @@ import {
   Search,
   FileCode2,
 } from "lucide-react";
-import { Message } from "./Message";
+import { Message, type MessageFeedbackPayload } from "./Message";
 import { AgentStatus } from "../agents/AgentStatus";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -56,10 +57,9 @@ import {
   getShowLiveReasoning,
   getShowAgentTimingBreakdown,
   getSynthesizeSimpleSql,
-  getWaitingUxMode,
   type ResultLayoutMode,
-  type WaitingUxMode,
 } from "@/lib/settings";
+import { decodeShareToken } from "@/lib/share";
 import { formatWaitingChipLabel } from "./loadingUx";
 
 const ACTIVE_DATABASE_STORAGE_KEY = "datachat.active_connection_id";
@@ -140,6 +140,7 @@ const QUERY_TEMPLATES: Array<{ id: string; label: string; build: (selectedTable?
 
 export function ChatInterface() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const {
     messages,
     conversationId,
@@ -178,7 +179,6 @@ export function ChatInterface() {
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [targetDatabaseId, setTargetDatabaseId] = useState<string | null>(null);
   const [conversationDatabaseId, setConversationDatabaseId] = useState<string | null>(null);
-  const [waitingMode, setWaitingMode] = useState<WaitingUxMode>("animated");
   const [resultLayoutMode, setResultLayoutMode] =
     useState<ResultLayoutMode>("stacked");
   const [showAgentTimingBreakdown, setShowAgentTimingBreakdown] = useState(true);
@@ -211,6 +211,7 @@ export function ChatInterface() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const shortcutsCloseButtonRef = useRef<HTMLButtonElement>(null);
   const toolApprovalApproveButtonRef = useRef<HTMLButtonElement>(null);
+  const loadedShareTokenRef = useRef<string | null>(null);
   const restoreInputFocus = useCallback((targetMode?: "nl" | "sql") => {
     const mode = targetMode || composerModeRef.current;
     window.requestAnimationFrame(() => {
@@ -225,6 +226,21 @@ export function ChatInterface() {
   useEffect(() => {
     composerModeRef.current = composerMode;
   }, [composerMode]);
+
+  const bootstrapQuery = useQuery({
+    queryKey: ["chat-bootstrap"],
+    queryFn: async () => {
+      const status = await apiClient.systemStatus();
+      const dbs = await apiClient.listDatabases().catch(() => []);
+      return { status, dbs };
+    },
+  });
+
+  const schemaQuery = useQuery({
+    queryKey: ["database-schema", targetDatabaseId],
+    queryFn: async () => apiClient.getDatabaseSchema(targetDatabaseId as string),
+    enabled: Boolean(targetDatabaseId),
+  });
 
   const serializeMessages = (items: ChatStoreMessage[]): SerializedMessage[] =>
     items.slice(-MAX_CONVERSATION_MESSAGES).map((message) => ({
@@ -405,32 +421,31 @@ export function ChatInterface() {
   }, []);
 
   useEffect(() => {
-    let isMounted = true;
-    Promise.all([apiClient.systemStatus(), apiClient.listDatabases().catch(() => [])])
-      .then(([status, dbs]) => {
-        if (!isMounted) return;
-        setIsBackendReachable(true);
-        setIsInitialized(status.is_initialized);
-        setSetupSteps(status.setup_required || []);
-        setConnections(dbs);
-
-        const storedId = window.localStorage.getItem(ACTIVE_DATABASE_STORAGE_KEY);
-        const selected =
-          dbs.find((db) => db.connection_id === storedId) ||
-          dbs.find((db) => db.is_default) ||
-          dbs[0] ||
-          null;
-        setTargetDatabaseId(selected?.connection_id ?? null);
-      })
-      .catch((err) => {
-        if (!isMounted) return;
-        console.error("System status error:", err);
+    if (!bootstrapQuery.data) {
+      if (bootstrapQuery.isError) {
         setIsBackendReachable(false);
-      });
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+      }
+      return;
+    }
+    const { status, dbs } = bootstrapQuery.data;
+    setIsBackendReachable(true);
+    setIsInitialized(status.is_initialized);
+    setSetupSteps(status.setup_required || []);
+    setConnections(dbs);
+
+    setTargetDatabaseId((current) => {
+      if (current && dbs.some((db) => db.connection_id === current)) {
+        return current;
+      }
+      const storedId = window.localStorage.getItem(ACTIVE_DATABASE_STORAGE_KEY);
+      const selected =
+        dbs.find((db) => db.connection_id === storedId) ||
+        dbs.find((db) => db.is_default) ||
+        dbs[0] ||
+        null;
+      return selected?.connection_id ?? null;
+    });
+  }, [bootstrapQuery.data, bootstrapQuery.isError]);
 
   useEffect(() => {
     if (!targetDatabaseId) {
@@ -441,6 +456,50 @@ export function ChatInterface() {
   }, [targetDatabaseId]);
 
   useEffect(() => {
+    const shareToken = searchParams.get("share");
+    if (!shareToken || loadedShareTokenRef.current === shareToken) {
+      return;
+    }
+    loadedShareTokenRef.current = shareToken;
+    const shared = decodeShareToken(shareToken);
+    if (!shared) {
+      return;
+    }
+
+    clearMessages();
+    setConversationDatabaseId(null);
+    setConversationId(null);
+    setSessionMemory(null, null);
+    setInput("");
+    setSqlDraft("");
+    setComposerMode("nl");
+    setError(null);
+    setErrorCategory(null);
+    setLastFailedQuery(null);
+    setRetryCount(0);
+    resetAgentStatus();
+
+    addMessage({
+      role: "assistant",
+      content: shared.answer,
+      sql: shared.sql,
+      data: shared.data,
+      visualization_hint: shared.visualization_hint,
+      visualization_metadata: shared.visualization_metadata || undefined,
+      sources: shared.sources || [],
+      answer_source: shared.answer_source,
+      answer_confidence: shared.answer_confidence,
+    });
+  }, [
+    addMessage,
+    clearMessages,
+    resetAgentStatus,
+    searchParams,
+    setConversationId,
+    setSessionMemory,
+  ]);
+
+  useEffect(() => {
     if (!conversationId || !targetDatabaseId || conversationDatabaseId) {
       return;
     }
@@ -448,52 +507,46 @@ export function ChatInterface() {
   }, [conversationId, targetDatabaseId, conversationDatabaseId]);
 
   useEffect(() => {
-    let isMounted = true;
     if (!targetDatabaseId) {
+      setSchemaLoading(false);
       setSchemaTables([]);
       setSchemaError(null);
       setSelectedSchemaTable(null);
       return;
     }
-
-    setSchemaLoading(true);
-    setSchemaError(null);
-    apiClient
-      .getDatabaseSchema(targetDatabaseId)
-      .then((response) => {
-        if (!isMounted) return;
-        setSchemaTables(response.tables || []);
-        setSelectedSchemaTable((prev) => {
-          if (!prev) return null;
-          const stillExists = (response.tables || []).some(
-            (table) => `${table.schema_name}.${table.table_name}` === prev
-          );
-          return stillExists ? prev : null;
-        });
-      })
-      .catch((err) => {
-        if (!isMounted) return;
-        setSchemaTables([]);
-        setSchemaError(err instanceof Error ? err.message : "Failed to load schema");
-      })
-      .finally(() => {
-        if (!isMounted) return;
-        setSchemaLoading(false);
+    setSchemaLoading(schemaQuery.isLoading || schemaQuery.isFetching);
+    if (schemaQuery.data) {
+      setSchemaError(null);
+      setSchemaTables(schemaQuery.data.tables || []);
+      setSelectedSchemaTable((prev) => {
+        if (!prev) return null;
+        const stillExists = (schemaQuery.data?.tables || []).some(
+          (table) => `${table.schema_name}.${table.table_name}` === prev
+        );
+        return stillExists ? prev : null;
       });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [targetDatabaseId]);
+      return;
+    }
+    if (schemaQuery.error) {
+      const message =
+        schemaQuery.error instanceof Error ? schemaQuery.error.message : "Failed to load schema";
+      setSchemaTables([]);
+      setSchemaError(message);
+    }
+  }, [
+    schemaQuery.data,
+    schemaQuery.error,
+    schemaQuery.isFetching,
+    schemaQuery.isLoading,
+    targetDatabaseId,
+  ]);
 
   useEffect(() => {
-    setWaitingMode(getWaitingUxMode());
     setResultLayoutMode(getResultLayoutMode());
     setShowAgentTimingBreakdown(getShowAgentTimingBreakdown());
     setSynthesizeSimpleSql(getSynthesizeSimpleSql());
     setShowLiveReasoning(getShowLiveReasoning());
     const handleStorage = () => {
-      setWaitingMode(getWaitingUxMode());
       setResultLayoutMode(getResultLayoutMode());
       setShowAgentTimingBreakdown(getShowAgentTimingBreakdown());
       setSynthesizeSimpleSql(getSynthesizeSimpleSql());
@@ -828,6 +881,18 @@ export function ChatInterface() {
       (entry) => entry.frontendSessionId !== sessionId
     );
     persistConversationHistory(remaining);
+  };
+
+  const handleSubmitFeedback = async (payload: MessageFeedbackPayload) => {
+    await apiClient.submitFeedback({
+      ...payload,
+      conversation_id: conversationId,
+      target_database_id: conversationDatabaseId || targetDatabaseId,
+      metadata: {
+        frontend_session_id: frontendSessionId,
+        display_mode: resultLayoutMode,
+      },
+    });
   };
 
   const handleApproveTools = async () => {
@@ -1298,6 +1363,7 @@ export function ChatInterface() {
                   displayMode={resultLayoutMode}
                   showAgentTimingBreakdown={showAgentTimingBreakdown}
                   onEditSqlDraft={handleOpenSqlEditor}
+                  onSubmitFeedback={handleSubmitFeedback}
                   onClarifyingAnswer={(question) => {
                     setComposerMode("nl");
                     setInput(`Regarding "${question}": `);
@@ -1324,7 +1390,7 @@ export function ChatInterface() {
                 </Card>
               )}
 
-              <AgentStatus mode={waitingMode} />
+              <AgentStatus />
               {isLoading && (
                 <div className="mb-4 flex items-center justify-center">
                   <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/5 px-3 py-1 text-xs text-primary">

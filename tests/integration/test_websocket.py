@@ -326,8 +326,60 @@ class TestWebSocketStreaming:
         assert event["sql"] == "SELECT item_id FROM public.items LIMIT 1"
         assert event["answer_source"] == "sql"
         assert event["data"]["item_id"] == [1]
+        assert event["visualization_hint"] == "table"
         assert event["metrics"]["llm_calls"] == 0
         connector.execute.assert_awaited_once_with("SELECT item_id FROM public.items LIMIT 1")
+
+    def test_websocket_infers_visualization_for_direct_sql_mode(self, client):
+        connector = AsyncMock()
+        connector.connect = AsyncMock(return_value=None)
+        connector.execute = AsyncMock(
+            return_value=SimpleNamespace(
+                rows=[
+                    {"business_date": "2026-01-01", "revenue": 100.0},
+                    {"business_date": "2026-01-02", "revenue": 125.0},
+                ],
+                columns=["business_date", "revenue"],
+                execution_time_ms=4.2,
+            )
+        )
+        connector.close = AsyncMock(return_value=None)
+
+        with (
+            patch("backend.api.websocket.create_connector", return_value=connector),
+            patch(
+                "backend.api.websocket.resolve_database_type_and_url",
+                new=AsyncMock(
+                    return_value=("postgresql", "postgresql://user:pass@localhost:5432/db")
+                ),
+            ),
+            patch(
+                "backend.api.websocket.SystemInitializer.status",
+                new=AsyncMock(
+                    return_value=SystemStatus(
+                        is_initialized=True,
+                        has_databases=True,
+                        has_system_database=True,
+                        has_datapoints=True,
+                        setup_required=[],
+                    )
+                ),
+            ),
+            patch("backend.api.main.app_state", {"pipeline": None, "database_manager": None}),
+        ):
+            with client.websocket_connect("/ws/chat") as websocket:
+                websocket.send_json(
+                    {
+                        "message": "SELECT business_date, revenue FROM public.daily_revenue",
+                        "execution_mode": "direct_sql",
+                        "sql": "SELECT business_date, revenue FROM public.daily_revenue",
+                    }
+                )
+                event = websocket.receive_json()
+
+        assert event["event"] == "complete"
+        assert event["visualization_hint"] == "line_chart"
+        assert event["visualization_metadata"]["deterministic"] == "line_chart"
 
     def test_websocket_forwards_session_memory(self, client):
         mock_pipeline = AsyncMock()

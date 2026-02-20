@@ -1,7 +1,7 @@
 # Frontend Product Requirements Document
 
 **Version:** 1.1  
-**Last Updated:** February 19, 2026
+**Last Updated:** February 20, 2026
 
 This document describes the frontend architecture, current state, and roadmap for the DataChat web UI.
 
@@ -43,11 +43,17 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 | Schema Explorer Sidebar | Browse tables/columns with search | ✅ Implemented |
 | Query Templates | Quick-action buttons for common prompts | ✅ Implemented |
 | SQL Editor Mode | Edit and run SQL drafts from composer or generated responses | ✅ Implemented |
+| SQL Mode Visualization Inference | Direct SQL responses infer chart type from result shape | ✅ Implemented |
 | Theme Override | Light, dark, and system theme settings | ✅ Implemented |
 | Chart Interaction | Tooltips, zoom controls, legend toggles | ✅ Implemented |
 | Chart Configuration | Per-chart axis + display settings panel | ✅ Implemented |
 | Accessibility Labels | ARIA labels, dialog semantics, live regions | ✅ Implemented |
 | Keyboard Navigation | Tabs + global shortcuts + modal focus handling | ✅ Implemented |
+| Result Export Actions | CSV/JSON downloads and markdown table copy | ✅ Implemented |
+| Share Links | Copy deep link that restores a shared query result | ✅ Implemented |
+| Answer Feedback | Helpful / not helpful feedback actions on responses | ✅ Implemented |
+| Issue Reporting | Structured issue reports from response cards | ✅ Implemented |
+| Improvement Suggestions | Structured improvement suggestions from response cards | ✅ Implemented |
 
 ### Database Management
 
@@ -58,6 +64,7 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 | Profiling Workflow | Profile database with progress tracking | ✅ Implemented |
 | DataPoint Approval | Review pending DataPoints | ✅ Implemented |
 | Bulk Approve | Approve all pending DataPoints | ✅ Implemented |
+| Managed DataPoint Editor | Load/create/update/delete managed DataPoint JSON (including Query DataPoints) | ✅ Implemented |
 
 ### Observability
 
@@ -139,26 +146,26 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 | ✅ **Keyboard Shortcuts** | Cmd/Ctrl+K, Cmd/Ctrl+H, Cmd/Ctrl+/, Esc | Delivered |
 | ✅ **Dark Mode Toggle** | Manual light/dark/system theme override in Settings | Delivered |
 
----
-
-## Backlog ➕
-
 ### P3: Export & Sharing
 
 | Feature | Description | Effort |
 |---------|-------------|--------|
-| **Export CSV** | Download result data | 2h (already implemented) |
-| **Export JSON** | JSON format download | 1h |
-| **Export Markdown** | Copy table as markdown | 2h |
-| **Share Link** | Deep link to query result | 8h |
+| ✅ **Export CSV** | Download result data | Delivered |
+| ✅ **Export JSON** | JSON format download | Delivered |
+| ✅ **Export Markdown** | Copy table as markdown | Delivered |
+| ✅ **Share Link** | Deep link to query result | Delivered |
 
 ### P4: Feedback Loop
 
 | Feature | Description | Effort |
 |---------|-------------|--------|
-| **Answer Feedback** | Thumbs up/down on responses | 4h |
-| **Issue Reporting** | Report problems with context | 6h |
-| **Improvement Suggestions** | UI to suggest DataPoint improvements | 8h |
+| ✅ **Answer Feedback** | Thumbs up/down on responses | Delivered |
+| ✅ **Issue Reporting** | Report problems with context | Delivered |
+| ✅ **Improvement Suggestions** | UI to suggest DataPoint/retrieval improvements | Delivered |
+
+---
+
+## Backlog ➕
 
 ---
 
@@ -168,15 +175,15 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 
 | Location | Issue | Action |
 |----------|-------|--------|
-| `loadingUx.ts` | Multiple modes unused | Consolidate to single mode |
+| ✅ `loadingUx.ts` | Multiple modes removed | Consolidated to single waiting status label logic |
 | Redundant job state | Multiple similar state variables | Consolidate into single `jobs` object |
 
 ### Technical Debt
 
 | Issue | Impact | Action |
 |-------|--------|--------|
-| No React Query | Manual loading/error states | Migrate to React Query for API state |
-| No error boundaries | Crashes kill whole app | Add error boundaries with recovery UI |
+| ✅ React Query Migration | Server-state loading no longer relies on manual refresh orchestration | Chat + Database Manager now use query/invalidation flows for connections, schema, profiling, pending/approved DataPoints, sync, and generation jobs |
+| ✅ Error boundaries missing | Crashes killed whole app | Added app-level error boundary with retry/back-to-chat recovery |
 | Inline chart rendering | Hard to maintain | Extract to separate components |
 
 ---
@@ -185,25 +192,12 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 
 ### State Management
 
-Current: Zustand with manual API calls
+Current: Zustand (UI/session state) + React Query (server state, cache, polling, invalidation)
 
-**Recommended: Add React Query**
+**Status: Implemented in chat and database manager flows**
 
 ```typescript
-// Before
-const [connections, setConnections] = useState([]);
-const [isLoading, setIsLoading] = useState(false);
-const [error, setError] = useState(null);
-
-useEffect(() => {
-  setIsLoading(true);
-  api.listDatabases()
-    .then(setConnections)
-    .catch(setError)
-    .finally(() => setIsLoading(false));
-}, []);
-
-// After
+// Adopted server-state pattern
 const { data: connections, isLoading, error } = useQuery({
   queryKey: ['connections'],
   queryFn: () => api.listDatabases(),

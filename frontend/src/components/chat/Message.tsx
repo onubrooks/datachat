@@ -23,6 +23,11 @@ import {
   BadgeCheck,
   Copy,
   Download,
+  Link2,
+  ThumbsUp,
+  ThumbsDown,
+  Flag,
+  Lightbulb,
   BarChart3,
   ChevronLeft,
   ChevronRight,
@@ -32,6 +37,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { cn } from "@/lib/utils";
 import type { Message as MessageType } from "@/lib/stores/chat";
 import type { ResultLayoutMode } from "@/lib/settings";
+import { buildShareUrl } from "@/lib/share";
 
 interface MessageProps {
   message: MessageType;
@@ -39,6 +45,19 @@ interface MessageProps {
   showAgentTimingBreakdown?: boolean;
   onClarifyingAnswer?: (question: string) => void;
   onEditSqlDraft?: (sql: string) => void;
+  onSubmitFeedback?: (payload: MessageFeedbackPayload) => Promise<void>;
+}
+
+export interface MessageFeedbackPayload {
+  category: "answer_feedback" | "issue_report" | "improvement_suggestion";
+  sentiment?: "up" | "down" | null;
+  message?: string | null;
+  message_id: string;
+  answer_source?: string | null;
+  answer_confidence?: number | null;
+  answer?: string | null;
+  sql?: string | null;
+  sources?: Array<Record<string, unknown>>;
 }
 
 type TabId = "answer" | "sql" | "table" | "visualization" | "sources" | "timing";
@@ -257,6 +276,7 @@ export function Message({
   showAgentTimingBreakdown = true,
   onClarifyingAnswer,
   onEditSqlDraft,
+  onSubmitFeedback,
 }: MessageProps) {
   const isUser = message.role === "user";
   const [activeTab, setActiveTab] = useState<TabId>("answer");
@@ -265,6 +285,10 @@ export function Message({
   const [tablePage, setTablePage] = useState<number>(0);
   const [rowsPerPage, setRowsPerPage] = useState<number>(10);
   const [showChartSettings, setShowChartSettings] = useState(false);
+  const [feedbackMode, setFeedbackMode] = useState<"issue" | "suggestion" | null>(null);
+  const [feedbackDraft, setFeedbackDraft] = useState("");
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [feedbackSentiment, setFeedbackSentiment] = useState<"up" | "down" | null>(null);
   const [chartTooltip, setChartTooltip] = useState<ChartTooltipState | null>(null);
   const [hiddenPieLabels, setHiddenPieLabels] = useState<string[]>([]);
   const [barConfig, setBarConfig] = useState<BarChartConfig>({
@@ -314,6 +338,8 @@ export function Message({
   const activeData = activeSubAnswer?.data ?? message.data;
   const activeVisualizationHint =
     activeSubAnswer?.visualization_hint ?? message.visualization_hint;
+  const activeVisualizationMetadata =
+    activeSubAnswer?.visualization_metadata ?? message.visualization_metadata;
   const activeClarifyingQuestions =
     activeSubAnswer?.clarifying_questions || message.clarifying_questions;
 
@@ -336,6 +362,10 @@ export function Message({
     setShowChartSettings(false);
     setChartTooltip(null);
     setHiddenPieLabels([]);
+    setFeedbackMode(null);
+    setFeedbackDraft("");
+    setFeedbackSubmitting(false);
+    setFeedbackSentiment(null);
   }, [message.id, selectedSubAnswerIndex]);
 
   const columnNames = useMemo(
@@ -555,6 +585,120 @@ export function Message({
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     setActionNotice("CSV downloaded");
+  };
+
+  const downloadJson = () => {
+    if (!hasTable) {
+      return;
+    }
+    const payload = {
+      columns: columnNames,
+      rows: rowObjects,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "datachat-results.json";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    setActionNotice("JSON downloaded");
+  };
+
+  const copyMarkdownTable = async () => {
+    if (!hasTable) {
+      return;
+    }
+    const escapeMarkdown = (value: unknown) => {
+      if (value === null || value === undefined) {
+        return "";
+      }
+      return String(value).replace(/\|/g, "\\|").replace(/\r?\n/g, "<br/>");
+    };
+    const header = `| ${columnNames.join(" | ")} |`;
+    const separator = `| ${columnNames.map(() => "---").join(" | ")} |`;
+    const rowsMarkdown = rowObjects.map(
+      (row) =>
+        `| ${columnNames.map((column) => escapeMarkdown(row[column])).join(" | ")} |`
+    );
+    const markdown = [header, separator, ...rowsMarkdown].join("\n");
+    try {
+      await navigator.clipboard.writeText(markdown);
+      setActionNotice("Markdown copied");
+    } catch {
+      setActionNotice("Unable to copy markdown");
+    }
+  };
+
+  const copyShareLink = async () => {
+    try {
+      const shareUrl = buildShareUrl(
+        {
+          created_at: new Date().toISOString(),
+          answer: activeContent || "",
+          sql: activeSql ?? null,
+          data: hasTable ? activeData ?? null : null,
+          visualization_hint: resolvedVizHint,
+          visualization_metadata:
+            (activeVisualizationMetadata as Record<string, unknown> | null) ?? null,
+          sources: message.sources || [],
+          answer_source: message.answer_source ?? null,
+          answer_confidence:
+            typeof message.answer_confidence === "number" ? message.answer_confidence : null,
+        },
+        window.location.href
+      );
+      await navigator.clipboard.writeText(shareUrl);
+      setActionNotice("Share link copied");
+    } catch {
+      setActionNotice("Unable to copy share link");
+    }
+  };
+
+  const submitFeedback = async (
+    category: "answer_feedback" | "issue_report" | "improvement_suggestion",
+    sentiment?: "up" | "down" | null,
+    messageText?: string | null
+  ) => {
+    if (!onSubmitFeedback) {
+      setActionNotice("Feedback capture is not enabled");
+      return;
+    }
+    setFeedbackSubmitting(true);
+    try {
+      await onSubmitFeedback({
+        category,
+        sentiment: sentiment ?? null,
+        message: messageText ?? null,
+        message_id: message.id,
+        answer_source: message.answer_source ?? null,
+        answer_confidence:
+          typeof message.answer_confidence === "number" ? message.answer_confidence : null,
+        answer: activeContent || null,
+        sql: activeSql ?? null,
+        sources: (message.sources || []) as Array<Record<string, unknown>>,
+      });
+      if (category === "answer_feedback") {
+        setFeedbackSentiment(sentiment ?? null);
+        setActionNotice(sentiment === "up" ? "Thanks for the positive feedback" : "Feedback noted");
+      } else if (category === "issue_report") {
+        setFeedbackMode(null);
+        setFeedbackDraft("");
+        setActionNotice("Issue report submitted");
+      } else {
+        setFeedbackMode(null);
+        setFeedbackDraft("");
+        setActionNotice("Improvement suggestion submitted");
+      }
+    } catch {
+      setActionNotice("Unable to submit feedback");
+    } finally {
+      setFeedbackSubmitting(false);
+    }
   };
 
   const renderClarifyingQuestions = () => {
@@ -2163,7 +2307,8 @@ export function Message({
   };
 
   const assistantMeta = !isUser && (message.answer_source || message.tool_approval_required);
-  const showActions = !isUser && (Boolean(activeSql) || hasTable);
+  const showActions =
+    !isUser && (Boolean(activeSql) || hasTable || Boolean(activeContent?.trim()));
 
   const renderAnswerOnly = () => (
     <>
@@ -2291,11 +2436,154 @@ export function Message({
                   Download CSV
                 </button>
               )}
+              {hasTable && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-secondary"
+                  onClick={downloadJson}
+                  aria-label="Download query results as JSON"
+                >
+                  <Download size={12} />
+                  Download JSON
+                </button>
+              )}
+              {hasTable && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-secondary"
+                  onClick={copyMarkdownTable}
+                  aria-label="Copy query results as markdown table"
+                >
+                  <Copy size={12} />
+                  Copy Markdown
+                </button>
+              )}
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-secondary"
+                onClick={copyShareLink}
+                aria-label="Copy share link for this result"
+              >
+                <Link2 size={12} />
+                Share Link
+              </button>
+              {onSubmitFeedback && (
+                <>
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded border px-2 py-1 hover:bg-secondary",
+                      feedbackSentiment === "up"
+                        ? "border-emerald-400 bg-emerald-50 text-emerald-700"
+                        : "border-border"
+                    )}
+                    onClick={() => submitFeedback("answer_feedback", "up")}
+                    disabled={feedbackSubmitting}
+                    aria-label="Rate answer helpful"
+                  >
+                    <ThumbsUp size={12} />
+                    Helpful
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded border px-2 py-1 hover:bg-secondary",
+                      feedbackSentiment === "down"
+                        ? "border-rose-400 bg-rose-50 text-rose-700"
+                        : "border-border"
+                    )}
+                    onClick={() => submitFeedback("answer_feedback", "down")}
+                    disabled={feedbackSubmitting}
+                    aria-label="Rate answer not helpful"
+                  >
+                    <ThumbsDown size={12} />
+                    Not Helpful
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded border px-2 py-1 hover:bg-secondary",
+                      feedbackMode === "issue" ? "border-primary bg-primary/10 text-primary" : "border-border"
+                    )}
+                    onClick={() => setFeedbackMode((prev) => (prev === "issue" ? null : "issue"))}
+                    disabled={feedbackSubmitting}
+                    aria-label="Report issue with this answer"
+                  >
+                    <Flag size={12} />
+                    Report Issue
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded border px-2 py-1 hover:bg-secondary",
+                      feedbackMode === "suggestion"
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border"
+                    )}
+                    onClick={() =>
+                      setFeedbackMode((prev) => (prev === "suggestion" ? null : "suggestion"))
+                    }
+                    disabled={feedbackSubmitting}
+                    aria-label="Suggest improvement for this answer"
+                  >
+                    <Lightbulb size={12} />
+                    Suggest Improvement
+                  </button>
+                </>
+              )}
               {actionNotice && (
                 <span className="text-muted-foreground" role="status" aria-live="polite">
                   {actionNotice}
                 </span>
               )}
+            </div>
+          )}
+
+          {onSubmitFeedback && feedbackMode && (
+            <div className="mb-3 rounded-md border border-border/70 bg-background/80 p-3">
+              <div className="mb-2 text-xs font-medium">
+                {feedbackMode === "issue" ? "Report issue" : "Suggest improvement"}
+              </div>
+              <textarea
+                value={feedbackDraft}
+                onChange={(event) => setFeedbackDraft(event.target.value)}
+                className="min-h-[92px] w-full resize-y rounded border border-input bg-background px-2 py-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder={
+                  feedbackMode === "issue"
+                    ? "Describe what was wrong (missing context, wrong SQL, wrong metric definition, etc.)"
+                    : "Describe how this response or retrieval can improve."
+                }
+                aria-label={
+                  feedbackMode === "issue" ? "Issue report details" : "Improvement suggestion details"
+                }
+              />
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  className="inline-flex items-center rounded border border-border px-2 py-1 text-xs hover:bg-secondary disabled:opacity-60"
+                  onClick={() =>
+                    submitFeedback(
+                      feedbackMode === "issue" ? "issue_report" : "improvement_suggestion",
+                      null,
+                      feedbackDraft.trim()
+                    )
+                  }
+                  disabled={feedbackSubmitting || !feedbackDraft.trim()}
+                >
+                  {feedbackSubmitting ? "Submitting..." : "Submit"}
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
+                  onClick={() => {
+                    setFeedbackMode(null);
+                    setFeedbackDraft("");
+                  }}
+                  disabled={feedbackSubmitting}
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
 

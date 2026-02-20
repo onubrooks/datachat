@@ -1,9 +1,19 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, vi } from "vitest";
 
 import { Message } from "@/components/chat/Message";
 
 describe("Message", () => {
+  const clipboardWriteText = vi.fn();
+
+  beforeEach(() => {
+    clipboardWriteText.mockReset();
+    Object.defineProperty(window.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboardWriteText },
+    });
+  });
+
   it("renders simple markdown bullets and bold text for assistant messages", () => {
     render(
       <Message
@@ -351,5 +361,60 @@ describe("Message", () => {
 
     expect(screen.getByText("Page 1 of 5")).toBeInTheDocument();
     expect(screen.getByText("Showing 1-25 of 120 rows")).toBeInTheDocument();
+  });
+
+  it("supports markdown export and share link actions for tabular results", async () => {
+    clipboardWriteText.mockResolvedValue(undefined);
+    render(
+      <Message
+        message={{
+          id: "msg-share",
+          role: "assistant",
+          content: "Revenue by region",
+          data: {
+            region: ["South", "North"],
+            revenue: [120, 90],
+          },
+          timestamp: new Date(),
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy query results as markdown table" }));
+    await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledTimes(1));
+    expect(clipboardWriteText.mock.calls[0][0]).toContain("| region | revenue |");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy share link for this result" }));
+    await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledTimes(2));
+    expect(clipboardWriteText.mock.calls[1][0]).toContain("share=");
+  });
+
+  it("submits answer feedback and issue reports when callback is provided", async () => {
+    const onSubmitFeedback = vi.fn().mockResolvedValue(undefined);
+    render(
+      <Message
+        message={{
+          id: "msg-feedback",
+          role: "assistant",
+          content: "Response content",
+          sql: "SELECT 1",
+          timestamp: new Date(),
+        }}
+        onSubmitFeedback={onSubmitFeedback}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Rate answer helpful" }));
+    await waitFor(() => expect(onSubmitFeedback).toHaveBeenCalledTimes(1));
+    expect(onSubmitFeedback.mock.calls[0][0].category).toBe("answer_feedback");
+    expect(onSubmitFeedback.mock.calls[0][0].sentiment).toBe("up");
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue with this answer" }));
+    fireEvent.change(screen.getByLabelText("Issue report details"), {
+      target: { value: "This used the wrong table." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(onSubmitFeedback).toHaveBeenCalledTimes(2));
+    expect(onSubmitFeedback.mock.calls[1][0].category).toBe("issue_report");
   });
 });

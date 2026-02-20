@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -122,3 +123,34 @@ class TestDatapointEndpoints:
 
         assert response.status_code == 400
         assert "only allowed when scope=database" in response.json()["detail"]
+
+    def test_get_datapoint_returns_managed_json(self, client, tmp_path):
+        datapoint_payload = {
+            "datapoint_id": "query_top_customers_001",
+            "type": "Query",
+            "name": "Top customers by revenue",
+            "owner": "data-team@example.com",
+            "tags": ["manual"],
+            "metadata": {},
+            "description": "Top customers by completed revenue.",
+            "sql_template": "SELECT customer_id, SUM(amount) AS revenue FROM public.transactions GROUP BY customer_id LIMIT {limit}",
+            "parameters": {
+                "limit": {
+                    "type": "integer",
+                    "required": False,
+                    "default": 20,
+                    "description": "Max rows.",
+                }
+            },
+            "related_tables": ["public.transactions"],
+        }
+        datapoint_path = tmp_path / "query_top_customers_001.json"
+        datapoint_path.write_text(json.dumps(datapoint_payload), encoding="utf-8")
+
+        with patch("backend.api.routes.datapoints._file_path", return_value=datapoint_path):
+            response = client.get("/api/v1/datapoints/query_top_customers_001")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["datapoint_id"] == "query_top_customers_001"
+        assert payload["type"] == "Query"

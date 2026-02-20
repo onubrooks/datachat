@@ -1,6 +1,6 @@
 # DataChat UI How-To Guide
 
-**Last Updated:** February 19, 2026
+**Last Updated:** February 20, 2026
 
 This guide explains how to use the web UI features that are implemented today, including chat workflows and the database/DataPoint management flows.
 
@@ -79,6 +79,7 @@ Examples:
 Important behavior:
 - SQL mode executes SQL directly and deterministically.
 - Only read-only SQL is accepted (`SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`).
+- Visualization hints are inferred from SQL result shape, so chart-ready SQL still opens a chart view.
 
 Example:
 - `SELECT * FROM public.grocery_inventory_snapshots LIMIT 10`
@@ -168,7 +169,36 @@ For chartable results:
 
 ---
 
-## 14. Tool Approval Modal
+## 14. Export and Share Results
+
+For assistant messages with table data, use message action buttons:
+
+1. **Download CSV** for spreadsheet workflows.
+2. **Download JSON** for API/data pipeline workflows.
+3. **Copy Markdown** to paste a markdown table into docs/issues/PRs.
+4. **Share Link** to copy a deep link containing the query result payload.
+
+Open a copied share link to restore the shared result in chat view.
+
+---
+
+## 15. Feedback Loop
+
+Each assistant response now supports feedback actions:
+
+1. **Helpful** / **Not Helpful** for quick answer quality rating.
+2. **Report Issue** to submit concrete problems (wrong table, wrong metric logic, missing context).
+3. **Suggest Improvement** to capture ideas for retrieval, DataPoints, or response quality.
+
+Storage and usage:
+
+- Feedback is persisted to the `ui_feedback` table in the configured system database (`SYSTEM_DATABASE_URL`).
+- If no system database is configured, feedback is captured in API logs as structured payloads.
+- Teams can use this data to prioritize DataPoint fixes, tune prompts, and validate retrieval quality.
+
+---
+
+## 16. Tool Approval Modal
 
 If a tool call requires approval:
 
@@ -178,7 +208,7 @@ If a tool call requires approval:
 
 ---
 
-## 15. Keyboard Shortcuts
+## 17. Keyboard Shortcuts
 
 - `Ctrl/Cmd + K`: Focus query input
 - `Ctrl/Cmd + H`: Toggle conversation history sidebar
@@ -188,9 +218,9 @@ If a tool call requires approval:
 
 ---
 
-## 16. Database Management Page (`/databases`)
+## 18. Database Management Page (`/databases`)
 
-### 16.1 Quick Start Card
+### 18.1 Quick Start Card
 
 Use the guided sequence:
 
@@ -202,7 +232,7 @@ Use the guided sequence:
 
 Status dots/checkmarks show step state (`done`, `ready`, `blocked`).
 
-### 16.2 Add/Edit/Delete Connections
+### 18.2 Add/Edit/Delete Connections
 
 1. Add connection with name, URL, type, and optional description.
 2. Mark default if needed.
@@ -212,7 +242,7 @@ Status dots/checkmarks show step state (`done`, `ready`, `blocked`).
 Note:
 - Environment-backed connection entries are protected from edit/profile flows.
 
-### 16.3 Profile and Generate DataPoints
+### 18.3 Profile and Generate DataPoints
 
 1. Select connection.
 2. Start profiling.
@@ -220,14 +250,14 @@ Note:
 4. Select table subset and generation depth.
 5. Start DataPoint generation.
 
-### 16.4 Review Pending DataPoints
+### 18.4 Review Pending DataPoints
 
 1. Open pending list.
 2. Expand an item to inspect/edit JSON draft.
 3. Approve or reject individual items.
 4. Use **Bulk approve** when ready.
 
-### 16.5 Sync Retrieval Index
+### 18.5 Sync Retrieval Index
 
 Run sync after approvals so retrieval uses latest approved DataPoints.
 
@@ -236,15 +266,27 @@ Scope options:
 - `global`
 - `database` (requires selecting a connection id)
 
-### 16.6 Quality / Tool Actions
+### 18.6 Quality / Tool Actions
 
 From management screens you can run:
 - quality report tooling
 - profile+generate tooling (approval gated)
 
+### 18.7 Managed DataPoint Editor
+
+The `/databases` page includes a managed DataPoint editor for manual authoring:
+
+1. Enter a `datapoint_id` and click **Load** to fetch an existing managed DataPoint.
+2. Edit JSON directly in the editor.
+3. Use **Create New** to add a new DataPoint.
+4. Use **Update Existing** to update an existing managed DataPoint by `datapoint_id`.
+5. Use **Delete** to remove a managed DataPoint.
+
+This supports Schema/Business/Process and Query DataPoint authoring flows.
+
 ---
 
-## 17. Settings Page
+## 19. Settings Page
 
 Open **Settings** from the header to configure:
 - Result layout (`stacked` / `tabbed`)
@@ -252,11 +294,10 @@ Open **Settings** from the header to configure:
 - Show/hide agent timing breakdown
 - Simple SQL synthesis toggle
 - Theme mode (`Light`, `Dark`, `System`)
-- Waiting UX mode
 
 ---
 
-## 18. Error Recovery
+## 20. Error Recovery
 
 If a query fails:
 1. Read the categorized error card (network, timeout, validation, database, unknown).
@@ -265,7 +306,7 @@ If a query fails:
 
 ---
 
-## 19. Accessibility Notes
+## 21. Accessibility Notes
 
 Implemented accessibility support includes:
 - labeled regions for chat/workspace
@@ -276,16 +317,19 @@ Implemented accessibility support includes:
 
 ---
 
-## 20. Quick Validation Checklist
+## 22. Quick Validation Checklist
 
 1. Send one natural-language question in Ask mode.
 2. Run one direct SQL query in SQL Editor mode.
-3. Expand a result table and change `Rows per page`.
-4. Open Visualization tab and toggle chart settings.
-5. Load a prior conversation from history.
-6. Use `Ctrl/Cmd + H` and `Ctrl/Cmd + /`.
-7. Open `/databases`, run quick start steps, and approve at least one pending DataPoint.
-8. Run sync and confirm status changes from running to completed.
-9. Open `/settings` and switch theme + layout modes.
+3. Verify a chart appears for chartable SQL-mode query results.
+4. Expand a result table and change `Rows per page`.
+5. Use `Download CSV`, `Download JSON`, `Copy Markdown`, and `Share Link`.
+6. Use `Helpful` / `Not Helpful`, `Report Issue`, and `Suggest Improvement`.
+7. Open Visualization tab and toggle chart settings.
+8. Load a prior conversation from history.
+9. Use `Ctrl/Cmd + H` and `Ctrl/Cmd + /`.
+10. Open `/databases`, run quick start steps, approve at least one pending DataPoint, and test DataPoint Editor load/create/update.
+11. Run sync and confirm status changes from running to completed.
+12. Open `/settings` and switch theme + layout modes.
 
 If all checks pass, core UI flows are healthy.

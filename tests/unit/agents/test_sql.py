@@ -1492,6 +1492,72 @@ class TestErrorHandling:
             "SELECT SUM(total_amount) AS total_revenue FROM public.grocery_sales_transactions"
         )
 
+    def test_parse_llm_response_does_not_add_default_limit_to_grouped_aggregate(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(
+            update={"query": "Show revenue by store"}
+        )
+        content = json.dumps(
+            {
+                "sql": (
+                    "SELECT store_id, SUM(total_amount) AS revenue "
+                    "FROM public.grocery_sales_transactions "
+                    "GROUP BY store_id ORDER BY revenue DESC"
+                ),
+                "confidence": 0.9,
+            }
+        )
+
+        generated = sql_agent._parse_llm_response(content, sql_input)
+
+        assert generated.sql == (
+            "SELECT store_id, SUM(total_amount) AS revenue FROM public.grocery_sales_transactions "
+            "GROUP BY store_id ORDER BY revenue DESC"
+        )
+
+    def test_parse_llm_response_keeps_existing_limit_for_aggregate_when_user_did_not_request_limit(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(
+            update={"query": "Show revenue by store"}
+        )
+        content = json.dumps(
+            {
+                "sql": (
+                    "SELECT store_id, SUM(total_amount) AS revenue "
+                    "FROM public.grocery_sales_transactions "
+                    "GROUP BY store_id ORDER BY revenue DESC LIMIT 10000"
+                ),
+                "confidence": 0.9,
+            }
+        )
+
+        generated = sql_agent._parse_llm_response(content, sql_input)
+
+        assert generated.sql.endswith("LIMIT 10000")
+
+    def test_parse_llm_response_applies_requested_limit_for_aggregate_queries(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(
+            update={"query": "Show top 5 stores by revenue"}
+        )
+        content = json.dumps(
+            {
+                "sql": (
+                    "SELECT store_id, SUM(total_amount) AS revenue "
+                    "FROM public.grocery_sales_transactions "
+                    "GROUP BY store_id ORDER BY revenue DESC LIMIT 10000"
+                ),
+                "confidence": 0.9,
+            }
+        )
+
+        generated = sql_agent._parse_llm_response(content, sql_input)
+
+        assert generated.sql.endswith("LIMIT 5")
+
 
 class TestInputValidation:
     """Test input validation."""

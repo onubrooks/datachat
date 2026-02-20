@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Script from "next/script";
 import "./globals.css";
+import { ReactQueryProvider } from "@/components/providers/ReactQueryProvider";
 
 export const metadata: Metadata = {
   title: "DataChat - AI Data Assistant",
@@ -29,7 +30,9 @@ export default function RootLayout({
           `}
         </Script>
       </head>
-      <body className="font-sans">{children}</body>
+      <body className="font-sans">
+        <ReactQueryProvider>{children}</ReactQueryProvider>
+      </body>
     </html>
   );
 }

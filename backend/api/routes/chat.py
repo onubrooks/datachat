@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from backend.api.database_context import resolve_database_type_and_url
+from backend.api.visualization import infer_direct_sql_visualization
 from backend.config import get_settings
 from backend.connectors.base import (
     ConnectionError as ConnectorConnectionError,
@@ -156,6 +157,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
                 column: [row.get(column) for row in result["rows"]]
                 for column in result["columns"]
             }
+            visualization_hint, visualization_metadata = infer_direct_sql_visualization(data)
             metrics = ChatMetrics(
                 total_latency_ms=total_latency_ms,
                 agent_timings={"direct_sql_execution": result["execution_time_ms"]},
@@ -167,13 +169,8 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
                 clarifying_questions=[],
                 sql=sql_query,
                 data=data,
-                visualization_hint="table",
-                visualization_metadata={
-                    "requested": "direct_sql",
-                    "deterministic": "table",
-                    "final": "table",
-                    "resolution_reason": "direct_sql_mode",
-                },
+                visualization_hint=visualization_hint,
+                visualization_metadata=visualization_metadata,
                 sources=[],
                 answer_source="sql",
                 answer_confidence=1.0,
