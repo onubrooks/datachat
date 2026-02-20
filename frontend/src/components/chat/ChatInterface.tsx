@@ -64,7 +64,7 @@ import { formatWaitingChipLabel } from "./loadingUx";
 const ACTIVE_DATABASE_STORAGE_KEY = "datachat.active_connection_id";
 const CONVERSATION_HISTORY_STORAGE_KEY = "datachat.conversation.history.v1";
 const MAX_CONVERSATION_HISTORY = 20;
-const MAX_CONVERSATION_MESSAGES = 80;
+const MAX_CONVERSATION_MESSAGES = 50;
 
 const serializeMessages = (items: ChatStoreMessage[]): SerializedMessage[] =>
   items.slice(-MAX_CONVERSATION_MESSAGES).map((message) => ({

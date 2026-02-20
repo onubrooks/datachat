@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter
 
+from backend.conversations import MAX_CONVERSATION_MESSAGES
 from backend.models.api import (
     ConversationDeleteResponse,
     ConversationSnapshotPayload,
@@ -15,6 +16,10 @@ from backend.models.api import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _trim_messages(messages: list[dict] | None) -> list[dict]:
+    return list(messages or [])[-MAX_CONVERSATION_MESSAGES:]
 
 
 def _get_conversation_store():
@@ -61,7 +66,7 @@ async def upsert_conversation(
             conversation_id=payload.conversation_id,
             session_summary=payload.session_summary,
             session_state=payload.session_state or {},
-            messages=payload.messages or [],
+            messages=_trim_messages(payload.messages),
             created_at=now,
             updated_at=payload.updated_at or now,
         )
@@ -73,7 +78,7 @@ async def upsert_conversation(
         conversation_id=payload.conversation_id,
         session_summary=payload.session_summary,
         session_state=payload.session_state or {},
-        messages=payload.messages or [],
+        messages=_trim_messages(payload.messages),
         updated_at=payload.updated_at,
     )
     return ConversationSnapshotPayload(**saved)

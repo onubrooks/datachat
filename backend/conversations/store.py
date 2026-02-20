@@ -10,6 +10,8 @@ import asyncpg
 
 from backend.config import get_settings
 
+MAX_CONVERSATION_MESSAGES = 50
+
 _CREATE_CONVERSATIONS_TABLE = """
 CREATE TABLE IF NOT EXISTS ui_conversations (
     frontend_session_id TEXT PRIMARY KEY,
@@ -92,6 +94,7 @@ class ConversationStore:
         self._ensure_pool()
         now = datetime.now(UTC)
         resolved_updated_at = updated_at or now
+        trimmed_messages = (messages or [])[-MAX_CONVERSATION_MESSAGES:]
         row = await self._pool.fetchrow(
             """
             INSERT INTO ui_conversations (
@@ -132,7 +135,7 @@ class ConversationStore:
             conversation_id,
             session_summary,
             json.dumps(session_state or {}),
-            json.dumps(messages or []),
+            json.dumps(trimmed_messages),
             now,
             resolved_updated_at,
         )

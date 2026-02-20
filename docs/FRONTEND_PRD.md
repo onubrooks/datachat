@@ -221,7 +221,7 @@ export const useChatStore = create<ChatState>()(
       name: 'datachat.chat.session.v1',
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
-        messages: state.messages.slice(-60), // Keep last 60 messages
+        messages: state.messages.slice(-50), // Keep last 50 messages
         conversationId: state.conversationId,
         sessionSummary: state.sessionSummary,
         sessionState: state.sessionState,
@@ -233,7 +233,7 @@ export const useChatStore = create<ChatState>()(
 
 **What's persisted (backend + fallback local cache):**
 
-- Last 60 messages (compacted)
+- Last 50 messages (compacted)
 - SQL queries and results (up to 50 rows)
 - Visualization hints and metadata
 - Sources and evidence

@@ -22,13 +22,14 @@ class TestConversationsRoutes:
         assert response.json() == []
 
     def test_upsert_falls_back_without_store(self) -> None:
+        messages = [{"role": "user", "content": f"msg-{idx}"} for idx in range(55)]
         payload = {
             "title": "Revenue review",
             "target_database_id": "db_pg",
             "conversation_id": "conv_123",
             "session_summary": "Summary",
             "session_state": {"last_goal": "revenue"},
-            "messages": [{"role": "user", "content": "Show revenue"}],
+            "messages": messages,
         }
         with patch("backend.api.main.app_state", {"conversation_store": None}):
             response = client.put("/api/v1/conversations/session_a", json=payload)
@@ -37,7 +38,9 @@ class TestConversationsRoutes:
         body = response.json()
         assert body["frontend_session_id"] == "session_a"
         assert body["title"] == "Revenue review"
-        assert body["messages"] == payload["messages"]
+        assert len(body["messages"]) == 50
+        assert body["messages"][0]["content"] == "msg-5"
+        assert body["messages"][-1]["content"] == "msg-54"
         assert body["created_at"] is not None
         assert body["updated_at"] is not None
 
