@@ -374,6 +374,49 @@ class EntryEventResponse(BaseModel):
     ok: bool = Field(default=True, description="Whether event ingestion succeeded")
 
 
+class FeedbackSubmitRequest(BaseModel):
+    """Feedback payload for answer quality, issues, and improvement ideas."""
+
+    category: Literal["answer_feedback", "issue_report", "improvement_suggestion"] = Field(
+        ...,
+        description="Feedback category.",
+    )
+    sentiment: Literal["up", "down"] | None = Field(
+        default=None,
+        description="Optional binary sentiment for answer_feedback.",
+    )
+    message: str | None = Field(
+        default=None,
+        description="Optional free-text issue or suggestion details.",
+    )
+    conversation_id: str | None = Field(default=None)
+    message_id: str | None = Field(default=None)
+    target_database_id: str | None = Field(default=None)
+    answer_source: str | None = Field(default=None)
+    answer_confidence: float | None = Field(default=None)
+    query: str | None = Field(default=None)
+    answer: str | None = Field(default=None)
+    sql: str | None = Field(default=None)
+    sources: list[dict[str, Any]] | None = Field(default=None)
+    metadata: dict[str, Any] | None = Field(default=None)
+
+
+class FeedbackSubmitResponse(BaseModel):
+    """Response for feedback submission."""
+
+    ok: bool = True
+    feedback_id: str
+    saved_to: Literal["system_database", "logs_only"] = "system_database"
+    created_at: str
+
+
+class FeedbackSummaryResponse(BaseModel):
+    """Aggregated feedback counts for dashboarding/ops."""
+
+    window_days: int
+    totals: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ToolExecuteRequest(BaseModel):
     """Tool execution request payload."""
 

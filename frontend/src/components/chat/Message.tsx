@@ -23,15 +23,30 @@ import {
   BadgeCheck,
   Copy,
   Download,
-  BarChart3,
+  Link2,
+  ThumbsUp,
+  ThumbsDown,
+  Flag,
+  Lightbulb,
   ChevronLeft,
   ChevronRight,
-  Settings2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { cn } from "@/lib/utils";
 import type { Message as MessageType } from "@/lib/stores/chat";
 import type { ResultLayoutMode } from "@/lib/settings";
+import { buildShareUrl } from "@/lib/share";
+import { ChartContainer } from "@/components/visualizations/ChartContainer";
+import {
+  isDateLikeColumn,
+  toNumber,
+  type BarChartConfig,
+  type ChartTooltipState,
+  type LineChartConfig,
+  type PieChartConfig,
+  type VizHint,
+  type ScatterChartConfig,
+} from "@/components/visualizations/types";
 
 interface MessageProps {
   message: MessageType;
@@ -39,64 +54,22 @@ interface MessageProps {
   showAgentTimingBreakdown?: boolean;
   onClarifyingAnswer?: (question: string) => void;
   onEditSqlDraft?: (sql: string) => void;
+  onSubmitFeedback?: (payload: MessageFeedbackPayload) => Promise<void>;
+}
+
+export interface MessageFeedbackPayload {
+  category: "answer_feedback" | "issue_report" | "improvement_suggestion";
+  sentiment?: "up" | "down" | null;
+  message?: string | null;
+  message_id: string;
+  answer_source?: string | null;
+  answer_confidence?: number | null;
+  answer?: string | null;
+  sql?: string | null;
+  sources?: Array<Record<string, unknown>>;
 }
 
 type TabId = "answer" | "sql" | "table" | "visualization" | "sources" | "timing";
-type VizHint = "table" | "bar_chart" | "line_chart" | "pie_chart" | "scatter" | "none";
-type InteractiveChartType = "bar_chart" | "line_chart" | "pie_chart" | "scatter";
-
-interface BarChartConfig {
-  labelCol: string;
-  valueCol: string;
-  maxItems: number;
-  zoom: number;
-  showLegend: boolean;
-  seriesVisible: boolean;
-}
-
-interface LineChartConfig {
-  xCol: string;
-  yCol: string;
-  maxItems: number;
-  zoom: number;
-  showLegend: boolean;
-  showGrid: boolean;
-  seriesVisible: boolean;
-}
-
-interface ScatterChartConfig {
-  xCol: string;
-  yCol: string;
-  maxItems: number;
-  zoom: number;
-  showLegend: boolean;
-  showGrid: boolean;
-  seriesVisible: boolean;
-}
-
-interface PieChartConfig {
-  labelCol: string;
-  valueCol: string;
-  maxItems: number;
-  zoom: number;
-  showLegend: boolean;
-}
-
-interface ChartTooltipState {
-  title: string;
-  detail?: string;
-}
-
-const CHART_COLORS = [
-  "#2563eb",
-  "#16a34a",
-  "#ea580c",
-  "#9333ea",
-  "#0891b2",
-  "#dc2626",
-  "#ca8a04",
-  "#4f46e5",
-];
 
 function renderInlineMarkdown(text: string): React.ReactNode[] {
   const tokens = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean);
@@ -184,26 +157,6 @@ function renderMarkdownish(text: string): React.ReactNode {
   return <div className="space-y-2">{blocks}</div>;
 }
 
-const formatMetricNumber = (value: number): string => {
-  if (!Number.isFinite(value)) {
-    return "0";
-  }
-  return new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: Math.abs(value) < 100 ? 2 : 0,
-  }).format(value);
-};
-
-const formatAxisTick = (value: number): string => {
-  if (!Number.isFinite(value)) {
-    return "0";
-  }
-  const abs = Math.abs(value);
-  const maxFractionDigits = abs >= 1000 ? 0 : abs >= 100 ? 1 : 2;
-  return new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: maxFractionDigits,
-  }).format(value);
-};
-
 const formatDurationSeconds = (milliseconds: number): string => {
   if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
     return "0s";
@@ -216,47 +169,13 @@ const formatDurationSeconds = (milliseconds: number): string => {
   }).format(seconds)}s`;
 };
 
-const toNumber = (value: unknown): number | null => {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim() !== "") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
-};
-
-const isDateLikeColumn = (columnName: string): boolean => {
-  const lowered = columnName.toLowerCase();
-  const tokens = lowered.split(/[^a-z0-9]+/).filter(Boolean);
-  const directMarkers = new Set(["date", "time", "timestamp", "datetime"]);
-  const periodMarkers = new Set(["day", "week", "month", "quarter", "year"]);
-  const periodDisqualifiers = new Set(["type", "category", "name", "code"]);
-  if (tokens.some((token) => directMarkers.has(token))) {
-    return true;
-  }
-  if (
-    tokens.some((token) => periodMarkers.has(token)) &&
-    !tokens.some((token) => periodDisqualifiers.has(token))
-  ) {
-    return true;
-  }
-  return false;
-};
-
-function clampPercent(value: number): number {
-  return Math.max(0, Math.min(100, value));
-}
-
 export function Message({
   message,
   displayMode = "stacked",
   showAgentTimingBreakdown = true,
   onClarifyingAnswer,
   onEditSqlDraft,
+  onSubmitFeedback,
 }: MessageProps) {
   const isUser = message.role === "user";
   const [activeTab, setActiveTab] = useState<TabId>("answer");
@@ -265,6 +184,10 @@ export function Message({
   const [tablePage, setTablePage] = useState<number>(0);
   const [rowsPerPage, setRowsPerPage] = useState<number>(10);
   const [showChartSettings, setShowChartSettings] = useState(false);
+  const [feedbackMode, setFeedbackMode] = useState<"issue" | "suggestion" | null>(null);
+  const [feedbackDraft, setFeedbackDraft] = useState("");
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [feedbackSentiment, setFeedbackSentiment] = useState<"up" | "down" | null>(null);
   const [chartTooltip, setChartTooltip] = useState<ChartTooltipState | null>(null);
   const [hiddenPieLabels, setHiddenPieLabels] = useState<string[]>([]);
   const [barConfig, setBarConfig] = useState<BarChartConfig>({
@@ -314,6 +237,8 @@ export function Message({
   const activeData = activeSubAnswer?.data ?? message.data;
   const activeVisualizationHint =
     activeSubAnswer?.visualization_hint ?? message.visualization_hint;
+  const activeVisualizationMetadata =
+    activeSubAnswer?.visualization_metadata ?? message.visualization_metadata;
   const activeClarifyingQuestions =
     activeSubAnswer?.clarifying_questions || message.clarifying_questions;
 
@@ -336,6 +261,10 @@ export function Message({
     setShowChartSettings(false);
     setChartTooltip(null);
     setHiddenPieLabels([]);
+    setFeedbackMode(null);
+    setFeedbackDraft("");
+    setFeedbackSubmitting(false);
+    setFeedbackSentiment(null);
   }, [message.id, selectedSubAnswerIndex]);
 
   const columnNames = useMemo(
@@ -555,6 +484,127 @@ export function Message({
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     setActionNotice("CSV downloaded");
+  };
+
+  const downloadJson = () => {
+    if (!hasTable) {
+      return;
+    }
+    const payload = {
+      columns: columnNames,
+      rows: rowObjects,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "datachat-results.json";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    setActionNotice("JSON downloaded");
+  };
+
+  const copyMarkdownTable = async () => {
+    if (!hasTable) {
+      return;
+    }
+    const escapeMarkdown = (value: unknown) => {
+      if (value === null || value === undefined) {
+        return "";
+      }
+      return String(value).replace(/\|/g, "\\|").replace(/\r?\n/g, "<br/>");
+    };
+    const header = `| ${columnNames.join(" | ")} |`;
+    const separator = `| ${columnNames.map(() => "---").join(" | ")} |`;
+    const rowsMarkdown = rowObjects.map(
+      (row) =>
+        `| ${columnNames.map((column) => escapeMarkdown(row[column])).join(" | ")} |`
+    );
+    const markdown = [header, separator, ...rowsMarkdown].join("\n");
+    try {
+      await navigator.clipboard.writeText(markdown);
+      setActionNotice("Markdown copied");
+    } catch {
+      setActionNotice("Unable to copy markdown");
+    }
+  };
+
+  const copyShareLink = async () => {
+    try {
+      const shareUrl = buildShareUrl(
+        {
+          created_at: new Date().toISOString(),
+          answer: activeContent || "",
+          sql: activeSql ?? null,
+          data: hasTable ? activeData ?? null : null,
+          visualization_hint: resolvedVizHint,
+          visualization_metadata:
+            (activeVisualizationMetadata as Record<string, unknown> | null) ?? null,
+          sources: message.sources || [],
+          answer_source: message.answer_source ?? null,
+          answer_confidence:
+            typeof message.answer_confidence === "number" ? message.answer_confidence : null,
+        },
+        window.location.href
+      );
+      await navigator.clipboard.writeText(shareUrl);
+      setActionNotice("Share link copied");
+    } catch {
+      setActionNotice("Unable to copy share link");
+    }
+  };
+
+  const submitFeedback = async (
+    category: "answer_feedback" | "issue_report" | "improvement_suggestion",
+    sentiment?: "up" | "down" | null,
+    messageText?: string | null
+  ) => {
+    if (!onSubmitFeedback) {
+      setActionNotice("Feedback capture is not enabled");
+      return;
+    }
+    setFeedbackSubmitting(true);
+    try {
+      const feedbackAnswerSource =
+        activeSubAnswer?.answer_source ?? message.answer_source ?? null;
+      const feedbackAnswerConfidence =
+        typeof activeSubAnswer?.answer_confidence === "number"
+          ? activeSubAnswer.answer_confidence
+          : typeof message.answer_confidence === "number"
+            ? message.answer_confidence
+            : null;
+      await onSubmitFeedback({
+        category,
+        sentiment: sentiment ?? null,
+        message: messageText ?? null,
+        message_id: message.id,
+        answer_source: feedbackAnswerSource,
+        answer_confidence: feedbackAnswerConfidence,
+        answer: activeContent || null,
+        sql: activeSql ?? null,
+        sources: (message.sources || []) as Array<Record<string, unknown>>,
+      });
+      if (category === "answer_feedback") {
+        setFeedbackSentiment(sentiment ?? null);
+        setActionNotice(sentiment === "up" ? "Thanks for the positive feedback" : "Feedback noted");
+      } else if (category === "issue_report") {
+        setFeedbackMode(null);
+        setFeedbackDraft("");
+        setActionNotice("Issue report submitted");
+      } else {
+        setFeedbackMode(null);
+        setFeedbackDraft("");
+        setActionNotice("Improvement suggestion submitted");
+      }
+    } catch {
+      setActionNotice("Unable to submit feedback");
+    } finally {
+      setFeedbackSubmitting(false);
+    }
   };
 
   const renderClarifyingQuestions = () => {
@@ -912,1167 +962,31 @@ export function Message({
   };
 
   const renderVisualizationSection = () => {
-    if (!hasTable) {
-      return (
-        <Card className="mt-4">
-          <CardContent className="pt-6 text-sm text-muted-foreground">
-            No data returned for visualization.
-          </CardContent>
-        </Card>
-      );
-    }
-
-    const interactiveChartType: InteractiveChartType | null =
-      resolvedVizHint === "bar_chart" ||
-      resolvedVizHint === "line_chart" ||
-      resolvedVizHint === "scatter" ||
-      resolvedVizHint === "pie_chart"
-        ? resolvedVizHint
-        : null;
-
-    const chartTooltipDescription = chartTooltip?.detail
-      ? `${chartTooltip.title} · ${chartTooltip.detail}`
-      : chartTooltip?.title || null;
-
-    const renderChartSettings = (chartType: InteractiveChartType) => {
-      if (!showChartSettings) {
-        return null;
-      }
-
-      const commonClassName = "h-8 rounded-md border border-input bg-background px-2 text-xs";
-
-      if (chartType === "bar_chart") {
-        return (
-          <Card className="mt-2">
-            <CardContent className="space-y-3 pt-4">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1 text-xs">
-                  <span className="font-medium">X axis column</span>
-                  <select
-                    className={commonClassName}
-                    value={barConfig.labelCol}
-                    aria-label="Bar chart X axis column"
-                    onChange={(event) =>
-                      setBarConfig((prev) => ({ ...prev, labelCol: event.target.value }))
-                    }
-                  >
-                    {columnNames.map((column) => (
-                      <option key={`bar-label-${column}`} value={column}>
-                        {column}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="space-y-1 text-xs">
-                  <span className="font-medium">Y axis column</span>
-                  <select
-                    className={commonClassName}
-                    value={barConfig.valueCol}
-                    aria-label="Bar chart Y axis column"
-                    onChange={(event) =>
-                      setBarConfig((prev) => ({ ...prev, valueCol: event.target.value }))
-                    }
-                  >
-                    {numericColumns.map((column) => (
-                      <option key={`bar-value-${column}`} value={column}>
-                        {column}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1 text-xs">
-                  <span className="font-medium">Max bars: {barConfig.maxItems}</span>
-                  <input
-                    type="range"
-                    min={2}
-                    max={50}
-                    value={barConfig.maxItems}
-                    aria-label="Bar chart max bars"
-                    onChange={(event) =>
-                      setBarConfig((prev) => ({ ...prev, maxItems: Number(event.target.value) }))
-                    }
-                  />
-                </label>
-                <label className="space-y-1 text-xs">
-                  <span className="font-medium">Zoom: {barConfig.zoom.toFixed(1)}x</span>
-                  <input
-                    type="range"
-                    min={1}
-                    max={2}
-                    step={0.1}
-                    value={barConfig.zoom}
-                    aria-label="Bar chart zoom"
-                    onChange={(event) =>
-                      setBarConfig((prev) => ({ ...prev, zoom: Number(event.target.value) }))
-                    }
-                  />
-                </label>
-              </div>
-              <div className="flex flex-wrap items-center gap-3 text-xs">
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={barConfig.showLegend}
-                    onChange={(event) =>
-                      setBarConfig((prev) => ({ ...prev, showLegend: event.target.checked }))
-                    }
-                  />
-                  Show legend
-                </label>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      }
-
-      if (chartType === "line_chart") {
-        return (
-          <Card className="mt-2">
-            <CardContent className="space-y-3 pt-4">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1 text-xs">
-                  <span className="font-medium">X axis column</span>
-                  <select
-                    className={commonClassName}
-                    value={lineConfig.xCol}
-                    aria-label="Line chart X axis column"
-                    onChange={(event) =>
-                      setLineConfig((prev) => ({ ...prev, xCol: event.target.value }))
-                    }
-                  >
-                    {columnNames.map((column) => (
-                      <option key={`line-x-${column}`} value={column}>
-                        {column}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="space-y-1 text-xs">
-                  <span className="font-medium">Y axis column</span>
-                  <select
-                    className={commonClassName}
-                    value={lineConfig.yCol}
-                    aria-label="Line chart Y axis column"
-                    onChange={(event) =>
-                      setLineConfig((prev) => ({ ...prev, yCol: event.target.value }))
-                    }
-                  >
-                    {numericColumns.map((column) => (
-                      <option key={`line-y-${column}`} value={column}>
-                        {column}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1 text-xs">
-                  <span className="font-medium">Max points: {lineConfig.maxItems}</span>
-                  <input
-                    type="range"
-                    min={2}
-                    max={120}
-                    value={lineConfig.maxItems}
-                    aria-label="Line chart max points"
-                    onChange={(event) =>
-                      setLineConfig((prev) => ({ ...prev, maxItems: Number(event.target.value) }))
-                    }
-                  />
-                </label>
-                <label className="space-y-1 text-xs">
-                  <span className="font-medium">Zoom: {lineConfig.zoom.toFixed(1)}x</span>
-                  <input
-                    type="range"
-                    min={1}
-                    max={3}
-                    step={0.1}
-                    value={lineConfig.zoom}
-                    aria-label="Line chart zoom"
-                    onChange={(event) =>
-                      setLineConfig((prev) => ({ ...prev, zoom: Number(event.target.value) }))
-                    }
-                  />
-                </label>
-              </div>
-              <div className="flex flex-wrap items-center gap-3 text-xs">
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={lineConfig.showLegend}
-                    onChange={(event) =>
-                      setLineConfig((prev) => ({ ...prev, showLegend: event.target.checked }))
-                    }
-                  />
-                  Show legend
-                </label>
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={lineConfig.showGrid}
-                    onChange={(event) =>
-                      setLineConfig((prev) => ({ ...prev, showGrid: event.target.checked }))
-                    }
-                  />
-                  Show grid
-                </label>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      }
-
-      if (chartType === "scatter") {
-        return (
-          <Card className="mt-2">
-            <CardContent className="space-y-3 pt-4">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1 text-xs">
-                  <span className="font-medium">X axis column</span>
-                  <select
-                    className={commonClassName}
-                    value={scatterConfig.xCol}
-                    aria-label="Scatter chart X axis column"
-                    onChange={(event) =>
-                      setScatterConfig((prev) => ({ ...prev, xCol: event.target.value }))
-                    }
-                  >
-                    {numericColumns.map((column) => (
-                      <option key={`scatter-x-${column}`} value={column}>
-                        {column}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="space-y-1 text-xs">
-                  <span className="font-medium">Y axis column</span>
-                  <select
-                    className={commonClassName}
-                    value={scatterConfig.yCol}
-                    aria-label="Scatter chart Y axis column"
-                    onChange={(event) =>
-                      setScatterConfig((prev) => ({ ...prev, yCol: event.target.value }))
-                    }
-                  >
-                    {numericColumns.map((column) => (
-                      <option key={`scatter-y-${column}`} value={column}>
-                        {column}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1 text-xs">
-                  <span className="font-medium">Max points: {scatterConfig.maxItems}</span>
-                  <input
-                    type="range"
-                    min={2}
-                    max={300}
-                    value={scatterConfig.maxItems}
-                    aria-label="Scatter chart max points"
-                    onChange={(event) =>
-                      setScatterConfig((prev) => ({
-                        ...prev,
-                        maxItems: Number(event.target.value),
-                      }))
-                    }
-                  />
-                </label>
-                <label className="space-y-1 text-xs">
-                  <span className="font-medium">Zoom: {scatterConfig.zoom.toFixed(1)}x</span>
-                  <input
-                    type="range"
-                    min={1}
-                    max={3}
-                    step={0.1}
-                    value={scatterConfig.zoom}
-                    aria-label="Scatter chart zoom"
-                    onChange={(event) =>
-                      setScatterConfig((prev) => ({ ...prev, zoom: Number(event.target.value) }))
-                    }
-                  />
-                </label>
-              </div>
-              <div className="flex flex-wrap items-center gap-3 text-xs">
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={scatterConfig.showLegend}
-                    onChange={(event) =>
-                      setScatterConfig((prev) => ({ ...prev, showLegend: event.target.checked }))
-                    }
-                  />
-                  Show legend
-                </label>
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={scatterConfig.showGrid}
-                    onChange={(event) =>
-                      setScatterConfig((prev) => ({ ...prev, showGrid: event.target.checked }))
-                    }
-                  />
-                  Show grid
-                </label>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      }
-
-      return (
-        <Card className="mt-2">
-          <CardContent className="space-y-3 pt-4">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="space-y-1 text-xs">
-                <span className="font-medium">Category column</span>
-                <select
-                  className={commonClassName}
-                  value={pieConfig.labelCol}
-                  aria-label="Pie chart category column"
-                  onChange={(event) =>
-                    setPieConfig((prev) => ({ ...prev, labelCol: event.target.value }))
-                  }
-                >
-                  {columnNames.map((column) => (
-                    <option key={`pie-label-${column}`} value={column}>
-                      {column}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="space-y-1 text-xs">
-                <span className="font-medium">Value column</span>
-                <select
-                  className={commonClassName}
-                  value={pieConfig.valueCol}
-                  aria-label="Pie chart value column"
-                  onChange={(event) =>
-                    setPieConfig((prev) => ({ ...prev, valueCol: event.target.value }))
-                  }
-                >
-                  {numericColumns.map((column) => (
-                    <option key={`pie-value-${column}`} value={column}>
-                      {column}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="space-y-1 text-xs">
-                <span className="font-medium">Max slices: {pieConfig.maxItems}</span>
-                <input
-                  type="range"
-                  min={2}
-                  max={20}
-                  value={pieConfig.maxItems}
-                  aria-label="Pie chart max slices"
-                  onChange={(event) =>
-                    setPieConfig((prev) => ({ ...prev, maxItems: Number(event.target.value) }))
-                  }
-                />
-              </label>
-              <label className="space-y-1 text-xs">
-                <span className="font-medium">Zoom: {pieConfig.zoom.toFixed(1)}x</span>
-                <input
-                  type="range"
-                  min={1}
-                  max={2.4}
-                  step={0.1}
-                  value={pieConfig.zoom}
-                  aria-label="Pie chart zoom"
-                  onChange={(event) =>
-                    setPieConfig((prev) => ({ ...prev, zoom: Number(event.target.value) }))
-                  }
-                />
-              </label>
-            </div>
-            <div className="flex flex-wrap items-center gap-3 text-xs">
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={pieConfig.showLegend}
-                  onChange={(event) =>
-                    setPieConfig((prev) => ({ ...prev, showLegend: event.target.checked }))
-                  }
-                />
-                Show legend
-              </label>
-            </div>
-          </CardContent>
-        </Card>
-      );
-    };
-
-    const renderFallback = (messageText: string) => (
-      <Card className="mt-4">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm flex items-center gap-2">
-            <BarChart3 size={16} />
-            Visualization
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {interactiveChartType && (
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
-                onClick={() => setShowChartSettings((prev) => !prev)}
-                aria-pressed={showChartSettings}
-                aria-label="Toggle chart settings panel"
-              >
-                <Settings2 size={12} />
-                {showChartSettings ? "Hide settings" : "Chart settings"}
-              </button>
-            </div>
-          )}
-          {interactiveChartType && renderChartSettings(interactiveChartType)}
-          <p className="text-sm text-muted-foreground">{messageText}</p>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Tip: switch to the Table tab for raw results.
-          </p>
-        </CardContent>
-      </Card>
+    return (
+      <ChartContainer
+        messageId={message.id}
+        hasTable={hasTable}
+        resolvedVizHint={resolvedVizHint}
+        columnNames={columnNames}
+        numericColumns={numericColumns}
+        nonNumericColumns={nonNumericColumns}
+        rowObjects={rowObjects}
+        showChartSettings={showChartSettings}
+        setShowChartSettings={setShowChartSettings}
+        chartTooltip={chartTooltip}
+        setChartTooltip={setChartTooltip}
+        hiddenPieLabels={hiddenPieLabels}
+        setHiddenPieLabels={setHiddenPieLabels}
+        barConfig={barConfig}
+        setBarConfig={setBarConfig}
+        lineConfig={lineConfig}
+        setLineConfig={setLineConfig}
+        scatterConfig={scatterConfig}
+        setScatterConfig={setScatterConfig}
+        pieConfig={pieConfig}
+        setPieConfig={setPieConfig}
+      />
     );
-
-    const renderBarChart = () => {
-      const valueCol = barConfig.valueCol || numericColumns[0];
-      const labelCol = barConfig.labelCol || nonNumericColumns[0] || columnNames[0];
-      if (!valueCol || !labelCol) {
-        return renderFallback("This result shape is not suitable for a bar chart.");
-      }
-
-      const points = rowObjects
-        .map((row) => ({
-          label: String(row[labelCol] ?? ""),
-          value: toNumber(row[valueCol]),
-        }))
-        .filter((row) => row.value !== null)
-        .slice(0, Math.max(2, barConfig.maxItems)) as Array<{ label: string; value: number }>;
-
-      if (points.length < 2) {
-        return renderFallback("Not enough points to draw a bar chart.");
-      }
-
-      const maxValue = Math.max(...points.map((row) => Math.abs(row.value)));
-      if (maxValue <= 0) {
-        return renderFallback("Bar values are all zero.");
-      }
-
-      return (
-        <Card className="mt-4">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <BarChart3 size={16} />
-              Bar Chart
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
-                onClick={() => setShowChartSettings((prev) => !prev)}
-                aria-pressed={showChartSettings}
-                aria-label="Toggle bar chart settings"
-              >
-                <Settings2 size={12} />
-                {showChartSettings ? "Hide settings" : "Chart settings"}
-              </button>
-            </div>
-            {renderChartSettings("bar_chart")}
-            {!barConfig.seriesVisible ? (
-              <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
-                The <code>{valueCol}</code> series is hidden. Re-enable it from the legend toggle.
-              </div>
-            ) : (
-              points.map((point, index) => (
-                <div key={`${point.label}-${index}`} className="flex items-center gap-2">
-                  <div className="w-28 truncate text-xs">{point.label}</div>
-                  <div className="h-4 flex-1 rounded bg-secondary overflow-hidden">
-                    <div
-                      className="h-full origin-left bg-primary transition-transform"
-                      style={{
-                        width: `${clampPercent((Math.abs(point.value) / maxValue) * 100)}%`,
-                        transform: `scaleX(${barConfig.zoom})`,
-                      }}
-                      role="img"
-                      tabIndex={0}
-                      aria-label={`${labelCol}: ${point.label}, ${valueCol}: ${formatMetricNumber(point.value)}`}
-                      onMouseEnter={() =>
-                        setChartTooltip({
-                          title: point.label,
-                          detail: `${valueCol}: ${formatMetricNumber(point.value)}`,
-                        })
-                      }
-                      onMouseLeave={() => setChartTooltip(null)}
-                      onFocus={() =>
-                        setChartTooltip({
-                          title: point.label,
-                          detail: `${valueCol}: ${formatMetricNumber(point.value)}`,
-                        })
-                      }
-                      onBlur={() => setChartTooltip(null)}
-                    />
-                  </div>
-                  <div className="w-16 text-right text-xs">{formatMetricNumber(point.value)}</div>
-                </div>
-              ))
-            )}
-            <div className="rounded border border-border/80 bg-muted/30 px-2 py-2 text-xs text-muted-foreground">
-              <div>
-                <span className="font-medium text-foreground">X axis:</span> {labelCol}
-              </div>
-              <div>
-                <span className="font-medium text-foreground">Y axis:</span> {valueCol}
-              </div>
-              {barConfig.showLegend && (
-                <div className="mt-1 flex items-center gap-2">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] hover:bg-secondary"
-                    aria-pressed={!barConfig.seriesVisible}
-                    onClick={() =>
-                      setBarConfig((prev) => ({
-                        ...prev,
-                        seriesVisible: !prev.seriesVisible,
-                      }))
-                    }
-                  >
-                    <span
-                      className="inline-block h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: CHART_COLORS[0] }}
-                    />
-                    {barConfig.seriesVisible ? "Hide" : "Show"} {valueCol}
-                  </button>
-                </div>
-              )}
-            </div>
-            {chartTooltipDescription && (
-              <p className="text-xs text-muted-foreground" aria-live="polite">
-                {chartTooltipDescription}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      );
-    };
-
-    const renderLineChart = () => {
-      const valueCol = lineConfig.yCol || numericColumns[0];
-      const xCol = lineConfig.xCol || columnNames.find((column) => isDateLikeColumn(column)) || nonNumericColumns[0] || columnNames[0];
-      if (!valueCol || !xCol) {
-        return renderFallback("This result shape is not suitable for a line chart.");
-      }
-
-      const points = rowObjects
-        .map((row, index) => ({
-          xLabel: String(row[xCol] ?? index + 1),
-          y: toNumber(row[valueCol]),
-        }))
-        .filter((row) => row.y !== null)
-        .slice(0, Math.max(2, lineConfig.maxItems)) as Array<{ xLabel: string; y: number }>;
-
-      if (points.length < 2) {
-        return renderFallback("Not enough points to draw a line chart.");
-      }
-
-      const width = 640;
-      const height = 280;
-      const padLeft = 56;
-      const padRight = 24;
-      const padTop = 20;
-      const padBottom = 58;
-      const plotWidth = width - padLeft - padRight;
-      const plotHeight = height - padTop - padBottom;
-      const ys = points.map((point) => point.y);
-      const minY = Math.min(...ys);
-      const maxY = Math.max(...ys);
-      const yRange = maxY - minY || 1;
-      const yTicks = [minY, minY + yRange / 2, maxY];
-      const xTickIndexes = Array.from(
-        new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])
-      );
-
-      const linePoints = points
-        .map((point, index) => {
-          const x = padLeft + (index / (points.length - 1)) * plotWidth;
-          const y = padTop + (1 - (point.y - minY) / yRange) * plotHeight;
-          return `${x},${y}`;
-        })
-        .join(" ");
-
-      return (
-        <Card className="mt-4">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <BarChart3 size={16} />
-              Line Chart
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
-                onClick={() => setShowChartSettings((prev) => !prev)}
-                aria-pressed={showChartSettings}
-                aria-label="Toggle line chart settings"
-              >
-                <Settings2 size={12} />
-                {showChartSettings ? "Hide settings" : "Chart settings"}
-              </button>
-            </div>
-            {renderChartSettings("line_chart")}
-            <div className="overflow-x-auto">
-              <svg
-                viewBox={`0 0 ${width} ${height}`}
-                className="min-w-[360px] h-[280px]"
-                role="img"
-                aria-label={`Line chart of ${valueCol} by ${xCol}`}
-                style={{ width: `${Math.max(100, lineConfig.zoom * 100)}%` }}
-              >
-                {yTicks.map((tick, index) => {
-                  const y = padTop + (1 - (tick - minY) / yRange) * plotHeight;
-                  return (
-                    <g key={`line-y-tick-${index}`}>
-                      {lineConfig.showGrid && (
-                        <line
-                          x1={padLeft}
-                          y1={y}
-                          x2={width - padRight}
-                          y2={y}
-                          stroke="#e2e8f0"
-                          strokeDasharray="3 3"
-                        />
-                      )}
-                      <text
-                        x={padLeft - 8}
-                        y={y + 4}
-                        textAnchor="end"
-                        fontSize="10"
-                        fill="#64748b"
-                      >
-                        {formatAxisTick(tick)}
-                      </text>
-                    </g>
-                  );
-                })}
-                <line
-                  x1={padLeft}
-                  y1={height - padBottom}
-                  x2={width - padRight}
-                  y2={height - padBottom}
-                  stroke="#94a3b8"
-                />
-                <line
-                  x1={padLeft}
-                  y1={padTop}
-                  x2={padLeft}
-                  y2={height - padBottom}
-                  stroke="#94a3b8"
-                />
-                <polyline
-                  fill="none"
-                  stroke="#2563eb"
-                  strokeWidth="2.5"
-                  points={linePoints}
-                  opacity={lineConfig.seriesVisible ? 1 : 0.2}
-                />
-                {lineConfig.seriesVisible &&
-                  points.map((point, index) => {
-                  const x = padLeft + (index / (points.length - 1)) * plotWidth;
-                  const y = padTop + (1 - (point.y - minY) / yRange) * plotHeight;
-                  return (
-                    <circle
-                      key={`${point.xLabel}-${index}`}
-                      cx={x}
-                      cy={y}
-                      r="3"
-                      fill="#2563eb"
-                      tabIndex={0}
-                      aria-label={`${xCol}: ${point.xLabel}, ${valueCol}: ${formatMetricNumber(point.y)}`}
-                      onMouseEnter={() =>
-                        setChartTooltip({
-                          title: point.xLabel,
-                          detail: `${valueCol}: ${formatMetricNumber(point.y)}`,
-                        })
-                      }
-                      onMouseLeave={() => setChartTooltip(null)}
-                      onFocus={() =>
-                        setChartTooltip({
-                          title: point.xLabel,
-                          detail: `${valueCol}: ${formatMetricNumber(point.y)}`,
-                        })
-                      }
-                      onBlur={() => setChartTooltip(null)}
-                    />
-                  );
-                })}
-                {xTickIndexes.map((index) => {
-                  const x = padLeft + (index / Math.max(points.length - 1, 1)) * plotWidth;
-                  const raw = points[index]?.xLabel ?? "";
-                  const label = raw.length > 16 ? `${raw.slice(0, 15)}…` : raw;
-                  return (
-                    <text
-                      key={`line-x-tick-${index}`}
-                      x={x}
-                      y={height - padBottom + 16}
-                      textAnchor="middle"
-                      fontSize="10"
-                      fill="#64748b"
-                    >
-                      {label}
-                    </text>
-                  );
-                })}
-                <text
-                  x={padLeft + plotWidth / 2}
-                  y={height - 8}
-                  textAnchor="middle"
-                  fontSize="11"
-                  fill="#334155"
-                >
-                  {xCol}
-                </text>
-                <text
-                  x={14}
-                  y={padTop + plotHeight / 2}
-                  textAnchor="middle"
-                  fontSize="11"
-                  fill="#334155"
-                  transform={`rotate(-90 14 ${padTop + plotHeight / 2})`}
-                >
-                  {valueCol}
-                </text>
-                <g transform={`translate(${width - padRight - 140}, ${padTop + 6})`}>
-                  {lineConfig.showLegend && (
-                    <>
-                      <rect x="0" y="0" width="134" height="24" fill="#f8fafc" stroke="#e2e8f0" rx="4" />
-                      <rect x="8" y="9" width="14" height="2.5" fill="#2563eb" />
-                      <text x="28" y="13" fontSize="10" fill="#334155">
-                        {valueCol}
-                      </text>
-                    </>
-                  )}
-                </g>
-              </svg>
-            </div>
-            {lineConfig.showLegend && (
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
-                onClick={() =>
-                  setLineConfig((prev) => ({ ...prev, seriesVisible: !prev.seriesVisible }))
-                }
-                aria-pressed={!lineConfig.seriesVisible}
-              >
-                {lineConfig.seriesVisible ? "Hide" : "Show"} {valueCol}
-              </button>
-            )}
-            <p className="text-xs text-muted-foreground">
-              X axis: {xCol} · Y axis: {valueCol} · Legend: {valueCol} · {points.length} points
-            </p>
-            {chartTooltipDescription && (
-              <p className="text-xs text-muted-foreground" aria-live="polite">
-                {chartTooltipDescription}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      );
-    };
-
-    const renderScatter = () => {
-      const xCol = scatterConfig.xCol || numericColumns[0];
-      const yCol = scatterConfig.yCol || numericColumns[1] || numericColumns[0];
-      if (!xCol || !yCol) {
-        return renderFallback("Scatter plot needs at least two numeric columns.");
-      }
-
-      const points = rowObjects
-        .map((row) => ({
-          x: toNumber(row[xCol]),
-          y: toNumber(row[yCol]),
-        }))
-        .filter((row) => row.x !== null && row.y !== null)
-        .slice(0, Math.max(2, scatterConfig.maxItems)) as Array<{ x: number; y: number }>;
-
-      if (points.length < 2) {
-        return renderFallback("Not enough numeric points for scatter plot.");
-      }
-
-      const width = 640;
-      const height = 280;
-      const padLeft = 56;
-      const padRight = 24;
-      const padTop = 20;
-      const padBottom = 58;
-      const plotWidth = width - padLeft - padRight;
-      const plotHeight = height - padTop - padBottom;
-      const xs = points.map((point) => point.x);
-      const ys = points.map((point) => point.y);
-      const minX = Math.min(...xs);
-      const maxX = Math.max(...xs);
-      const minY = Math.min(...ys);
-      const maxY = Math.max(...ys);
-      const xRange = maxX - minX || 1;
-      const yRange = maxY - minY || 1;
-      const xTicks = [minX, minX + xRange / 2, maxX];
-      const yTicks = [minY, minY + yRange / 2, maxY];
-
-      return (
-        <Card className="mt-4">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <BarChart3 size={16} />
-              Scatter Plot
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
-                onClick={() => setShowChartSettings((prev) => !prev)}
-                aria-pressed={showChartSettings}
-                aria-label="Toggle scatter chart settings"
-              >
-                <Settings2 size={12} />
-                {showChartSettings ? "Hide settings" : "Chart settings"}
-              </button>
-            </div>
-            {renderChartSettings("scatter")}
-            <div className="overflow-x-auto">
-              <svg
-                viewBox={`0 0 ${width} ${height}`}
-                className="min-w-[360px] h-[280px]"
-                role="img"
-                aria-label={`Scatter plot of ${yCol} by ${xCol}`}
-                style={{ width: `${Math.max(100, scatterConfig.zoom * 100)}%` }}
-              >
-                {yTicks.map((tick, index) => {
-                  const y = padTop + (1 - (tick - minY) / yRange) * plotHeight;
-                  return (
-                    <g key={`scatter-y-tick-${index}`}>
-                      {scatterConfig.showGrid && (
-                        <line
-                          x1={padLeft}
-                          y1={y}
-                          x2={width - padRight}
-                          y2={y}
-                          stroke="#e2e8f0"
-                          strokeDasharray="3 3"
-                        />
-                      )}
-                      <text
-                        x={padLeft - 8}
-                        y={y + 4}
-                        textAnchor="end"
-                        fontSize="10"
-                        fill="#64748b"
-                      >
-                        {formatAxisTick(tick)}
-                      </text>
-                    </g>
-                  );
-                })}
-                {xTicks.map((tick, index) => {
-                  const x = padLeft + ((tick - minX) / xRange) * plotWidth;
-                  return (
-                    <g key={`scatter-x-tick-${index}`}>
-                      {scatterConfig.showGrid && (
-                        <line
-                          x1={x}
-                          y1={padTop}
-                          x2={x}
-                          y2={height - padBottom}
-                          stroke="#e2e8f0"
-                          strokeDasharray="3 3"
-                        />
-                      )}
-                      <text
-                        x={x}
-                        y={height - padBottom + 16}
-                        textAnchor="middle"
-                        fontSize="10"
-                        fill="#64748b"
-                      >
-                        {formatAxisTick(tick)}
-                      </text>
-                    </g>
-                  );
-                })}
-                <line
-                  x1={padLeft}
-                  y1={height - padBottom}
-                  x2={width - padRight}
-                  y2={height - padBottom}
-                  stroke="#94a3b8"
-                />
-                <line
-                  x1={padLeft}
-                  y1={padTop}
-                  x2={padLeft}
-                  y2={height - padBottom}
-                  stroke="#94a3b8"
-                />
-                {points.map((point, index) => {
-                  const x = padLeft + ((point.x - minX) / xRange) * plotWidth;
-                  const y = padTop + (1 - (point.y - minY) / yRange) * plotHeight;
-                  return (
-                    <circle
-                      key={`scatter-${index}`}
-                      cx={x}
-                      cy={y}
-                      r="3.2"
-                      fill="#2563eb"
-                      opacity={scatterConfig.seriesVisible ? 0.85 : 0.2}
-                      tabIndex={0}
-                      aria-label={`${xCol}: ${formatMetricNumber(point.x)}, ${yCol}: ${formatMetricNumber(point.y)}`}
-                      onMouseEnter={() =>
-                        setChartTooltip({
-                          title: `${xCol}: ${formatMetricNumber(point.x)}`,
-                          detail: `${yCol}: ${formatMetricNumber(point.y)}`,
-                        })
-                      }
-                      onMouseLeave={() => setChartTooltip(null)}
-                      onFocus={() =>
-                        setChartTooltip({
-                          title: `${xCol}: ${formatMetricNumber(point.x)}`,
-                          detail: `${yCol}: ${formatMetricNumber(point.y)}`,
-                        })
-                      }
-                      onBlur={() => setChartTooltip(null)}
-                    />
-                  );
-                })}
-                <text
-                  x={padLeft + plotWidth / 2}
-                  y={height - 8}
-                  textAnchor="middle"
-                  fontSize="11"
-                  fill="#334155"
-                >
-                  {xCol}
-                </text>
-                <text
-                  x={14}
-                  y={padTop + plotHeight / 2}
-                  textAnchor="middle"
-                  fontSize="11"
-                  fill="#334155"
-                  transform={`rotate(-90 14 ${padTop + plotHeight / 2})`}
-                >
-                  {yCol}
-                </text>
-                <g transform={`translate(${width - padRight - 188}, ${padTop + 6})`}>
-                  {scatterConfig.showLegend && (
-                    <>
-                      <rect x="0" y="0" width="182" height="24" fill="#f8fafc" stroke="#e2e8f0" rx="4" />
-                      <circle cx="12" cy="12" r="3.2" fill="#2563eb" />
-                      <text x="24" y="15" fontSize="10" fill="#334155">
-                        {`${xCol} vs ${yCol}`}
-                      </text>
-                    </>
-                  )}
-                </g>
-              </svg>
-            </div>
-            {scatterConfig.showLegend && (
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
-                onClick={() =>
-                  setScatterConfig((prev) => ({
-                    ...prev,
-                    seriesVisible: !prev.seriesVisible,
-                  }))
-                }
-                aria-pressed={!scatterConfig.seriesVisible}
-              >
-                {scatterConfig.seriesVisible ? "Hide" : "Show"} points
-              </button>
-            )}
-            <p className="text-xs text-muted-foreground">
-              X axis: {xCol} · Y axis: {yCol} · Legend: points · {points.length} points
-            </p>
-            {chartTooltipDescription && (
-              <p className="text-xs text-muted-foreground" aria-live="polite">
-                {chartTooltipDescription}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      );
-    };
-
-    const renderPie = () => {
-      const valueCol = pieConfig.valueCol || numericColumns[0];
-      const labelCol = pieConfig.labelCol || nonNumericColumns[0] || columnNames[0];
-      if (!valueCol || !labelCol) {
-        return renderFallback("This result shape is not suitable for a pie chart.");
-      }
-
-      const allSlices = rowObjects
-        .map((row) => ({
-          label: String(row[labelCol] ?? ""),
-          value: toNumber(row[valueCol]),
-        }))
-        .filter((row) => row.value !== null && row.value > 0)
-        .slice(0, Math.max(2, pieConfig.maxItems)) as Array<{ label: string; value: number }>;
-      const slices = allSlices.filter((slice) => !hiddenPieLabels.includes(slice.label));
-
-      if (allSlices.length < 2) {
-        return renderFallback("Not enough positive categories for a pie chart.");
-      }
-      if (slices.length < 1) {
-        return renderFallback("All slices are hidden. Re-enable legend categories.");
-      }
-
-      const total = slices.reduce((sum, slice) => sum + slice.value, 0);
-      if (total <= 0) {
-        return renderFallback("Pie values are not positive.");
-      }
-      let cumulative = 0;
-      const stops = slices.map((slice, index) => {
-        const start = (cumulative / total) * 360;
-        cumulative += slice.value;
-        const end = (cumulative / total) * 360;
-        const color = CHART_COLORS[index % CHART_COLORS.length];
-        return `${color} ${start}deg ${end}deg`;
-      });
-      const pieSize = Math.max(120, Math.round(160 * pieConfig.zoom));
-
-      return (
-        <Card className="mt-4">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <BarChart3 size={16} />
-              Pie Chart
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
-                onClick={() => setShowChartSettings((prev) => !prev)}
-                aria-pressed={showChartSettings}
-                aria-label="Toggle pie chart settings"
-              >
-                <Settings2 size={12} />
-                {showChartSettings ? "Hide settings" : "Chart settings"}
-              </button>
-              {hiddenPieLabels.length > 0 && (
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
-                  onClick={() => setHiddenPieLabels([])}
-                >
-                  Reset hidden slices
-                </button>
-              )}
-            </div>
-            {renderChartSettings("pie_chart")}
-            <div className="flex flex-wrap items-start gap-4">
-              <div
-                className="rounded-full border border-border"
-                style={{ background: `conic-gradient(${stops.join(", ")})` }}
-                role="img"
-                aria-label={`Pie chart with ${slices.length} visible categories`}
-                aria-describedby={chartTooltipDescription ? `${message.id}-viz-tooltip` : undefined}
-                onMouseLeave={() => setChartTooltip(null)}
-                onBlur={() => setChartTooltip(null)}
-              >
-                <div style={{ height: pieSize, width: pieSize }} />
-              </div>
-              {pieConfig.showLegend && (
-                <ul className="flex-1 space-y-1 text-xs" aria-label="Pie chart legend">
-                  {allSlices.map((slice, index) => {
-                    const isHidden = hiddenPieLabels.includes(slice.label);
-                    return (
-                      <li key={`${slice.label}-${index}`} className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          className="inline-flex w-full items-center gap-2 rounded border border-border px-2 py-1 text-left hover:bg-secondary"
-                          aria-pressed={!isHidden}
-                          onClick={() =>
-                            setHiddenPieLabels((prev) =>
-                              prev.includes(slice.label)
-                                ? prev.filter((label) => label !== slice.label)
-                                : [...prev, slice.label]
-                            )
-                          }
-                          onMouseEnter={() =>
-                            setChartTooltip({
-                              title: slice.label,
-                              detail: `${formatMetricNumber(slice.value)} (${((slice.value / (allSlices.reduce((sum, item) => sum + item.value, 0) || 1)) * 100).toFixed(1)}%)`,
-                            })
-                          }
-                          onFocus={() =>
-                            setChartTooltip({
-                              title: slice.label,
-                              detail: `${formatMetricNumber(slice.value)} (${((slice.value / (allSlices.reduce((sum, item) => sum + item.value, 0) || 1)) * 100).toFixed(1)}%)`,
-                            })
-                          }
-                          onMouseLeave={() => setChartTooltip(null)}
-                          onBlur={() => setChartTooltip(null)}
-                        >
-                          <span
-                            className="inline-block h-2.5 w-2.5 rounded-full"
-                            style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}
-                          />
-                          <span className={`flex-1 truncate ${isHidden ? "line-through opacity-60" : ""}`}>
-                            {slice.label}
-                          </span>
-                          <span className={isHidden ? "opacity-60" : ""}>
-                            {formatMetricNumber(slice.value)}
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Legend: {labelCol} categories · Slice value: {valueCol}
-            </p>
-            {chartTooltipDescription && (
-              <p
-                id={`${message.id}-viz-tooltip`}
-                className="text-xs text-muted-foreground"
-                aria-live="polite"
-              >
-                {chartTooltipDescription}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      );
-    };
-
-    if (resolvedVizHint === "none" || resolvedVizHint === "table") {
-      return renderFallback("This query is better represented as a table.");
-    }
-    if (resolvedVizHint === "bar_chart") {
-      return renderBarChart();
-    }
-    if (resolvedVizHint === "line_chart") {
-      return renderLineChart();
-    }
-    if (resolvedVizHint === "scatter") {
-      return renderScatter();
-    }
-    if (resolvedVizHint === "pie_chart") {
-      return renderPie();
-    }
-    return renderFallback("No suitable visualization is available.");
   };
 
   const renderTimingSection = () => {
@@ -2163,7 +1077,8 @@ export function Message({
   };
 
   const assistantMeta = !isUser && (message.answer_source || message.tool_approval_required);
-  const showActions = !isUser && (Boolean(activeSql) || hasTable);
+  const showActions =
+    !isUser && (Boolean(activeSql) || hasTable || Boolean(activeContent?.trim()));
 
   const renderAnswerOnly = () => (
     <>
@@ -2291,11 +1206,154 @@ export function Message({
                   Download CSV
                 </button>
               )}
+              {hasTable && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-secondary"
+                  onClick={downloadJson}
+                  aria-label="Download query results as JSON"
+                >
+                  <Download size={12} />
+                  Download JSON
+                </button>
+              )}
+              {hasTable && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-secondary"
+                  onClick={copyMarkdownTable}
+                  aria-label="Copy query results as markdown table"
+                >
+                  <Copy size={12} />
+                  Copy Markdown
+                </button>
+              )}
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-secondary"
+                onClick={copyShareLink}
+                aria-label="Copy share link for this result"
+              >
+                <Link2 size={12} />
+                Share Link
+              </button>
+              {onSubmitFeedback && (
+                <>
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded border px-2 py-1 hover:bg-secondary",
+                      feedbackSentiment === "up"
+                        ? "border-emerald-400 bg-emerald-50 text-emerald-700"
+                        : "border-border"
+                    )}
+                    onClick={() => submitFeedback("answer_feedback", "up")}
+                    disabled={feedbackSubmitting}
+                    aria-label="Rate answer helpful"
+                  >
+                    <ThumbsUp size={12} />
+                    Helpful
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded border px-2 py-1 hover:bg-secondary",
+                      feedbackSentiment === "down"
+                        ? "border-rose-400 bg-rose-50 text-rose-700"
+                        : "border-border"
+                    )}
+                    onClick={() => submitFeedback("answer_feedback", "down")}
+                    disabled={feedbackSubmitting}
+                    aria-label="Rate answer not helpful"
+                  >
+                    <ThumbsDown size={12} />
+                    Not Helpful
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded border px-2 py-1 hover:bg-secondary",
+                      feedbackMode === "issue" ? "border-primary bg-primary/10 text-primary" : "border-border"
+                    )}
+                    onClick={() => setFeedbackMode((prev) => (prev === "issue" ? null : "issue"))}
+                    disabled={feedbackSubmitting}
+                    aria-label="Report issue with this answer"
+                  >
+                    <Flag size={12} />
+                    Report Issue
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded border px-2 py-1 hover:bg-secondary",
+                      feedbackMode === "suggestion"
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border"
+                    )}
+                    onClick={() =>
+                      setFeedbackMode((prev) => (prev === "suggestion" ? null : "suggestion"))
+                    }
+                    disabled={feedbackSubmitting}
+                    aria-label="Suggest improvement for this answer"
+                  >
+                    <Lightbulb size={12} />
+                    Suggest Improvement
+                  </button>
+                </>
+              )}
               {actionNotice && (
                 <span className="text-muted-foreground" role="status" aria-live="polite">
                   {actionNotice}
                 </span>
               )}
+            </div>
+          )}
+
+          {onSubmitFeedback && feedbackMode && (
+            <div className="mb-3 rounded-md border border-border/70 bg-background/80 p-3">
+              <div className="mb-2 text-xs font-medium">
+                {feedbackMode === "issue" ? "Report issue" : "Suggest improvement"}
+              </div>
+              <textarea
+                value={feedbackDraft}
+                onChange={(event) => setFeedbackDraft(event.target.value)}
+                className="min-h-[92px] w-full resize-y rounded border border-input bg-background px-2 py-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder={
+                  feedbackMode === "issue"
+                    ? "Describe what was wrong (missing context, wrong SQL, wrong metric definition, etc.)"
+                    : "Describe how this response or retrieval can improve."
+                }
+                aria-label={
+                  feedbackMode === "issue" ? "Issue report details" : "Improvement suggestion details"
+                }
+              />
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  className="inline-flex items-center rounded border border-border px-2 py-1 text-xs hover:bg-secondary disabled:opacity-60"
+                  onClick={() =>
+                    submitFeedback(
+                      feedbackMode === "issue" ? "issue_report" : "improvement_suggestion",
+                      null,
+                      feedbackDraft.trim()
+                    )
+                  }
+                  disabled={feedbackSubmitting || !feedbackDraft.trim()}
+                >
+                  {feedbackSubmitting ? "Submitting..." : "Submit"}
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center rounded border border-border px-2 py-1 text-xs hover:bg-secondary"
+                  onClick={() => {
+                    setFeedbackMode(null);
+                    setFeedbackDraft("");
+                  }}
+                  disabled={feedbackSubmitting}
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
 

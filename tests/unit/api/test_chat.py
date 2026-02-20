@@ -558,8 +558,61 @@ class TestChatEndpoint:
         assert payload["answer_source"] == "sql"
         assert payload["sql"] == "SELECT item_id FROM public.items LIMIT 1"
         assert payload["data"]["item_id"] == [1]
+        assert payload["visualization_hint"] == "table"
         assert payload["metrics"]["llm_calls"] == 0
         connector.execute.assert_awaited_once_with("SELECT item_id FROM public.items LIMIT 1")
+
+    @pytest.mark.asyncio
+    async def test_chat_infers_visualization_for_direct_sql_result_shape(
+        self, client, initialized_status
+    ):
+        connector = AsyncMock()
+        connector.connect = AsyncMock(return_value=None)
+        connector.execute = AsyncMock(
+            return_value=SimpleNamespace(
+                rows=[
+                    {"business_date": "2026-01-01", "revenue": 100.0},
+                    {"business_date": "2026-01-02", "revenue": 125.5},
+                ],
+                columns=["business_date", "revenue"],
+                execution_time_ms=9.5,
+            )
+        )
+        connector.close = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "backend.api.routes.chat.SystemInitializer.status",
+                new=AsyncMock(return_value=initialized_status),
+            ),
+            patch(
+                "backend.api.routes.chat.resolve_database_type_and_url",
+                new=AsyncMock(
+                    return_value=("postgresql", "postgresql://user:pass@localhost:5432/db")
+                ),
+            ),
+            patch("backend.api.routes.chat.create_connector", return_value=connector),
+            patch(
+                "backend.api.main.app_state",
+                {"pipeline": None, "database_manager": None},
+            ),
+        ):
+            response = client.post(
+                "/api/v1/chat",
+                json={
+                    "message": (
+                        "SELECT business_date, revenue FROM public.daily_revenue "
+                        "ORDER BY business_date"
+                    ),
+                    "execution_mode": "direct_sql",
+                    "sql": "SELECT business_date, revenue FROM public.daily_revenue ORDER BY business_date",
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["visualization_hint"] == "line_chart"
+        assert payload["visualization_metadata"]["deterministic"] == "line_chart"
 
     @pytest.mark.asyncio
     async def test_chat_infers_answer_source_and_confidence_defaults(

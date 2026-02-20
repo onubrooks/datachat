@@ -1,7 +1,7 @@
 /**
  * Settings Page
  *
- * Simple preferences for waiting UX mode.
+ * UI preferences and behavior settings.
  */
 
 "use client";
@@ -16,7 +16,6 @@ import {
   getSynthesizeSimpleSql,
   getShowLiveReasoning,
   getThemeMode,
-  getWaitingUxMode,
   getResultLayoutMode,
   getShowAgentTimingBreakdown,
   setResultLayoutMode,
@@ -24,32 +23,12 @@ import {
   setShowAgentTimingBreakdown,
   setSynthesizeSimpleSql,
   setThemeMode,
-  setWaitingUxMode,
   type ResultLayoutMode,
   type ThemeMode,
-  type WaitingUxMode,
 } from "@/lib/settings";
 import { useChatStore } from "@/lib/stores/chat";
 
-const OPTIONS: Array<{
-  value: WaitingUxMode;
-  title: string;
-  description: string;
-}> = [
-  {
-    value: "animated",
-    title: "Animated",
-    description: "Agent timeline + subtle animation.",
-  },
-  {
-    value: "progress",
-    title: "Progress",
-    description: "Agent timeline + progress bar.",
-  },
-];
-
 export default function SettingsPage() {
-  const [mode, setMode] = useState<WaitingUxMode>("animated");
   const [resultLayout, setResultLayout] = useState<ResultLayoutMode>("stacked");
   const [showAgentTimings, setShowAgentTimings] = useState(true);
   const [synthesizeSimpleSql, setSynthesizeSimpleSqlState] = useState(true);
@@ -59,18 +38,12 @@ export default function SettingsPage() {
   const clearMessages = useChatStore((state) => state.clearMessages);
 
   useEffect(() => {
-    setMode(getWaitingUxMode());
     setResultLayout(getResultLayoutMode());
     setShowAgentTimings(getShowAgentTimingBreakdown());
     setSynthesizeSimpleSqlState(getSynthesizeSimpleSql());
     setShowLiveReasoningState(getShowLiveReasoning());
     setThemeModeState(getThemeMode());
   }, []);
-
-  const handleChange = (value: WaitingUxMode) => {
-    setMode(value);
-    setWaitingUxMode(value);
-  };
 
   const handleLayoutChange = (value: ResultLayoutMode) => {
     setResultLayout(value);
@@ -109,7 +82,7 @@ export default function SettingsPage() {
         <div>
           <h1 className="text-2xl font-bold">Settings</h1>
           <p className="text-sm text-muted-foreground">
-            Choose your preferred waiting experience.
+            Configure display and interaction preferences.
           </p>
         </div>
         <Button asChild variant="secondary" size="sm">
@@ -162,29 +135,6 @@ export default function SettingsPage() {
               Follow OS preference.
             </div>
           </button>
-        </div>
-      </Card>
-
-      <Card className="p-4 space-y-4">
-        <div className="text-sm font-medium">Waiting UX Mode</div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => handleChange(option.value)}
-              className={`rounded-md border px-4 py-3 text-left text-sm transition ${
-                mode === option.value
-                  ? "border-primary bg-primary/5"
-                  : "border-border hover:border-primary/40"
-              }`}
-            >
-              <div className="font-medium">{option.title}</div>
-              <div className="text-xs text-muted-foreground mt-1">
-                {option.description}
-              </div>
-            </button>
-          ))}
         </div>
       </Card>
 

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from backend.models.datapoint import DataPoint
 from backend.sync.orchestrator import save_datapoint_to_disk
@@ -24,6 +25,7 @@ SOURCE_PRIORITY = {
     "unknown": 2,
     "example": 1,
 }
+datapoint_adapter = TypeAdapter(DataPoint)
 
 
 class SyncStatusResponse(BaseModel):
@@ -95,7 +97,7 @@ async def _resolve_maybe_awaitable(value):
 
 @router.post("/datapoints", status_code=status.HTTP_201_CREATED)
 async def create_datapoint(payload: dict) -> dict:
-    datapoint = DataPoint.model_validate(payload)
+    datapoint = datapoint_adapter.validate_python(payload)
     path = _file_path(datapoint.datapoint_id)
     if path.exists():
         raise HTTPException(
@@ -112,7 +114,7 @@ async def create_datapoint(payload: dict) -> dict:
 
 @router.put("/datapoints/{datapoint_id}")
 async def update_datapoint(datapoint_id: str, payload: dict) -> dict:
-    datapoint = DataPoint.model_validate(payload)
+    datapoint = datapoint_adapter.validate_python(payload)
     if datapoint.datapoint_id != datapoint_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -213,6 +215,26 @@ async def list_datapoints() -> DataPointListResponse:
         ),
     )
     return DataPointListResponse(datapoints=datapoints)
+
+
+@router.get("/datapoints/{datapoint_id}")
+async def get_datapoint(datapoint_id: str) -> dict:
+    """Fetch a managed datapoint JSON document by ID."""
+    path = _file_path(datapoint_id)
+    if not path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Datapoint not found",
+        )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        datapoint = datapoint_adapter.validate_python(payload)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load datapoint {datapoint_id}: {exc}",
+        ) from exc
+    return datapoint.model_dump(mode="json", by_alias=True)
 
 
 @router.get("/sync/status", response_model=SyncStatusResponse)

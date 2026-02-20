@@ -23,7 +23,16 @@ from fastapi.responses import JSONResponse
 
 from backend.agents.base import AgentError
 from backend.api import websocket
-from backend.api.routes import chat, databases, datapoints, health, profiling, system, tools
+from backend.api.routes import (
+    chat,
+    databases,
+    datapoints,
+    feedback,
+    health,
+    profiling,
+    system,
+    tools,
+)
 from backend.config import get_settings
 from backend.connectors.base import BaseConnector, QueryError
 from backend.connectors.base import ConnectionError as ConnectorConnectionError
@@ -43,6 +52,7 @@ app_state = {
     "connector": None,
     "database_manager": None,
     "profiling_store": None,
+    "feedback_store": None,
     "sync_orchestrator": None,
     "datapoint_watcher": None,
 }
@@ -130,6 +140,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.warning(f"Profiling store unavailable: {e}")
             app_state["profiling_store"] = None
 
+        # Initialize feedback store
+        logger.info("Initializing feedback store...")
+        try:
+            from backend.feedback.store import FeedbackStore
+
+            if config.system_database.url:
+                feedback_store = FeedbackStore()
+                await feedback_store.initialize()
+                app_state["feedback_store"] = feedback_store
+            else:
+                logger.warning("SYSTEM_DATABASE_URL not set; feedback store disabled.")
+                app_state["feedback_store"] = None
+        except Exception as e:
+            logger.warning(f"Feedback store unavailable: {e}")
+            app_state["feedback_store"] = None
+
         # Initialize pipeline
         logger.info("Initializing pipeline orchestrator...")
         if app_state["connector"] is not None:
@@ -201,6 +227,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 logger.info("Profiling store closed")
             except Exception as e:
                 logger.error(f"Error closing profiling store: {e}")
+
+        if app_state["feedback_store"]:
+            try:
+                await app_state["feedback_store"].close()
+                logger.info("Feedback store closed")
+            except Exception as e:
+                logger.error(f"Error closing feedback store: {e}")
 
         if app_state["datapoint_watcher"]:
             try:
@@ -292,6 +325,7 @@ app.include_router(system.router, prefix="/api/v1", tags=["system"])
 app.include_router(databases.router, prefix="/api/v1", tags=["databases"])
 app.include_router(profiling.router, prefix="/api/v1", tags=["profiling"])
 app.include_router(datapoints.router, prefix="/api/v1", tags=["datapoints"])
+app.include_router(feedback.router, prefix="/api/v1", tags=["feedback"])
 app.include_router(tools.router, prefix="/api/v1", tags=["tools"])
 app.include_router(websocket.router, tags=["websocket"])
 

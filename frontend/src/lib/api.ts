@@ -164,6 +164,38 @@ export interface ToolExecuteResponse {
   error?: string | null;
 }
 
+export interface FeedbackSubmitRequest {
+  category: "answer_feedback" | "issue_report" | "improvement_suggestion";
+  sentiment?: "up" | "down" | null;
+  message?: string | null;
+  conversation_id?: string | null;
+  message_id?: string | null;
+  target_database_id?: string | null;
+  answer_source?: string | null;
+  answer_confidence?: number | null;
+  query?: string | null;
+  answer?: string | null;
+  sql?: string | null;
+  sources?: Array<Record<string, unknown>>;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface FeedbackSubmitResponse {
+  ok: boolean;
+  feedback_id: string;
+  saved_to: "system_database" | "logs_only";
+  created_at: string;
+}
+
+export interface FeedbackSummaryResponse {
+  window_days: number;
+  totals: Array<{
+    category: string;
+    sentiment: string | null;
+    count: number;
+  }>;
+}
+
 function extractApiErrorMessage(error: unknown, fallback: string): string {
   if (error && typeof error === "object") {
     const payload = error as Record<string, unknown>;
@@ -668,6 +700,54 @@ export class DataChatAPI {
     return data.datapoints || [];
   }
 
+  async getDatapoint(datapointId: string): Promise<Record<string, unknown>> {
+    const response = await fetch(`${this.baseUrl}/api/v1/datapoints/${datapointId}`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.detail || error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async createDatapoint(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const response = await fetch(`${this.baseUrl}/api/v1/datapoints`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.detail || error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async updateDatapoint(
+    datapointId: string,
+    payload: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const response = await fetch(`${this.baseUrl}/api/v1/datapoints/${datapointId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.detail || error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async deleteDatapoint(datapointId: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/api/v1/datapoints/${datapointId}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.detail || error.message || `HTTP ${response.status}`);
+    }
+  }
+
   async approvePendingDatapoint(
     pendingId: string,
     datapoint?: Record<string, unknown>
@@ -773,6 +853,28 @@ export class DataChatAPI {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.detail || error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async submitFeedback(payload: FeedbackSubmitRequest): Promise<FeedbackSubmitResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.detail || error.message || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async getFeedbackSummary(days = 30): Promise<FeedbackSummaryResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/feedback/summary?days=${days}`);
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: response.statusText }));
       throw new Error(error.detail || error.message || `HTTP ${response.status}`);

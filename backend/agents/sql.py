@@ -2661,6 +2661,8 @@ class SQLAgent(BaseAgent):
             target_limit = max(1, min(requested_limit, self._max_safe_row_limit))
             force_limit = True
         else:
+            if self._is_aggregate_query(sql_upper):
+                return generated
             target_limit = self._default_row_limit
             if self.catalog.is_list_tables_query(query.lower()) or self._is_catalog_metadata_query(
                 sql_upper
@@ -2807,6 +2809,15 @@ class SQLAgent(BaseAgent):
             return False
         aggregate_tokens = ("COUNT(", "SUM(", "AVG(", "MIN(", "MAX(", "BOOL_OR(", "BOOL_AND(")
         return any(token in sql_upper for token in aggregate_tokens)
+
+    def _is_aggregate_query(self, sql_upper: str) -> bool:
+        """Detect aggregate queries where implicit row limits should not be added."""
+        if "GROUP BY" in sql_upper:
+            return True
+        aggregate_pattern = re.compile(
+            r"\b(COUNT|SUM|AVG|MIN|MAX|BOOL_OR|BOOL_AND|ARRAY_AGG|JSON_AGG|STRING_AGG)\s*\("
+        )
+        return bool(aggregate_pattern.search(sql_upper))
 
     def _is_catalog_metadata_query(self, sql_upper: str) -> bool:
         """Detect catalog/system metadata SQL where a larger default preview is acceptable."""

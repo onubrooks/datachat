@@ -25,7 +25,6 @@ import {
 import { Card, CardContent } from "../ui/card";
 import { cn } from "@/lib/utils";
 import { useChatStore } from "@/lib/stores/chat";
-import type { WaitingUxMode } from "@/lib/settings";
 
 // Agent icons mapping
 const AGENT_ICONS: Record<string, React.ElementType> = {
@@ -47,20 +46,7 @@ const AGENT_NAMES: Record<string, string> = {
   ContextAnswerAgent: "Context Answer",
 };
 
-const AGENT_ORDER = [
-  "ClassifierAgent",
-  "ContextAgent",
-  "ContextAnswerAgent",
-  "SQLAgent",
-  "ValidatorAgent",
-  "ExecutorAgent",
-];
-
-interface AgentStatusProps {
-  mode?: WaitingUxMode;
-}
-
-export function AgentStatus({ mode = "animated" }: AgentStatusProps) {
+export function AgentStatus() {
   const { currentAgent, agentStatus, agentMessage, agentError, agentHistory } =
     useChatStore();
 
@@ -74,25 +60,11 @@ export function AgentStatus({ mode = "animated" }: AgentStatusProps) {
     ? AGENT_NAMES[currentAgent] || currentAgent
     : "Processing";
 
-  const completedAgents = new Set(
-    agentHistory
-      .filter((item) => item.status === "completed")
-      .map((item) => item.current_agent)
-  );
-  const progressTotal = AGENT_ORDER.length;
-  const progressCompleted = Array.from(completedAgents).filter((agent) =>
-    AGENT_ORDER.includes(agent)
-  ).length;
-  const progressPercent = Math.min(
-    100,
-    Math.round((progressCompleted / progressTotal) * 100)
-  );
-
   return (
     <Card
       className={cn(
         "mb-4 border-primary/20 bg-primary/5",
-        agentStatus === "running" && mode === "animated" && "animate-pulse"
+        agentStatus === "running" && "animate-pulse"
       )}
     >
       <CardContent className="p-4">
@@ -121,24 +93,9 @@ export function AgentStatus({ mode = "animated" }: AgentStatusProps) {
           </div>
         </div>
 
-        {mode === "animated" && agentStatus === "running" && (
+        {agentStatus === "running" && (
           <div className="mb-3 text-xs text-muted-foreground">
             Working on it<span className="animate-pulse">...</span>
-          </div>
-        )}
-
-        {mode === "progress" && (
-          <div className="mb-3">
-            <div className="flex justify-between text-xs text-muted-foreground mb-1">
-              <span>Progress</span>
-              <span>{progressPercent}%</span>
-            </div>
-            <div className="h-2 w-full rounded bg-muted">
-              <div
-                className="h-2 rounded bg-primary transition-all"
-                style={{ width: `${progressPercent}%` }}
-              />
-            </div>
           </div>
         )}
 

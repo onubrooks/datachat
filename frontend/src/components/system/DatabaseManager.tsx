@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -17,8 +18,6 @@ import {
 } from "@/lib/api";
 
 const api = new DataChatAPI();
-const WS_BASE_URL =
-  process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
 const ENV_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada";
 
 const isEnvironmentConnection = (connection: DatabaseConnection): boolean =>
@@ -41,13 +40,33 @@ const inferDatabaseTypeFromUrl = (value: string): string | null => {
 
 type QuickstartStatus = "done" | "ready" | "blocked";
 
+const DATAPOINT_EDITOR_TEMPLATE = `{
+  "datapoint_id": "query_top_customers_001",
+  "type": "Query",
+  "name": "Top customers by revenue",
+  "owner": "data-team@example.com",
+  "tags": ["manual", "query-template"],
+  "metadata": {},
+  "description": "Top customers by completed revenue over a configurable date range.",
+  "sql_template": "SELECT customer_id, SUM(amount) AS revenue FROM public.transactions WHERE status = 'completed' AND transaction_time >= {start_time} GROUP BY customer_id ORDER BY revenue DESC LIMIT {limit}",
+  "parameters": {
+    "start_time": {
+      "type": "timestamp",
+      "required": true,
+      "description": "Start timestamp (inclusive)."
+    },
+    "limit": {
+      "type": "integer",
+      "required": false,
+      "default": 20,
+      "description": "Maximum rows to return."
+    }
+  },
+  "related_tables": ["public.transactions"]
+}`;
+
 export function DatabaseManager() {
-  const [connections, setConnections] = useState<DatabaseConnection[]>([]);
-  const [pending, setPending] = useState<PendingDataPoint[]>([]);
-  const [approved, setApproved] = useState<DataPointSummary[]>([]);
-  const [job, setJob] = useState<ProfilingJob | null>(null);
-  const [generationJob, setGenerationJob] = useState<GenerationJob | null>(null);
-  const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
+  const queryClient = useQueryClient();
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncScopeMode, setSyncScopeMode] = useState<"auto" | "global" | "database">("auto");
   const [syncScopeConnectionId, setSyncScopeConnectionId] = useState<string | null>(null);
@@ -57,7 +76,6 @@ export function DatabaseManager() {
   const [isBulkApproving, setIsBulkApproving] = useState(false);
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +88,13 @@ export function DatabaseManager() {
   const [qualityReport, setQualityReport] = useState<Record<string, unknown> | null>(null);
   const [qualityError, setQualityError] = useState<string | null>(null);
   const [qualityRunning, setQualityRunning] = useState(false);
+  const [editorDatapointId, setEditorDatapointId] = useState("");
+  const [editorPayload, setEditorPayload] = useState(DATAPOINT_EDITOR_TEMPLATE);
+  const [editorNotice, setEditorNotice] = useState<string | null>(null);
+  const [editorError, setEditorError] = useState<string | null>(null);
+  const [editorLoading, setEditorLoading] = useState(false);
+  const [editorSaving, setEditorSaving] = useState(false);
+  const [editorDeleting, setEditorDeleting] = useState(false);
 
   const [name, setName] = useState("");
   const [databaseUrl, setDatabaseUrl] = useState("");
@@ -82,10 +107,10 @@ export function DatabaseManager() {
   const [editingDatabaseType, setEditingDatabaseType] = useState("postgresql");
   const [editingDescription, setEditingDescription] = useState("");
   const [isSavingEdit, setIsSavingEdit] = useState(false);
-  const [profileTables, setProfileTables] = useState<string[]>([]);
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [depth, setDepth] = useState("metrics_basic");
   const addConnectionRef = useRef<HTMLDivElement | null>(null);
+  const previousGenerationStateRef = useRef<{ jobId: string; status: string } | null>(null);
 
   const dedupeApproved = useCallback((items: DataPointSummary[]) => {
     const seen = new Map<string, DataPointSummary>();
@@ -150,105 +175,135 @@ export function DatabaseManager() {
     };
   }, []);
 
-  const refresh = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    let latestError: string | null = null;
-    let dbs: DatabaseConnection[] = [];
+  const connectionsQuery = useQuery({
+    queryKey: ["db-connections"],
+    queryFn: () => api.listDatabases(),
+  });
+  const connections = useMemo(
+    () => connectionsQuery.data ?? [],
+    [connectionsQuery.data]
+  );
 
-    try {
-      dbs = await api.listDatabases();
-      setConnections(dbs);
-    } catch (err) {
-      latestError =
-        err instanceof Error ? err.message : String(err);
-      setConnections([]);
-    }
+  const selectedConnectionPreview = connections.find(
+    (connection) => connection.connection_id === selectedConnectionId
+  );
+  const selectedManagedConnectionId =
+    selectedConnectionPreview && !isEnvironmentConnection(selectedConnectionPreview)
+      ? selectedConnectionPreview.connection_id
+      : null;
 
-    if (dbs.length > 0) {
-      const hasExistingSelection = !!selectedConnectionId && dbs.some(
-        (item) => item.connection_id === selectedConnectionId
-      );
-      const resolvedConnectionId = hasExistingSelection
-        ? selectedConnectionId
-        : (dbs.find((item) => item.is_default) || dbs[0]).connection_id;
-      if (resolvedConnectionId !== selectedConnectionId) {
-        setSelectedConnectionId(resolvedConnectionId);
+  const profilingJobQuery = useQuery({
+    queryKey: ["profiling-job-latest", selectedManagedConnectionId],
+    queryFn: () => api.getLatestProfilingJob(selectedManagedConnectionId as string),
+    enabled: Boolean(selectedManagedConnectionId),
+    refetchInterval: (query) => {
+      const job = query.state.data as ProfilingJob | null | undefined;
+      if (!job || job.status === "completed" || job.status === "failed") {
+        return false;
       }
-      const selectedConnection = dbs.find(
-        (item) => item.connection_id === resolvedConnectionId
-      );
+      return 3000;
+    },
+  });
+  const job = profilingJobQuery.data ?? null;
 
-      try {
-        if (selectedConnection && !isEnvironmentConnection(selectedConnection)) {
-          const latestJob = await api.getLatestProfilingJob(
-            selectedConnection.connection_id
-          );
-          setJob(latestJob);
-        } else {
-          setJob(null);
-        }
-      } catch (err) {
-        latestError = latestError || ((err as Error).message);
+  const pendingQuery = useQuery({
+    queryKey: ["pending-datapoints", selectedManagedConnectionId],
+    queryFn: () =>
+      api.listPendingDatapoints({
+        statusFilter: "pending",
+        connectionId: selectedManagedConnectionId,
+      }),
+    enabled: Boolean(selectedManagedConnectionId),
+  });
+  const pending = pendingQuery.data ?? [];
+
+  const approvedPendingQuery = useQuery({
+    queryKey: ["approved-datapoints", selectedManagedConnectionId],
+    queryFn: () =>
+      api.listPendingDatapoints({
+        statusFilter: "approved",
+        connectionId: selectedManagedConnectionId,
+      }),
+    enabled: Boolean(selectedManagedConnectionId),
+  });
+  const approved = useMemo(
+    () => mapPendingToSummary(approvedPendingQuery.data ?? []),
+    [approvedPendingQuery.data, mapPendingToSummary]
+  );
+
+  const syncStatusQuery = useQuery({
+    queryKey: ["sync-status"],
+    queryFn: () => api.getSyncStatus(),
+    refetchInterval: (query) => {
+      const status = query.state.data as SyncStatusResponse | null | undefined;
+      return status?.status === "running" ? 3000 : false;
+    },
+  });
+  const syncStatus = syncStatusQuery.data ?? null;
+
+  const profileTablesQuery = useQuery({
+    queryKey: ["profile-tables", job?.profile_id],
+    queryFn: () => api.listProfileTables(job?.profile_id as string),
+    enabled: Boolean(job?.profile_id),
+  });
+  const profileTables = useMemo(
+    () => profileTablesQuery.data ?? [],
+    [profileTablesQuery.data]
+  );
+
+  const generationJobQuery = useQuery({
+    queryKey: ["generation-latest", job?.profile_id],
+    queryFn: () => api.getLatestGenerationJob(job?.profile_id as string),
+    enabled: Boolean(job?.profile_id),
+    refetchInterval: (query) => {
+      const generation = query.state.data as GenerationJob | null | undefined;
+      if (!generation || generation.status === "completed" || generation.status === "failed") {
+        return false;
       }
+      return 5000;
+    },
+  });
+  const generationJob = generationJobQuery.data ?? null;
 
-      if (selectedConnection && !isEnvironmentConnection(selectedConnection)) {
-        const [pendingResult, approvedResult] = await Promise.allSettled([
-          api.listPendingDatapoints({
-            statusFilter: "pending",
-            connectionId: selectedConnection.connection_id,
-          }),
-          api.listPendingDatapoints({
-            statusFilter: "approved",
-            connectionId: selectedConnection.connection_id,
-          }),
+  const isLoading =
+    connectionsQuery.isLoading ||
+    connectionsQuery.isFetching ||
+    profilingJobQuery.isFetching ||
+    pendingQuery.isFetching ||
+    approvedPendingQuery.isFetching ||
+    syncStatusQuery.isFetching;
+
+  const invalidateManagerQueries = useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["db-connections"] }),
+      queryClient.invalidateQueries({ queryKey: ["profiling-job-latest"] }),
+      queryClient.invalidateQueries({ queryKey: ["pending-datapoints"] }),
+      queryClient.invalidateQueries({ queryKey: ["approved-datapoints"] }),
+      queryClient.invalidateQueries({ queryKey: ["sync-status"] }),
+      queryClient.invalidateQueries({ queryKey: ["profile-tables"] }),
+      queryClient.invalidateQueries({ queryKey: ["generation-latest"] }),
+    ]);
+  }, [queryClient]);
+
+  useEffect(() => {
+    const current = generationJob
+      ? { jobId: generationJob.job_id, status: generationJob.status }
+      : null;
+    const previous = previousGenerationStateRef.current;
+
+    if (previous && current && previous.jobId === current.jobId) {
+      const nowTerminal = current.status === "completed" || current.status === "failed";
+      const wasTerminal = previous.status === "completed" || previous.status === "failed";
+      if (nowTerminal && !wasTerminal) {
+        void Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["pending-datapoints"] }),
+          queryClient.invalidateQueries({ queryKey: ["approved-datapoints"] }),
         ]);
-
-        if (pendingResult.status === "fulfilled") {
-          setPending(pendingResult.value);
-        } else {
-          latestError =
-            latestError ||
-            (pendingResult.reason instanceof Error
-              ? pendingResult.reason.message
-              : String(pendingResult.reason));
-          setPending([]);
-        }
-
-        if (approvedResult.status === "fulfilled") {
-          setApproved(mapPendingToSummary(approvedResult.value));
-        } else {
-          latestError =
-            latestError ||
-            (approvedResult.reason instanceof Error
-              ? approvedResult.reason.message
-              : String(approvedResult.reason));
-          setApproved([]);
-        }
-      } else {
-        setPending([]);
-        setApproved([]);
       }
-    } else {
-      if (selectedConnectionId !== null) {
-        setSelectedConnectionId(null);
-      }
-      setJob(null);
-      setPending([]);
-      setApproved([]);
     }
 
-    try {
-      const status = await api.getSyncStatus();
-      setSyncStatus(status);
-      setSyncError(null);
-    } catch (err) {
-      setSyncError(err instanceof Error ? err.message : String(err));
-    }
-
-    setIsLoading(false);
-    setError(latestError);
-  }, [mapPendingToSummary, selectedConnectionId]);
+    previousGenerationStateRef.current = current;
+  }, [generationJob, queryClient]);
 
   const handleToolProfile = async () => {
     setToolApprovalOpen(true);
@@ -274,7 +329,7 @@ export function DatabaseManager() {
           (result as Record<string, unknown>).pending_count ?? 0
         }.`
       );
-      await refresh();
+      await invalidateManagerQueries();
     } catch (err) {
       setToolProfileError((err as Error).message);
     } finally {
@@ -308,8 +363,18 @@ export function DatabaseManager() {
   }, [profileTables.length, hasSelection, selectedCount]);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    if (!connections.length) {
+      if (selectedConnectionId !== null) {
+        setSelectedConnectionId(null);
+      }
+      return;
+    }
+    if (selectedConnectionId && connections.some((item) => item.connection_id === selectedConnectionId)) {
+      return;
+    }
+    const defaultConnection = connections.find((item) => item.is_default) || connections[0];
+    setSelectedConnectionId(defaultConnection.connection_id);
+  }, [connections, selectedConnectionId]);
 
   useEffect(() => {
     if (!connections.length) {
@@ -328,127 +393,52 @@ export function DatabaseManager() {
   }, [connections, syncScopeConnectionId]);
 
   useEffect(() => {
-    if (!job || job.status === "completed" || job.status === "failed") {
+    if (!profileTables.length) {
+      setSelectedTables([]);
       return;
     }
-
-    const interval = setInterval(async () => {
-      try {
-        const updated = await api.getProfilingJob(job.job_id);
-        setJob(updated);
-        if (updated.status === "completed") {
-          await refresh();
-        }
-      } catch (err) {
-        setError((err as Error).message);
+    setSelectedTables((current) => {
+      const preserved = current.filter((table) => profileTables.includes(table));
+      if (preserved.length > 0) {
+        return preserved;
       }
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [job, refresh]);
-
-  useEffect(() => {
-    if (!job?.profile_id) return;
-    api
-      .listProfileTables(job.profile_id)
-      .then((tables) => {
-        setProfileTables(tables);
-        if (tables.length && selectedTables.length === 0) {
-          setSelectedTables(tables.slice(0, Math.min(10, tables.length)));
-        }
-      })
-      .catch((err) => setError((err as Error).message));
-  }, [job?.profile_id, selectedTables.length]);
+      return profileTables.slice(0, Math.min(10, profileTables.length));
+    });
+  }, [profileTables]);
 
   useEffect(() => {
-    if (!job?.profile_id) return;
-    api
-      .getLatestGenerationJob(job.profile_id)
-      .then((latest) => setGenerationJob(latest))
-      .catch((err) => setError((err as Error).message));
-  }, [job?.profile_id]);
-
-  const [isGenerationWsActive, setIsGenerationWsActive] = useState(false);
-
-  useEffect(() => {
-    if (!generationJob?.job_id) return;
-    const ws = new WebSocket(`${WS_BASE_URL}/ws/profiling`);
-    ws.onopen = () => {
-      setIsGenerationWsActive(true);
-      ws.send(JSON.stringify({ job_id: generationJob.job_id }));
-    };
-    ws.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data);
-        if (payload.event === "generation_update") {
-          setGenerationJob(payload.job);
-        }
-      } catch (err) {
-        setError((err as Error).message);
-      }
-    };
-    ws.onclose = () => setIsGenerationWsActive(false);
-    ws.onerror = () => setIsGenerationWsActive(false);
-    return () => ws.close();
-  }, [generationJob?.job_id]);
-
-  useEffect(() => {
-    if (
-      !generationJob ||
-      generationJob.status === "completed" ||
-      generationJob.status === "failed" ||
-      isGenerationWsActive
-    ) {
+    const queryErrors: Array<unknown> = [
+      connectionsQuery.error,
+      profilingJobQuery.error,
+      pendingQuery.error,
+      approvedPendingQuery.error,
+      profileTablesQuery.error,
+      generationJobQuery.error,
+    ];
+    for (const candidate of queryErrors) {
+      if (!candidate) continue;
+      setError(candidate instanceof Error ? candidate.message : String(candidate));
       return;
     }
-    const interval = setInterval(async () => {
-      try {
-        const updated = await api.getGenerationJob(generationJob.job_id);
-        setGenerationJob(updated);
-        if (updated.status === "completed" || updated.status === "failed") {
-          await refresh();
-        }
-      } catch (err) {
-        setError((err as Error).message);
-      }
-    }, 5000);
-    return () => clearInterval(interval);
   }, [
-    generationJob,
-    generationJob?.job_id,
-    generationJob?.status,
-    isGenerationWsActive,
-    refresh,
+    approvedPendingQuery.error,
+    connectionsQuery.error,
+    generationJobQuery.error,
+    pendingQuery.error,
+    profileTablesQuery.error,
+    profilingJobQuery.error,
   ]);
 
   useEffect(() => {
-    if (generationJob?.status === "completed") {
-      refresh();
-    }
-  }, [generationJob?.status, refresh]);
-
-  useEffect(() => {
-    if (!syncStatus || syncStatus.status !== "running") {
-      return;
-    }
-
-    const interval = setInterval(async () => {
-      try {
-        const status = await api.getSyncStatus();
-        setSyncStatus(status);
-        if (status.status !== "running") {
-          await refresh();
-        }
-      } catch (err) {
-        setSyncError((err as Error).message);
-      }
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [syncStatus, refresh]);
+    if (!syncStatusQuery.error) return;
+    setSyncError(
+      syncStatusQuery.error instanceof Error
+        ? syncStatusQuery.error.message
+        : String(syncStatusQuery.error)
+    );
+  }, [syncStatusQuery.error]);
 
   const handleCreate = async () => {
-    setIsLoading(true);
     setError(null);
     await emitEntryEvent("create_connection", "started", {
       database_type: databaseType,
@@ -468,7 +458,7 @@ export function DatabaseManager() {
       setDatabaseType("postgresql");
       setDescription("");
       setIsDefault(false);
-      await refresh();
+      await invalidateManagerQueries();
       await emitEntryEvent("create_connection", "completed", {
         database_type: databaseType,
       });
@@ -478,8 +468,6 @@ export function DatabaseManager() {
         database_type: databaseType,
         error: (err as Error).message,
       });
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -496,7 +484,8 @@ export function DatabaseManager() {
       const started = await api.startProfiling(connectionId, {
         sample_size: 100,
       });
-      setJob(started);
+      queryClient.setQueryData(["profiling-job-latest", connectionId], started);
+      await invalidateManagerQueries();
       return true;
     } catch (err) {
       setError((err as Error).message);
@@ -553,7 +542,7 @@ export function DatabaseManager() {
       await api.updateDatabase(editingConnectionId, payload);
       showNotice("Connection updated successfully.");
       handleCancelEdit();
-      await refresh();
+      await invalidateManagerQueries();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -583,7 +572,8 @@ export function DatabaseManager() {
         max_metrics_per_table: 3,
         replace_existing: true,
       });
-      setGenerationJob(generation);
+      queryClient.setQueryData(["generation-latest", job.profile_id], generation);
+      await invalidateManagerQueries();
       return true;
     } catch (err) {
       setError((err as Error).message);
@@ -607,50 +597,21 @@ export function DatabaseManager() {
   const handleApprove = async (pendingId: string) => {
     setError(null);
     setApprovingId(pendingId);
-    const snapshot = pending.find((item) => item.pending_id === pendingId);
     const editedDatapoint = parseEditedDatapoint(pendingId);
     if (pendingEdits[pendingId] && !editedDatapoint) {
       setApprovingId(null);
       return;
     }
     try {
-      const approved = await api.approvePendingDatapoint(
+      await api.approvePendingDatapoint(
         pendingId,
         editedDatapoint || undefined
       );
-      setPending((current) =>
-        current.filter((item) => item.pending_id !== pendingId)
-      );
-      setApproved((current) => [
-        {
-          datapoint_id: String(approved.datapoint.datapoint_id || pendingId),
-          type: String(approved.datapoint.type || "Unknown"),
-          name: approved.datapoint.name ? String(approved.datapoint.name) : null,
-        },
-        ...current,
-      ].filter(
-        (item, index, array) =>
-          array.findIndex((entry) => entry.datapoint_id === item.datapoint_id) ===
-          index
-      ));
       showNotice(
         "Approved. Existing DataPoints for the same table were replaced."
       );
-      await refresh();
+      await invalidateManagerQueries();
     } catch (err) {
-      if (snapshot) {
-        setPending((current) => {
-          const merged = [snapshot, ...current];
-          const seen = new Set<string>();
-          return merged.filter((item) => {
-            if (seen.has(item.pending_id)) {
-              return false;
-            }
-            seen.add(item.pending_id);
-            return true;
-          });
-        });
-      }
       setError((err as Error).message);
     } finally {
       setApprovingId(null);
@@ -661,7 +622,7 @@ export function DatabaseManager() {
     setError(null);
     try {
       await api.rejectPendingDatapoint(pendingId, "Rejected via UI");
-      await refresh();
+      await invalidateManagerQueries();
     } catch (err) {
       setError((err as Error).message);
     }
@@ -670,7 +631,6 @@ export function DatabaseManager() {
   const handleBulkApprove = async (): Promise<boolean> => {
     setError(null);
     setIsBulkApproving(true);
-    const snapshot = pending;
     try {
       const scopeConnectionId =
         selectedConnection && !isEnvironmentConnection(selectedConnection)
@@ -678,37 +638,13 @@ export function DatabaseManager() {
           : null;
       const approved = await api.bulkApproveDatapoints(scopeConnectionId);
       if (approved.length) {
-        setPending([]);
-        setApproved((current) => [
-          ...approved.map((item) => ({
-            datapoint_id: String(item.datapoint.datapoint_id || item.pending_id),
-            type: String(item.datapoint.type || "Unknown"),
-            name: item.datapoint.name ? String(item.datapoint.name) : null,
-          })),
-          ...current,
-        ].filter(
-          (item, index, array) =>
-            array.findIndex((entry) => entry.datapoint_id === item.datapoint_id) ===
-            index
-        ));
         showNotice(
           `Approved ${approved.length} DataPoints for ${selectedConnection?.name || "selected source"}. Existing DataPoints for the same tables were replaced.`
         );
       }
-      await refresh();
+      await invalidateManagerQueries();
       return true;
     } catch (err) {
-      setPending(() => {
-        const merged = [...snapshot];
-        const seen = new Set<string>();
-        return merged.filter((item) => {
-          if (seen.has(item.pending_id)) {
-            return false;
-          }
-          seen.add(item.pending_id);
-          return true;
-        });
-      });
       setError((err as Error).message);
       return false;
     } finally {
@@ -727,8 +663,8 @@ export function DatabaseManager() {
         scope: syncScopeMode,
         connection_id: syncScopeMode === "database" ? syncScopeConnectionId : null,
       });
-      const status = await api.getSyncStatus();
-      setSyncStatus(status);
+      await syncStatusQuery.refetch();
+      await invalidateManagerQueries();
       return true;
     } catch (err) {
       setSyncError((err as Error).message);
@@ -751,9 +687,7 @@ export function DatabaseManager() {
     try {
       await api.systemReset();
       setSelectedConnectionId(null);
-      setApproved([]);
-      setPending([]);
-      await refresh();
+      await invalidateManagerQueries();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -774,6 +708,98 @@ export function DatabaseManager() {
         ...current,
         [item.pending_id]: JSON.stringify(item.datapoint, null, 2),
       }));
+    }
+  };
+
+  const parseEditorPayload = () => {
+    try {
+      const parsed = JSON.parse(editorPayload) as Record<string, unknown>;
+      const datapointId = String(parsed.datapoint_id || "").trim();
+      if (!datapointId) {
+        throw new Error("`datapoint_id` is required.");
+      }
+      return { parsed, datapointId };
+    } catch (err) {
+      throw new Error(
+        err instanceof Error ? `Invalid JSON payload: ${err.message}` : "Invalid JSON payload."
+      );
+    }
+  };
+
+  const handleLoadDatapoint = async () => {
+    const datapointId = editorDatapointId.trim();
+    if (!datapointId) {
+      setEditorError("Enter a DataPoint ID to load.");
+      return;
+    }
+    setEditorLoading(true);
+    setEditorError(null);
+    setEditorNotice(null);
+    try {
+      const payload = await api.getDatapoint(datapointId);
+      setEditorPayload(JSON.stringify(payload, null, 2));
+      setEditorNotice(`Loaded ${datapointId}`);
+    } catch (err) {
+      setEditorError(err instanceof Error ? err.message : "Failed to load DataPoint.");
+    } finally {
+      setEditorLoading(false);
+    }
+  };
+
+  const handleCreateDatapoint = async () => {
+    setEditorSaving(true);
+    setEditorError(null);
+    setEditorNotice(null);
+    try {
+      const { parsed, datapointId } = parseEditorPayload();
+      await api.createDatapoint(parsed);
+      setEditorDatapointId(datapointId);
+      setEditorNotice(`Created ${datapointId}`);
+      await invalidateManagerQueries();
+    } catch (err) {
+      setEditorError(err instanceof Error ? err.message : "Failed to create DataPoint.");
+    } finally {
+      setEditorSaving(false);
+    }
+  };
+
+  const handleUpdateDatapoint = async () => {
+    setEditorSaving(true);
+    setEditorError(null);
+    setEditorNotice(null);
+    try {
+      const { parsed, datapointId } = parseEditorPayload();
+      await api.updateDatapoint(datapointId, parsed);
+      setEditorDatapointId(datapointId);
+      setEditorNotice(`Updated ${datapointId}`);
+      await invalidateManagerQueries();
+    } catch (err) {
+      setEditorError(err instanceof Error ? err.message : "Failed to update DataPoint.");
+    } finally {
+      setEditorSaving(false);
+    }
+  };
+
+  const handleDeleteDatapoint = async () => {
+    const datapointId = editorDatapointId.trim();
+    if (!datapointId) {
+      setEditorError("Enter a DataPoint ID to delete.");
+      return;
+    }
+    if (!confirm(`Delete managed DataPoint ${datapointId}?`)) {
+      return;
+    }
+    setEditorDeleting(true);
+    setEditorError(null);
+    setEditorNotice(null);
+    try {
+      await api.deleteDatapoint(datapointId);
+      setEditorNotice(`Deleted ${datapointId}`);
+      await invalidateManagerQueries();
+    } catch (err) {
+      setEditorError(err instanceof Error ? err.message : "Failed to delete DataPoint.");
+    } finally {
+      setEditorDeleting(false);
     }
   };
 
@@ -926,7 +952,7 @@ export function DatabaseManager() {
           <Button variant="outline" onClick={handleSystemReset} disabled={isResetting}>
             {isResetting ? "Resetting..." : "Reset System"}
           </Button>
-          <Button onClick={refresh} disabled={isLoading}>
+          <Button onClick={invalidateManagerQueries} disabled={isLoading}>
             Refresh
           </Button>
         </div>
@@ -1108,7 +1134,7 @@ export function DatabaseManager() {
                     }
                     try {
                       await api.setDefaultDatabase(connection.connection_id);
-                      await refresh();
+                      await invalidateManagerQueries();
                     } catch (err) {
                       setError((err as Error).message);
                     }
@@ -1135,7 +1161,7 @@ export function DatabaseManager() {
                     }
                     try {
                       await api.deleteDatabase(connection.connection_id);
-                      await refresh();
+                      await invalidateManagerQueries();
                     } catch (err) {
                       setError((err as Error).message);
                     }
@@ -1614,6 +1640,57 @@ export function DatabaseManager() {
             ))}
           </div>
         )}
+      </Card>
+
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">DataPoint Editor (Managed)</h2>
+            <p className="text-xs text-muted-foreground">
+              Create, load, update, or delete managed DataPoint JSON (including Query DataPoints).
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+          <Input
+            value={editorDatapointId}
+            onChange={(event) => setEditorDatapointId(event.target.value)}
+            placeholder="DataPoint ID (e.g. query_top_customers_001)"
+          />
+          <Button variant="secondary" onClick={handleLoadDatapoint} disabled={editorLoading}>
+            {editorLoading ? "Loading..." : "Load"}
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={handleDeleteDatapoint}
+            disabled={editorDeleting}
+          >
+            {editorDeleting ? "Deleting..." : "Delete"}
+          </Button>
+        </div>
+        <textarea
+          className="min-h-[260px] w-full rounded-md border border-border bg-background p-3 text-xs font-mono"
+          value={editorPayload}
+          onChange={(event) => setEditorPayload(event.target.value)}
+          aria-label="Managed DataPoint editor"
+        />
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={handleCreateDatapoint} disabled={editorSaving}>
+            {editorSaving ? "Saving..." : "Create New"}
+          </Button>
+          <Button variant="secondary" onClick={handleUpdateDatapoint} disabled={editorSaving}>
+            {editorSaving ? "Saving..." : "Update Existing"}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => setEditorPayload(DATAPOINT_EDITOR_TEMPLATE)}
+            disabled={editorSaving || editorLoading}
+          >
+            Reset Template
+          </Button>
+        </div>
+        {editorNotice && <div className="text-xs text-emerald-600">{editorNotice}</div>}
+        {editorError && <div className="text-xs text-destructive">{editorError}</div>}
       </Card>
 
       <Card className="p-4 space-y-4">

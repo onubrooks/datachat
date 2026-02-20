@@ -1,7 +1,7 @@
 # Frontend Product Requirements Document
 
 **Version:** 1.1  
-**Last Updated:** February 19, 2026
+**Last Updated:** February 20, 2026
 
 This document describes the frontend architecture, current state, and roadmap for the DataChat web UI.
 
@@ -43,11 +43,17 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 | Schema Explorer Sidebar | Browse tables/columns with search | ✅ Implemented |
 | Query Templates | Quick-action buttons for common prompts | ✅ Implemented |
 | SQL Editor Mode | Edit and run SQL drafts from composer or generated responses | ✅ Implemented |
+| SQL Mode Visualization Inference | Direct SQL responses infer chart type from result shape | ✅ Implemented |
 | Theme Override | Light, dark, and system theme settings | ✅ Implemented |
 | Chart Interaction | Tooltips, zoom controls, legend toggles | ✅ Implemented |
 | Chart Configuration | Per-chart axis + display settings panel | ✅ Implemented |
 | Accessibility Labels | ARIA labels, dialog semantics, live regions | ✅ Implemented |
 | Keyboard Navigation | Tabs + global shortcuts + modal focus handling | ✅ Implemented |
+| Result Export Actions | CSV/JSON downloads and markdown table copy | ✅ Implemented |
+| Share Links | Copy deep link that restores a shared query result | ✅ Implemented |
+| Answer Feedback | Helpful / not helpful feedback actions on responses | ✅ Implemented |
+| Issue Reporting | Structured issue reports from response cards | ✅ Implemented |
+| Improvement Suggestions | Structured improvement suggestions from response cards | ✅ Implemented |
 
 ### Database Management
 
@@ -58,6 +64,7 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 | Profiling Workflow | Profile database with progress tracking | ✅ Implemented |
 | DataPoint Approval | Review pending DataPoints | ✅ Implemented |
 | Bulk Approve | Approve all pending DataPoints | ✅ Implemented |
+| Managed DataPoint Editor | Load/create/update/delete managed DataPoint JSON (including Query DataPoints) | ✅ Implemented |
 
 ### Observability
 
@@ -139,26 +146,26 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 | ✅ **Keyboard Shortcuts** | Cmd/Ctrl+K, Cmd/Ctrl+H, Cmd/Ctrl+/, Esc | Delivered |
 | ✅ **Dark Mode Toggle** | Manual light/dark/system theme override in Settings | Delivered |
 
----
-
-## Backlog ➕
-
 ### P3: Export & Sharing
 
 | Feature | Description | Effort |
 |---------|-------------|--------|
-| **Export CSV** | Download result data | 2h (already implemented) |
-| **Export JSON** | JSON format download | 1h |
-| **Export Markdown** | Copy table as markdown | 2h |
-| **Share Link** | Deep link to query result | 8h |
+| ✅ **Export CSV** | Download result data | Delivered |
+| ✅ **Export JSON** | JSON format download | Delivered |
+| ✅ **Export Markdown** | Copy table as markdown | Delivered |
+| ✅ **Share Link** | Deep link to query result | Delivered |
 
 ### P4: Feedback Loop
 
 | Feature | Description | Effort |
 |---------|-------------|--------|
-| **Answer Feedback** | Thumbs up/down on responses | 4h |
-| **Issue Reporting** | Report problems with context | 6h |
-| **Improvement Suggestions** | UI to suggest DataPoint improvements | 8h |
+| ✅ **Answer Feedback** | Thumbs up/down on responses | Delivered |
+| ✅ **Issue Reporting** | Report problems with context | Delivered |
+| ✅ **Improvement Suggestions** | UI to suggest DataPoint/retrieval improvements | Delivered |
+
+---
+
+## Backlog ➕
 
 ---
 
@@ -168,16 +175,16 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 
 | Location | Issue | Action |
 |----------|-------|--------|
-| `loadingUx.ts` | Multiple modes unused | Consolidate to single mode |
+| ✅ `loadingUx.ts` | Multiple modes removed | Consolidated to single waiting status label logic |
 | Redundant job state | Multiple similar state variables | Consolidate into single `jobs` object |
 
 ### Technical Debt
 
 | Issue | Impact | Action |
 |-------|--------|--------|
-| No React Query | Manual loading/error states | Migrate to React Query for API state |
-| No error boundaries | Crashes kill whole app | Add error boundaries with recovery UI |
-| Inline chart rendering | Hard to maintain | Extract to separate components |
+| ✅ React Query Migration | Server-state loading no longer relies on manual refresh orchestration | Chat + Database Manager now use query/invalidation flows for connections, schema, profiling, pending/approved DataPoints, sync, and generation jobs |
+| ✅ Error boundaries missing | Crashes killed whole app | Added app-level error boundary with retry/back-to-chat recovery |
+| ✅ Inline chart rendering | Hard to maintain | Extracted to dedicated `visualizations/` components |
 
 ---
 
@@ -185,25 +192,12 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 
 ### State Management
 
-Current: Zustand with manual API calls
+Current: Zustand (UI/session state) + React Query (server state, cache, polling, invalidation)
 
-**Recommended: Add React Query**
+**Status: Implemented in chat and database manager flows**
 
 ```typescript
-// Before
-const [connections, setConnections] = useState([]);
-const [isLoading, setIsLoading] = useState(false);
-const [error, setError] = useState(null);
-
-useEffect(() => {
-  setIsLoading(true);
-  api.listDatabases()
-    .then(setConnections)
-    .catch(setError)
-    .finally(() => setIsLoading(false));
-}, []);
-
-// After
+// Adopted server-state pattern
 const { data: connections, isLoading, error } = useQuery({
   queryKey: ['connections'],
   queryFn: () => api.listDatabases(),
@@ -289,7 +283,12 @@ const categorizeError = (errorMessage: string) => {
 
 ### Component Extraction
 
-Move visualization rendering to dedicated components:
+| Item | Scope | Status |
+|------|-------|--------|
+| ✅ Visualization extraction | `Message.tsx` chart rendering moved into dedicated components | Done |
+| Remaining extraction | Break down other large UI surfaces (chat message actions, feedback panel, table/export actions) | Pending |
+
+Implemented visualization structure:
 
 ```
 frontend/src/components/visualizations/
@@ -305,40 +304,33 @@ frontend/src/components/visualizations/
 
 ## Roadmap
 
-### Sprint 1: Persistence & Discovery (P1)
+### Completed
 
-| Task | Effort | Priority | Status |
-|------|--------|----------|--------|
-| Add conversation persistence (localStorage) | 8h | P1 | ✅ Done |
-| Add table pagination (default 10 rows/page + user-settable page size) | 4h | P1 | ✅ Done |
-| Add retry button for errors | 4h | P1 | ✅ Done |
-| Add schema browser sidebar | 12h | P1 | ✅ Done |
+| Item | Priority | Status |
+|------|----------|--------|
+| Conversation persistence (localStorage) | P1 | ✅ Done |
+| Table pagination (default 10 + user-settable) | P1 | ✅ Done |
+| Retry button + categorized error recovery | P1 | ✅ Done |
+| Schema browser sidebar | P1 | ✅ Done |
+| Conversation history sidebar + search | P2 | ✅ Done |
+| Query templates | P2 | ✅ Done |
+| Keyboard shortcuts + focus management | P2 | ✅ Done |
+| Light/dark/system theme toggle | P2 | ✅ Done |
+| Chart tooltips, zoom, legend toggles | P3 | ✅ Done |
+| Chart settings panel (per chart type) | P3 | ✅ Done |
+| Export JSON / markdown (CSV existed) | P3 | ✅ Done |
+| Answer feedback / issue reports / suggestions | P4 | ✅ Done |
+| Chart component extraction (`visualizations/`) | P3 | ✅ Done |
+| App-level error boundary | P3 | ✅ Done |
 
-**Total Remaining: 0h**
+### Remaining
 
-### Sprint 2: Productivity (P2)
-
-| Task | Effort | Priority | Status |
-|------|--------|----------|--------|
-| Add conversation history sidebar | 16h | P2 | ✅ Done |
-| Add query templates | 8h | P2 | ✅ Done |
-| Add keyboard shortcuts | 4h | P2 | Pending |
-| Add dark mode toggle | 2h | P2 | Pending |
-
-**Total Remaining: 6h**
-
-### Sprint 3: Polish (P3)
-
-| Task | Effort | Priority |
-|------|--------|----------|
-| Add chart tooltips | 4h | P3 |
-| Add chart configuration | 6h | P3 |
-| Add export JSON/markdown | 3h | P3 |
-| Add answer feedback | 4h | P3 |
-| Extract chart components | 4h | P3 |
-| Add error boundaries | 4h | P3 |
-
-**Total: 25h**
+| Item | Priority | Status | Notes |
+|------|----------|--------|-------|
+| Consolidate redundant job state into a single `jobs` object | Medium | ⏳ Remaining | Database manager still has multiple related state slices |
+| Backend conversation persistence (cross-device/session) | Medium | ⏳ Remaining | Current conversation history is browser-local only |
+| Continue component extraction beyond charts | Low | ⏳ Remaining | Some large `Message`/chat sections still centralized |
+| Validate and improve schema discovery-time KPI | Low | ⏳ Remaining | Metrics row still marked pending |
 
 ---
 

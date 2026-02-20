@@ -1,29 +1,11 @@
-export type WaitingUxMode = "animated" | "progress";
 export type ResultLayoutMode = "stacked" | "tabbed";
 export type ThemeMode = "system" | "light" | "dark";
 
-const WAITING_UX_KEY = "datachat.waitingUxMode";
 const RESULT_LAYOUT_KEY = "datachat.resultLayoutMode";
 const SHOW_AGENT_TIMINGS_KEY = "datachat.showAgentTimingBreakdown";
 const SYNTHESIZE_SIMPLE_SQL_KEY = "datachat.synthesizeSimpleSql";
 const SHOW_LIVE_REASONING_KEY = "datachat.showLiveReasoning";
 const THEME_MODE_KEY = "datachat.themeMode";
-
-export const getWaitingUxMode = (): WaitingUxMode => {
-  if (typeof window === "undefined") {
-    return "animated";
-  }
-  const value = window.localStorage.getItem(WAITING_UX_KEY);
-  if (value === "progress" || value === "animated") {
-    return value;
-  }
-  return "animated";
-};
-
-export const setWaitingUxMode = (mode: WaitingUxMode) => {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(WAITING_UX_KEY, mode);
-};
 
 export const getResultLayoutMode = (): ResultLayoutMode => {
   if (typeof window === "undefined") {
