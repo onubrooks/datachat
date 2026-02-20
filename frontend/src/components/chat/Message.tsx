@@ -885,8 +885,11 @@ export function Message({
             </CardHeader>
             <CardContent>
               <ul className="space-y-2 text-sm">
-                {message.sources?.map((source) => (
-                  <li key={source.datapoint_id} className="text-sm flex items-start gap-2">
+                {message.sources?.map((source, index) => (
+                  <li
+                    key={`${source.datapoint_id}-${source.type}-${index}`}
+                    className="text-sm flex items-start gap-2"
+                  >
                     <span className="text-xs px-2 py-0.5 rounded bg-secondary">
                       {source.type}
                     </span>
@@ -934,9 +937,9 @@ export function Message({
                   </div>
                 )}
                 <ul className="space-y-2">
-                  {message.evidence?.map((item) => (
+                  {message.evidence?.map((item, index) => (
                     <li
-                      key={item.datapoint_id}
+                      key={`${item.datapoint_id}-${item.type || "datapoint"}-${index}`}
                       className="text-sm flex items-start gap-2"
                     >
                       <span className="text-xs px-2 py-0.5 rounded bg-secondary">
