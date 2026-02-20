@@ -2,6 +2,15 @@
 
 This file is the source of truth for level maturity.
 
+## Document Role
+
+`LEVELS.md` defines capability maturity boundaries.
+
+- It answers: "What qualifies as Level X?"
+- It does not own delivery sequence or implementation status history.
+
+For initiative status/dependencies, use `docs/ROADMAP.md`.
+
 ## Status Legend
 
 - `Implemented`: available in current codebase.
@@ -11,6 +20,7 @@ This file is the source of truth for level maturity.
 ## Level 1: Schema-Aware Querying
 
 Status: `Implemented`
+Roadmap references: `FND-001`, `FND-003`, `FND-005`
 
 Delivered today:
 
@@ -36,6 +46,7 @@ Notes:
 ## Level 1.5: MetadataOps Foundation (Cross-Level)
 
 Status: `In Progress`
+Roadmap references: `FND-001`..`FND-006`
 
 Purpose:
 
@@ -57,6 +68,7 @@ Delivery rule:
 ## Level 1.4: Simple Entry Layer (Thin Wrapper)
 
 Status: `Planned`
+Roadmap reference: `SMP-001`
 
 Purpose:
 
@@ -77,6 +89,7 @@ Examples:
 ## Level 1.6: Deterministic Simplicity Package
 
 Status: `Planned`
+Roadmap reference: `SMP-002`
 
 Purpose:
 
@@ -96,6 +109,7 @@ Sequencing rule:
 ## Level 2: Context Enhancement (DataPoints)
 
 Status: `Partial`
+Roadmap references: `PLT-002`, `PLT-003`
 
 Delivered today:
 
@@ -121,6 +135,7 @@ Planned enhancements:
 ## Level 2.5: QueryDataPoints (Reusable SQL Patterns)
 
 Status: `Planned`
+Roadmap references: `SMP-002`, `DYN-001`
 
 Purpose:
 
@@ -138,6 +153,7 @@ Scope:
 ## Level 3: Executable Metrics
 
 Status: `Planned`
+Roadmap references: `SMP-002`, `DYN-001`
 
 Target outcome:
 
@@ -148,6 +164,7 @@ Not shipped yet as a dedicated level.
 ## Level 4: Performance Optimization
 
 Status: `Planned`
+Roadmap references: `DYN-003`, `DYN-004`
 
 Target outcome:
 
@@ -158,6 +175,7 @@ Not shipped yet.
 ## Level 5: Intelligence
 
 Status: `Planned`
+Roadmap references: `DYN-006`, `DYN-007`
 
 Target outcome:
 
