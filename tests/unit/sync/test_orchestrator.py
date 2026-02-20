@@ -18,7 +18,11 @@ def _schema_datapoint(datapoint_id: str) -> dict:
         "name": "Orders",
         "owner": "data@example.com",
         "tags": [],
-        "metadata": {},
+        "metadata": {
+            "grain": "row-level",
+            "exclusions": "None documented",
+            "confidence_notes": "Validated in unit test fixtures",
+        },
         "table_name": "public.orders",
         "schema": "public",
         "business_purpose": "Orders table for testing.",
@@ -34,7 +38,7 @@ def _schema_datapoint(datapoint_id: str) -> dict:
         "relationships": [],
         "common_queries": [],
         "gotchas": [],
-        "freshness": None,
+        "freshness": "daily",
         "row_count": 100,
     }
 
@@ -166,3 +170,31 @@ async def test_full_sync_applies_database_scope_metadata(tmp_path: Path):
     synced_datapoints = vector_store.add_datapoints.await_args.args[0]
     assert synced_datapoints[0].metadata["scope"] == "database"
     assert synced_datapoints[0].metadata["connection_id"] == "conn-fintech"
+
+
+@pytest.mark.asyncio
+async def test_full_sync_fails_when_contracts_are_invalid(tmp_path: Path):
+    vector_store = AsyncMock()
+    vector_store.clear = AsyncMock()
+    vector_store.add_datapoints = AsyncMock()
+
+    graph = MagicMock()
+    graph.clear = MagicMock()
+    graph.add_datapoint = MagicMock()
+
+    datapoints_dir = tmp_path / "datapoints"
+    invalid_payload = _schema_datapoint("table_orders_001")
+    invalid_payload["metadata"] = {}
+    _write_datapoint(datapoints_dir / "table_orders_001.json", invalid_payload)
+
+    orchestrator = SyncOrchestrator(
+        vector_store=vector_store,
+        knowledge_graph=graph,
+        datapoints_dir=datapoints_dir,
+    )
+
+    job = await orchestrator.sync_all()
+
+    assert job.status == "failed"
+    assert job.error is not None
+    assert "contract" in job.error.lower()

@@ -20,7 +20,12 @@ def _valid_business_datapoint() -> dict:
         "name": "Total Revenue",
         "owner": "finance@example.com",
         "tags": ["kpi"],
-        "metadata": {},
+        "metadata": {
+            "grain": "daily_store",
+            "freshness": "daily",
+            "exclusions": "Refunded orders are excluded.",
+            "confidence_notes": "Reviewed against finance dashboard.",
+        },
         "calculation": "SUM(orders.amount)",
         "synonyms": ["revenue"],
         "business_rules": ["exclude refunds"],

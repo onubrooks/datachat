@@ -42,7 +42,7 @@ class SyncOrchestrator:
         self._vector_store = vector_store
         self._knowledge_graph = knowledge_graph
         self._datapoints_dir = Path(datapoints_dir)
-        self._loader = loader or DataPointLoader()
+        self._loader = loader or DataPointLoader(strict_contracts=True)
         self._loop = loop
         self._current_job: SyncJob | None = None
         self._lock = asyncio.Lock()
@@ -199,13 +199,22 @@ class SyncOrchestrator:
     ) -> list[DataPoint]:
         datapoint_files = self._collect_datapoint_files()
         datapoints: list[DataPoint] = []
+        load_errors: list[str] = []
         for file_path in datapoint_files:
             try:
                 datapoint = self._loader.load_file(file_path)
                 self._apply_scope(datapoint, scope=scope, connection_id=connection_id)
                 datapoints.append(datapoint)
-            except Exception:
-                continue
+            except Exception as exc:
+                load_errors.append(f"{file_path}: {exc}")
+        if load_errors:
+            sample = "; ".join(load_errors[:5])
+            suffix = "" if len(load_errors) <= 5 else f"; ... +{len(load_errors) - 5} more"
+            raise RuntimeError(
+                "DataPoint sync aborted: "
+                f"{len(load_errors)} file(s) failed validation or loading. "
+                f"{sample}{suffix}"
+            )
         return datapoints
 
     def _load_datapoints_by_id(self, datapoint_ids: Iterable[str]) -> list[DataPoint]:
@@ -214,13 +223,22 @@ class SyncOrchestrator:
         id_set = {str(item) for item in datapoint_ids}
         datapoint_files = self._collect_datapoint_files()
         datapoints: list[DataPoint] = []
+        load_errors: list[str] = []
         for file_path in datapoint_files:
+            if file_path.stem not in id_set:
+                continue
             try:
                 datapoint = self._loader.load_file(file_path)
-            except Exception:
+            except Exception as exc:
+                load_errors.append(f"{file_path}: {exc}")
                 continue
             if datapoint.datapoint_id in id_set:
                 datapoints.append(datapoint)
+        if load_errors:
+            raise RuntimeError(
+                "Incremental DataPoint sync aborted due to contract/validation errors: "
+                + "; ".join(load_errors)
+            )
         return datapoints
 
     def _collect_datapoint_files(self) -> list[Path]:

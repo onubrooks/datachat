@@ -3530,7 +3530,8 @@ def generation_status(job_id: str):
 @click.argument("file", type=click.Path(exists=True))
 @click.option(
     "--strict-contracts/--no-strict-contracts",
-    default=False,
+    default=True,
+    show_default=True,
     help="Treat advisory contract gaps as errors.",
 )
 @click.option(
@@ -3617,7 +3618,8 @@ def add_datapoint(
 )
 @click.option(
     "--strict-contracts/--no-strict-contracts",
-    default=False,
+    default=True,
+    show_default=True,
     help="Treat advisory contract gaps as errors.",
 )
 @click.option(
@@ -3746,7 +3748,8 @@ def sync_datapoints(
 )
 @click.option(
     "--strict-contracts/--no-strict-contracts",
-    default=False,
+    default=True,
+    show_default=True,
     help="Treat advisory contract gaps as errors.",
 )
 @click.option(
