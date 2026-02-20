@@ -118,6 +118,7 @@ class ConversationStore:
                 session_state = EXCLUDED.session_state,
                 messages = EXCLUDED.messages,
                 updated_at = EXCLUDED.updated_at
+            WHERE EXCLUDED.updated_at > ui_conversations.updated_at
             RETURNING
                 frontend_session_id,
                 title,
@@ -139,6 +140,24 @@ class ConversationStore:
             now,
             resolved_updated_at,
         )
+        if row is None:
+            row = await self._pool.fetchrow(
+                """
+                SELECT
+                    frontend_session_id,
+                    title,
+                    target_database_id,
+                    conversation_id,
+                    session_summary,
+                    session_state,
+                    messages,
+                    created_at,
+                    updated_at
+                FROM ui_conversations
+                WHERE frontend_session_id = $1
+                """,
+                frontend_session_id,
+            )
         if row is None:
             raise RuntimeError("Failed to persist conversation snapshot")
         return self._row_to_payload(row)
