@@ -1,10 +1,10 @@
-# DataChat: Data-Native Agent OS
+# DataChat: Finance-First Decision Workflow Platform
 
 ## Project Vision
 
-DataChat is a data-native agent operating system that enables natural language interaction with databases, business logic, and filesystems. It serves users across all sophistication levels—from data analysts to platform leads—through a progressive enhancement architecture (Levels 1-5).
+DataChat is built as a finance-first decision workflow platform that uses AI to turn governed data and business context into decision-ready outputs. The long-term direction is a reusable AI platform for business decision makers across domains, but finance remains the execution wedge.
 
-**Core Differentiator:** DataChat is the only AI assistant that understands your database schema, business metrics definitions, AND the code that implements them—all in one unified system.
+**Core Differentiator:** DataChat unifies database truth, business definitions, and organizational context with explicit provenance, governance, and verification loops.
 
 ## Document Role
 
@@ -39,6 +39,15 @@ Canonical target-design reference:
 Roadmap linkage:
 
 - `DYN-001`..`DYN-007` in `docs/ROADMAP.md`
+
+## Architecture Prioritization Contract
+
+- The architecture may evolve broadly, but implementation priority is constrained by finance workflow outcomes.
+- New platform capabilities should be shipped in slices that directly improve:
+  - time-to-trusted finance answer
+  - source attribution coverage
+  - clarification/fallback reduction
+  - auditability and replayability
 
 ---
 

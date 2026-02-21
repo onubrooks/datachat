@@ -2,6 +2,12 @@
 
 This directory contains product and engineering documentation for DataChat.
 
+Strategy alignment:
+
+- current wedge: decision workflow system for finance teams
+- long-term direction: AI platform for business decision makers
+- prioritization rule: finance workflow outcomes pull platform capability sequencing
+
 ## Implementation Snapshot (February 2026)
 
 Implemented now:

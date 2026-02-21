@@ -2,13 +2,21 @@
 
 DataChat solves the trust and speed gap between raw enterprise data and business decisions by turning fragmented data plus domain knowledge into governed, actionable, context-aware answers and workflows.
 
-AI-powered natural language interface for your database.
+DataChat is a decision workflow system for finance teams today, and an AI platform for business decision makers over time.
 
 DataChat lets you ask questions in plain English and get SQL, results, and clarifications. It supports a credentials-only path (no DataPoints required) and a richer path with DataPoints for business context.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Next.js](https://img.shields.io/badge/next.js-15-black.svg)](https://nextjs.org/)
+
+---
+
+## Product Direction (Finance-First)
+
+- Current wedge: decision workflow system for finance teams.
+- Build model: finance workflow needs pull platform work (metadata ops, governance, traceability, and policy-safe agent execution).
+- Expansion rule: broaden beyond finance only after finance workflow KPIs in `docs/PRD.md` stay green.
 
 ---
 

@@ -8,6 +8,8 @@ Finance teams lose hours reconciling definitions, checking source trust, and exp
 
 DataChat turns that into a repeatable workflow that outputs a decision-ready finance brief with sources, drivers, caveats, and follow-ups.
 
+This finance wedge is also the proving ground for the broader platform direction: an AI platform for business decision makers.
+
 ## Ideal Buyer and User
 
 - Buyer: Head of Finance, CFO delegate, or VP Finance.

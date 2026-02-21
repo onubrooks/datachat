@@ -16,11 +16,15 @@ Status sequencing, dependencies, and delivery phase tracking live in `docs/ROADM
 
 ## Product Vision
 
-DataChat provides a natural-language interface for operational and analytics databases, with progressive enhancement:
+DataChat follows a two-layer product strategy:
 
-- credentials-only querying first
-- richer business accuracy via DataPoints
-- future expansion into deeper intelligence and workspace awareness
+1. **Now:** a decision workflow system for finance teams.
+2. **Direction:** an AI platform for business decision makers across domains.
+
+Execution principle:
+
+- finance workflows pull platform work;
+- platform capabilities are prioritized only when they improve finance workflow KPIs.
 
 ## Must-Win Workflow (Finance First)
 
@@ -44,6 +48,12 @@ Required workflow outputs (non-negotiable):
 2. source evidence and provenance (tables/datapoints/docs)
 3. confidence + caveats
 4. drill-down follow-up path (variance drivers, segment split, period deltas)
+
+## Delivery Operating Model (Finance Pull)
+
+- Recommended allocation: ~70% of active work on finance workflow quality, ~30% on reusable platform hardening.
+- Promotion rule: platform initiatives must show explicit mapping to `WDG-001` and at least one KPI in the finance charter.
+- Expansion gate: new-industry workflows are deferred until finance workflow quality bar holds for one full release cycle.
 
 ## Workflow KPI Charter (Finance)
 

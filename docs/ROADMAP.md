@@ -29,6 +29,24 @@ Hard prioritization rule:
 - roadmap items must map to at least one workflow step above and one charter KPI in `docs/PRD.md`.
 - if no direct mapping, item moves to backlog.
 
+## Execution Mode (Finance-Led Platform Build)
+
+- Keep a dual-track build: finance outcomes first, platform hardening second.
+- Recommended effort split per cycle:
+  - ~70% finance workflow delivery (`WDG-*` and directly blocking fixes)
+  - ~30% reusable platform foundation (`FND-*`, selected `DYN-*` slices)
+- Platform work is eligible only if it does at least one of:
+  - removes a repeated finance workflow failure mode
+  - materially improves finance trust/speed KPI movement
+  - reduces recurring operational risk for finance workflows
+
+### Recommended Next Promotion Order
+
+1. `WDG-001` - complete finance workflow quality-bar acceptance criteria.
+2. `FND-002` - lifecycle/ownership controls to reduce metric-definition drift.
+3. `FND-006` - runtime telemetry loop for clarification/fallback hotspots.
+4. `DYN-001` (bounded slice) - planner/verifier loop only where it improves finance workflow reliability.
+
 ---
 
 ## Ownership Model
