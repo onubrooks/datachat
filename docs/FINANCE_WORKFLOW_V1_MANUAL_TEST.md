@@ -2,6 +2,8 @@
 
 Use this runbook to validate the finance wedge workflow with existing demo data.
 
+If you want a faster end-user flow, start with `docs/FINANCE_END_USER_QUICKSTART.md` first.
+
 ## Goal
 
 Confirm DataChat can produce decision-grade finance answers (summary + drivers + caveats + sources) with reproducible prompts.

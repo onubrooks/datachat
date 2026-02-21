@@ -66,3 +66,16 @@ Use this question bank to test DataChat in both:
    - clarity and confidence
    - whether expected signal appears
 5. Capture any mismatches where UI and CLI behavior diverges.
+
+## Finance Query Datapoints (Ready-to-use)
+
+The following query datapoints are available in `datapoints/examples/fintech_bank` and are designed to match core finance prompts quickly:
+
+- `query_bank_weekly_net_flow_by_segment_001`
+- `query_bank_top_segments_wow_net_flow_decline_001`
+- `query_bank_daily_failed_transaction_rate_001`
+- `query_bank_top_failure_transaction_types_001`
+- `query_bank_high_risk_loans_001`
+- `query_bank_loan_default_rate_by_segment_001`
+- `query_bank_fee_income_mix_001`
+- `query_bank_deposit_concentration_top_customers_001`

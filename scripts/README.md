@@ -62,6 +62,7 @@ psql "postgresql://postgres:@localhost:5432/datachat_fintech" -f scripts/fintech
 ```
 
 **Related DataPoints**: `datapoints/examples/fintech_bank/*.json`
+**Manual query pack**: `scripts/fintech_demo_queries.sql`
 
 ### 1. `test_sql_agent.py` - Comprehensive SQLAgent Testing
 

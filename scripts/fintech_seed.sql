@@ -1,4 +1,4 @@
--- Fintech bank sample schema + expanded seed data for DataPoint-driven testing.
+-- Fintech bank sample schema + large seed data for DataPoint-driven testing.
 
 DROP TABLE IF EXISTS public.bank_loan_payments CASCADE;
 DROP TABLE IF EXISTS public.bank_cards CASCADE;
@@ -128,7 +128,7 @@ SELECT
         ELSE 'verified'
     END AS kyc_status,
     ('2021-01-01'::date + ((gs * 13) % 1200))::date AS created_at
-FROM generate_series(13, 80) gs;
+FROM generate_series(13, 420) gs;
 
 -- Accounts: checking for all, savings for many, plus business/fx accounts for SME/corporate.
 INSERT INTO public.bank_accounts
@@ -181,10 +181,10 @@ SELECT
 FROM public.bank_customers
 WHERE segment IN ('sme', 'corporate');
 
--- Daily transactional activity for ~2 months with deterministic status/failure patterns.
+-- Daily transactional activity over ~5.5 months with deterministic status/failure patterns.
 WITH days AS (
     SELECT gs::date AS business_date
-    FROM generate_series('2025-12-15'::date, '2026-02-14'::date, interval '1 day') gs
+    FROM generate_series('2025-09-01'::date, '2026-02-14'::date, interval '1 day') gs
 ),
 active_accounts AS (
     SELECT account_id, account_type, currency_code, status
@@ -324,41 +324,95 @@ JOIN public.bank_customers c
   ON c.customer_id = a.customer_id
 WHERE a.account_type = 'checking';
 
+INSERT INTO public.bank_cards
+(customer_id, account_id, card_type, network, status, issued_at, blocked_at)
+SELECT
+    a.customer_id,
+    a.account_id,
+    'virtual_debit' AS card_type,
+    CASE WHEN a.customer_id % 2 = 0 THEN 'mastercard' ELSE 'visa' END AS network,
+    CASE
+        WHEN c.kyc_status = 'blocked' THEN 'blocked'
+        WHEN c.kyc_status IN ('restricted', 'pending_review') AND a.customer_id % 4 = 0 THEN 'blocked'
+        ELSE 'active'
+    END AS status,
+    (a.opened_at + ((a.customer_id * 3) % 35))::date AS issued_at,
+    CASE
+        WHEN c.kyc_status = 'blocked' THEN (a.opened_at + ((a.customer_id * 3) % 35) + 150)::date
+        WHEN c.kyc_status IN ('restricted', 'pending_review') AND a.customer_id % 4 = 0
+            THEN (a.opened_at + ((a.customer_id * 3) % 35) + 110)::date
+        ELSE NULL
+    END AS blocked_at
+FROM public.bank_accounts a
+JOIN public.bank_customers c
+  ON c.customer_id = a.customer_id
+WHERE a.account_type = 'savings'
+  AND a.customer_id % 2 = 0;
+
 INSERT INTO public.bank_loans
 (customer_id, repayment_account_id, loan_type, principal_amount, interest_rate, disbursed_at, maturity_date, status, days_past_due)
 SELECT
-    c.customer_id,
-    a.account_id AS repayment_account_id,
+    li.customer_id,
+    li.repayment_account_id,
     CASE
-        WHEN c.segment = 'corporate' THEN 'trade_finance'
-        WHEN c.segment = 'sme' THEN 'working_capital'
-        WHEN c.customer_id % 2 = 0 THEN 'auto'
+        WHEN li.segment = 'corporate' THEN 'trade_finance'
+        WHEN li.segment = 'sme' THEN 'working_capital'
+        WHEN li.loan_sequence % 3 = 0 THEN 'mortgage'
+        WHEN li.customer_id % 2 = 0 THEN 'auto'
         ELSE 'personal'
     END AS loan_type,
-    ROUND((9000 + c.customer_id * 820 + (c.customer_id % 6) * 1500)::numeric, 2) AS principal_amount,
-    ROUND((0.065 + (c.customer_id % 8) * 0.006)::numeric, 4) AS interest_rate,
-    ('2022-01-15'::date + ((c.customer_id * 31) % 1100))::date AS disbursed_at,
-    ('2022-01-15'::date + ((c.customer_id * 31) % 1100) + (900 + (c.customer_id % 6) * 120))::date AS maturity_date,
+    ROUND(
+        (
+            9000
+            + li.customer_id * 820
+            + (li.customer_id % 6) * 1500
+            + li.loan_sequence * 2400
+        )::numeric,
+        2
+    ) AS principal_amount,
+    ROUND((0.065 + (li.customer_id % 8) * 0.006 + li.loan_sequence * 0.0015)::numeric, 4) AS interest_rate,
+    ('2022-01-15'::date + ((li.customer_id * 31 + li.loan_sequence * 19) % 1100))::date AS disbursed_at,
+    (
+        '2022-01-15'::date
+        + ((li.customer_id * 31 + li.loan_sequence * 19) % 1100)
+        + (900 + (li.customer_id % 6) * 120 + li.loan_sequence * 45)
+    )::date AS maturity_date,
     CASE
-        WHEN c.kyc_status = 'blocked' THEN 'non_performing'
-        WHEN c.customer_id % 11 = 0 THEN 'delinquent'
+        WHEN li.kyc_status = 'blocked' THEN 'non_performing'
+        WHEN (li.customer_id + li.loan_sequence) % 13 = 0 THEN 'delinquent'
         ELSE 'active'
     END AS status,
     CASE
-        WHEN c.kyc_status = 'blocked' THEN 140
-        WHEN c.customer_id % 11 = 0 THEN 95
-        WHEN c.customer_id % 7 = 0 THEN 38
+        WHEN li.kyc_status = 'blocked' THEN 140
+        WHEN (li.customer_id + li.loan_sequence) % 13 = 0 THEN 95
+        WHEN (li.customer_id + li.loan_sequence) % 7 = 0 THEN 38
         ELSE 0
     END AS days_past_due
-FROM public.bank_customers c
-JOIN public.bank_accounts a
-  ON a.customer_id = c.customer_id
- AND a.account_type = 'checking'
-WHERE c.customer_id % 3 = 0;
+FROM (
+    SELECT
+        c.customer_id,
+        c.segment,
+        c.kyc_status,
+        a.account_id AS repayment_account_id,
+        gs AS loan_sequence
+    FROM public.bank_customers c
+    JOIN public.bank_accounts a
+      ON a.customer_id = c.customer_id
+     AND a.account_type = 'checking'
+    JOIN LATERAL generate_series(
+        1,
+        CASE
+            WHEN c.segment IN ('sme', 'corporate') THEN 3
+            ELSE 2
+        END
+    ) gs ON TRUE
+    WHERE c.customer_id % 2 = 0
+       OR c.segment IN ('sme', 'corporate')
+) li;
 
 WITH payment_months AS (
     SELECT gs::date AS payment_date
-    FROM generate_series('2025-07-15'::date, '2026-02-15'::date, interval '1 month') gs
+    FROM generate_series('2025-01-15'::date, '2026-02-15'::date, interval '1 month') gs
 ),
 loan_schedule AS (
     SELECT
@@ -401,10 +455,10 @@ SELECT
     END AS status
 FROM loan_schedule;
 
--- Daily FX rates for multiple pairs over the same 62-day period.
+-- Daily FX rates for multiple pairs over the same ~5.5 month period.
 WITH days AS (
     SELECT gs::date AS rate_date
-    FROM generate_series('2025-12-15'::date, '2026-02-14'::date, interval '1 day') gs
+    FROM generate_series('2025-09-01'::date, '2026-02-14'::date, interval '1 day') gs
 ),
 quotes AS (
     SELECT * FROM (VALUES
