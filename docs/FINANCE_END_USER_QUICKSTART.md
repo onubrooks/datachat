@@ -66,6 +66,10 @@ Use these prompts directly:
 7. `Show fee income mix by transaction type for the last 30 days.`
 8. `Show top customers by deposit concentration risk.`
 
+For the full scripted 20-prompt demo sequence, use:
+
+- `docs/FINANCE_PROMPT_PACK_V1.md`
+
 ## 6) What Good Output Looks Like
 
 For each prompt, verify:

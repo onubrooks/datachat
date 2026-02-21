@@ -134,13 +134,9 @@ Exit code `0` means gate pass; non-zero means at least one threshold failed.
 
 ## Suggested Prompt Set (Finance Wedge)
 
-1. What is total deposits, withdrawals, and net flow by segment for the last 8 weeks?
-2. Which segment had the sharpest week-over-week drop in net flow?
-3. Show failed transaction rate trend by day and top 3 txn types driving failures.
-4. Which countries have highest volume-adjusted decline rates?
-5. What is loan default rate (90+ DPD) by segment and loan type?
-6. Which loans are most likely to migrate to non-performing next cycle?
-7. What share of fee income comes from card purchases vs transfers vs withdrawals?
-8. If declined transfers recovered at 30%, how much monthly value is added?
-9. Show concentration risk: top customers by balance and share of total deposits.
-10. Summarize top 3 liquidity risk signals from the last 30 days with caveats.
+Use `docs/FINANCE_PROMPT_PACK_V1.md` for the full scripted 20-prompt pack with:
+
+- prompt IDs (`P01`-`P20`)
+- mapped primary datapoints
+- expected signal checks
+- clarification recovery replies

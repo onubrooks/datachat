@@ -56,6 +56,7 @@ Planning hierarchy:
 - `DATAPOINT_EXAMPLES_TESTING.md` - end-to-end DataPoint-driven manual test playbook for grocery + fintech examples.
 - `FINANCE_WORKFLOW_V1_MANUAL_TEST.md` - manual runbook and release quality bar for Finance Workflow v1.
 - `FINANCE_END_USER_QUICKSTART.md` - end-user step-by-step guide to seed fintech demo data, sync finance datapoints, and run value-driving prompts.
+- `FINANCE_PROMPT_PACK_V1.md` - scripted 20-prompt finance demo pack with datapoint mapping and expected signals.
 - `templates/finance_workflow_scorecard.csv` - scorecard template consumed by `scripts/finance_workflow_gate.py`.
 
 ## Prompt Files
