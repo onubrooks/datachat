@@ -28,18 +28,20 @@ Current gaps (important for paid adoption):
 
 Positioning statement:
 
-- DataChat is the data assistant that optimizes for **correctness, provenance, and business-logic grounding**, not "creative" answers.
+- DataChat is a **decision workflow system for finance teams** now.
+- DataChat becomes an **AI platform for business decision makers** after finance workflow outcomes are repeatable.
+- Product proof is anchored on correctness, provenance, and business-logic grounding, not generic "chat with data."
 
 Wedge use case (initial):
 
-- teams with recurring KPI questions across 1-2 operational databases where definitions drift and trust in BI/chat tools is low
+- weekly finance operating reviews (liquidity/variance/risk) where teams reconcile definitions across systems and need decision-ready, source-backed output
 
 Initial ICP (Ideal Customer Profile):
 
-- Seed to Series B B2B SaaS teams
-- 5-50 people in product/data/ops
-- no dedicated analytics platform team
-- painful metric disagreements and repeated ad hoc queries
+- fintech, digital banking, and finance-heavy mid-market teams
+- organizations with recurring leadership finance review cycles
+- teams with high cost of metric disputes, reconciliation lag, and low trust in ad hoc BI/chat answers
+- environments where governance/provenance matter more than exploratory novelty
 
 Do not target first:
 

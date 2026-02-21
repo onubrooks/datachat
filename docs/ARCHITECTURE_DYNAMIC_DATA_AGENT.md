@@ -16,6 +16,11 @@ Build DataChat into a **dynamic data agent harness** with Claude-Code/Codex-leve
 
 This is **not** a coding agent architecture. It is a **data + business knowledge operator** architecture.
 
+Execution constraint:
+
+- implementation is finance-first;
+- dynamic harness capabilities are promoted in the order they improve the finance must-win workflow KPI charter in `docs/PRD.md`.
+
 Roadmap linkage:
 
 - `DYN-001`..`DYN-007` in `docs/ROADMAP.md` track implementation sequencing for this proposal.

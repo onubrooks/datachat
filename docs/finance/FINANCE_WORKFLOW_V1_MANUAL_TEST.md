@@ -2,6 +2,8 @@
 
 Use this runbook to validate the finance wedge workflow with existing demo data.
 
+If you want a faster end-user flow, start with `docs/finance/FINANCE_END_USER_QUICKSTART.md` first.
+
 ## Goal
 
 Confirm DataChat can produce decision-grade finance answers (summary + drivers + caveats + sources) with reproducible prompts.
@@ -88,6 +90,23 @@ For each prompt, capture:
 - reviewer confidence (`high/medium/low`)
 - rework needed (`yes/no`)
 
+Use template:
+
+```bash
+cp docs/templates/finance_workflow_scorecard.csv reports/finance_workflow_scorecard.csv
+```
+
+Required scorecard columns for gate script:
+
+- `prompt_id`
+- `has_source_attribution` (`yes/no`)
+- `source_count` (integer)
+- `clarification_count` (number)
+- `driver_quality_pass` (`yes/no`)
+- `consistency_applicable` (`yes/no`)
+- `consistency_pass` (`yes/no`)
+- `reproducibility_pass` (`yes/no`)
+
 ## Quality Bar (release gate for workflow-mode contract)
 
 Pass this gate before enabling workflow-mode request contract broadly:
@@ -103,15 +122,21 @@ Suggested minimum sample:
 - 10 fintech prompts
 - 5 cross-check prompts with scoped routing
 
+Run gate:
+
+```bash
+python scripts/finance_workflow_gate.py \
+  --scorecard reports/finance_workflow_scorecard.csv \
+  --report-json reports/finance_workflow_gate.json
+```
+
+Exit code `0` means gate pass; non-zero means at least one threshold failed.
+
 ## Suggested Prompt Set (Finance Wedge)
 
-1. What is total deposits, withdrawals, and net flow by segment for the last 8 weeks?
-2. Which segment had the sharpest week-over-week drop in net flow?
-3. Show failed transaction rate trend by day and top 3 txn types driving failures.
-4. Which countries have highest volume-adjusted decline rates?
-5. What is loan default rate (90+ DPD) by segment and loan type?
-6. Which loans are most likely to migrate to non-performing next cycle?
-7. What share of fee income comes from card purchases vs transfers vs withdrawals?
-8. If declined transfers recovered at 30%, how much monthly value is added?
-9. Show concentration risk: top customers by balance and share of total deposits.
-10. Summarize top 3 liquidity risk signals from the last 30 days with caveats.
+Use `docs/finance/FINANCE_PROMPT_PACK_V1.md` for the full scripted 20-prompt pack with:
+
+- prompt IDs (`P01`-`P20`)
+- mapped primary datapoints
+- expected signal checks
+- clarification recovery replies
