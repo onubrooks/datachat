@@ -205,6 +205,32 @@ python scripts/eval_runner.py --mode qa --dataset eval/grocery/qa.json --min-sql
 - Route mode validates deterministic orchestration path decisions from `decision_trace`.
 - Optional thresholds return non-zero exit codes to support CI gating.
 
+### 3b. `finance_workflow_gate.py` - Finance Workflow Quality Gate
+
+**Purpose**: Validate manual Finance Workflow v1 scorecards against release thresholds (source coverage, clarification overhead, driver quality, consistency, reproducibility).
+
+**Usage**:
+
+```bash
+python scripts/finance_workflow_gate.py \
+  --scorecard reports/finance_workflow_scorecard.csv \
+  --report-json reports/finance_workflow_gate.json
+```
+
+**Input**:
+
+- CSV scorecard with columns:
+  - `prompt_id`
+  - `has_source_attribution`
+  - `source_count`
+  - `clarification_count`
+  - `driver_quality_pass`
+  - `consistency_applicable`
+  - `consistency_pass`
+  - `reproducibility_pass`
+
+Template: `docs/templates/finance_workflow_scorecard.csv`
+
 ### 4. `benchmark_latency_progressive.py` - Progressive Latency Benchmark
 
 **Purpose**: Measure latency + quality guard metrics across cumulative performance stages:

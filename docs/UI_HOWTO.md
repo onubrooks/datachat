@@ -38,12 +38,13 @@ If the system is not initialized, the chat page shows a setup card.
 In the chat header you can:
 
 1. Select **Target database**.
-2. Start a **New** conversation.
-3. Open **Shortcuts** reference.
-4. Open **Settings**.
-5. Open **Manage DataPoints**.
-6. Clear current chat.
-7. Toggle left/right sidebars.
+2. Select **Workflow mode** (`Auto` or `Finance Brief v1`).
+3. Start a **New** conversation.
+4. Open **Shortcuts** reference.
+5. Open **Settings**.
+6. Open **Manage DataPoints**.
+7. Clear current chat.
+8. Toggle left/right sidebars.
 
 ---
 
@@ -67,6 +68,10 @@ Examples:
 - `List all available tables`
 - `Show columns for grocery_sales_transactions`
 - `Show top 10 products by sales`
+
+Workflow mode tip:
+- Use **Workflow: Finance Brief v1** for finance wedge prompts when you want structured workflow artifacts (`summary`, `metrics`, `drivers`, `caveats`, `sources`, `follow_ups`) consistently.
+- Use **Workflow: Auto** for general-purpose chat behavior.
 
 ---
 

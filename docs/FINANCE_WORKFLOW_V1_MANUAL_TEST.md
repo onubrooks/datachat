@@ -88,6 +88,23 @@ For each prompt, capture:
 - reviewer confidence (`high/medium/low`)
 - rework needed (`yes/no`)
 
+Use template:
+
+```bash
+cp docs/templates/finance_workflow_scorecard.csv reports/finance_workflow_scorecard.csv
+```
+
+Required scorecard columns for gate script:
+
+- `prompt_id`
+- `has_source_attribution` (`yes/no`)
+- `source_count` (integer)
+- `clarification_count` (number)
+- `driver_quality_pass` (`yes/no`)
+- `consistency_applicable` (`yes/no`)
+- `consistency_pass` (`yes/no`)
+- `reproducibility_pass` (`yes/no`)
+
 ## Quality Bar (release gate for workflow-mode contract)
 
 Pass this gate before enabling workflow-mode request contract broadly:
@@ -102,6 +119,16 @@ Suggested minimum sample:
 
 - 10 fintech prompts
 - 5 cross-check prompts with scoped routing
+
+Run gate:
+
+```bash
+python scripts/finance_workflow_gate.py \
+  --scorecard reports/finance_workflow_scorecard.csv \
+  --report-json reports/finance_workflow_gate.json
+```
+
+Exit code `0` means gate pass; non-zero means at least one threshold failed.
 
 ## Suggested Prompt Set (Finance Wedge)
 
