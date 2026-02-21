@@ -486,6 +486,29 @@ class TestChatEndpoint:
                 assert kwargs["synthesize_simple_sql"] is False
 
     @pytest.mark.asyncio
+    async def test_chat_forwards_workflow_mode(self, client, mock_pipeline_result, initialized_status):
+        with patch(
+            "backend.api.routes.chat.SystemInitializer.status",
+            new=AsyncMock(return_value=initialized_status),
+        ):
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
+                response = client.post(
+                    "/api/v1/chat",
+                    json={
+                        "message": "Show revenue variance by segment.",
+                        "workflow_mode": "finance_variance_v1",
+                    },
+                )
+                assert response.status_code == 200
+                kwargs = mock_pipeline.run.call_args.kwargs
+                assert kwargs["workflow_mode"] == "finance_variance_v1"
+
+    @pytest.mark.asyncio
     async def test_chat_preserves_conversation_id_if_provided(
         self, client, mock_pipeline_result, initialized_status
     ):
@@ -677,3 +700,127 @@ class TestChatEndpoint:
                 payload = response.json()
                 assert payload["answer_source"] == "context"
                 assert payload["answer_confidence"] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_chat_adds_finance_workflow_artifacts_for_finance_queries(
+        self, client, initialized_status
+    ):
+        pipeline_result = {
+            "natural_language_answer": "Deposits increased while net flow declined for SME segment.",
+            "answer_source": "sql",
+            "answer_confidence": 0.84,
+            "validated_sql": (
+                "SELECT segment, SUM(deposit_amount) AS deposits, SUM(net_flow) AS net_flow "
+                "FROM public.bank_transactions GROUP BY segment"
+            ),
+            "query_result": {
+                "data": {
+                    "segment": ["SME", "Retail"],
+                    "deposits": [2400000.0, 3100000.0],
+                    "net_flow": [-150000.0, 400000.0],
+                }
+            },
+            "retrieved_datapoints": [
+                {
+                    "datapoint_id": "metric_total_deposits_bank_001",
+                    "datapoint_type": "Business",
+                    "name": "Total Deposits",
+                    "score": 0.93,
+                }
+            ],
+            "total_latency_ms": 42.0,
+            "agent_timings": {},
+            "llm_calls": 1,
+            "retry_count": 0,
+        }
+        with patch(
+            "backend.api.routes.chat.SystemInitializer.status",
+            new=AsyncMock(return_value=initialized_status),
+        ):
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
+                response = client.post(
+                    "/api/v1/chat",
+                    json={"message": "Show deposits and net flow by segment for the last 8 weeks."},
+                )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["workflow_artifacts"] is not None
+        assert payload["workflow_artifacts"]["domain"] == "finance"
+        assert payload["workflow_artifacts"]["summary"]
+        assert payload["workflow_artifacts"]["follow_ups"]
+
+    @pytest.mark.asyncio
+    async def test_chat_omits_workflow_artifacts_for_non_finance_queries(
+        self, client, initialized_status
+    ):
+        pipeline_result = {
+            "natural_language_answer": "Found 12 tables in this database.",
+            "answer_source": "context",
+            "answer_confidence": 0.75,
+            "retrieved_datapoints": [],
+            "total_latency_ms": 10.0,
+            "agent_timings": {},
+            "llm_calls": 0,
+            "retry_count": 0,
+        }
+        with patch(
+            "backend.api.routes.chat.SystemInitializer.status",
+            new=AsyncMock(return_value=initialized_status),
+        ):
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
+                response = client.post(
+                    "/api/v1/chat",
+                    json={"message": "List all tables in the database."},
+                )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["workflow_artifacts"] is None
+
+    @pytest.mark.asyncio
+    async def test_chat_forces_workflow_artifacts_when_workflow_mode_finance(
+        self, client, initialized_status
+    ):
+        pipeline_result = {
+            "natural_language_answer": "Found 12 tables in this database.",
+            "answer_source": "context",
+            "answer_confidence": 0.75,
+            "retrieved_datapoints": [],
+            "total_latency_ms": 10.0,
+            "agent_timings": {},
+            "llm_calls": 0,
+            "retry_count": 0,
+        }
+        with patch(
+            "backend.api.routes.chat.SystemInitializer.status",
+            new=AsyncMock(return_value=initialized_status),
+        ):
+            mock_pipeline = AsyncMock()
+            mock_pipeline.run = AsyncMock(return_value=pipeline_result)
+            with patch(
+                "backend.api.main.app_state",
+                {"pipeline": mock_pipeline, "database_manager": None},
+            ):
+                response = client.post(
+                    "/api/v1/chat",
+                    json={
+                        "message": "List all tables in the database.",
+                        "workflow_mode": "finance_variance_v1",
+                    },
+                )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["workflow_artifacts"] is not None
+        assert payload["workflow_artifacts"]["domain"] == "finance"

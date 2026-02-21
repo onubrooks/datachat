@@ -158,6 +158,7 @@ class ExecutorAgent(BaseAgent):
             # Build executed query
             executed_query = ExecutedQuery(
                 query_result=query_result,
+                executed_sql=sql_to_execute,
                 natural_language_answer=nl_answer,
                 visualization_hint=viz_hint,
                 visualization_note=viz_note,

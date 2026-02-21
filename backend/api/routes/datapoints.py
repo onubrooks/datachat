@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
@@ -11,11 +12,14 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, TypeAdapter
 
+from backend.knowledge.conflicts import ConflictMode
 from backend.knowledge.contracts import ContractIssue, validate_datapoint_contract
+from backend.knowledge.lifecycle import apply_lifecycle_metadata
 from backend.models.datapoint import DataPoint
 from backend.sync.orchestrator import save_datapoint_to_disk
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 DATA_ROOT = Path("datapoints")
 DATA_DIR = DATA_ROOT / "managed"
@@ -48,6 +52,7 @@ class SyncTriggerResponse(BaseModel):
 class SyncTriggerRequest(BaseModel):
     scope: Literal["auto", "global", "database"] = "auto"
     connection_id: str | None = None
+    conflict_mode: ConflictMode = "error"
 
 
 class DataPointSummary(BaseModel):
@@ -56,6 +61,11 @@ class DataPointSummary(BaseModel):
     name: str | None
     source_tier: str | None = None
     source_path: str | None = None
+    lifecycle_version: str | None = None
+    lifecycle_reviewer: str | None = None
+    lifecycle_changed_by: str | None = None
+    lifecycle_changed_reason: str | None = None
+    lifecycle_changed_at: str | None = None
 
 
 class DataPointListResponse(BaseModel):
@@ -97,6 +107,26 @@ async def _resolve_maybe_awaitable(value):
     return value
 
 
+def _read_existing_datapoint(path: Path) -> DataPoint | None:
+    """Load existing DataPoint payload for lifecycle version bumps.
+
+    Returns None when the file cannot be parsed/validated so PUT can still
+    replace corrupted payloads.
+    """
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return datapoint_adapter.validate_python(payload)
+    except Exception as exc:  # pragma: no cover - defensive recovery path
+        logger.warning(
+            "Failed to load existing datapoint for lifecycle metadata; "
+            "continuing update without previous lifecycle context",
+            extra={"path": str(path), "error": str(exc)},
+        )
+        return None
+
+
 def _issue_to_dict(issue: ContractIssue) -> dict[str, str]:
     return {
         "code": issue.code,
@@ -123,6 +153,7 @@ def _validate_datapoint_contract_or_400(datapoint: DataPoint) -> None:
 @router.post("/datapoints", status_code=status.HTTP_201_CREATED)
 async def create_datapoint(payload: dict) -> dict:
     datapoint = datapoint_adapter.validate_python(payload)
+    apply_lifecycle_metadata(datapoint, action="create", changed_by="api")
     _validate_datapoint_contract_or_400(datapoint)
     path = _file_path(datapoint.datapoint_id)
     if path.exists():
@@ -133,7 +164,10 @@ async def create_datapoint(payload: dict) -> dict:
     save_datapoint_to_disk(datapoint.model_dump(mode="json", by_alias=True), path)
 
     orchestrator = _get_orchestrator()
-    orchestrator.enqueue_sync_incremental([datapoint.datapoint_id])
+    orchestrator.enqueue_sync_incremental(
+        [datapoint.datapoint_id],
+        conflict_mode="prefer_latest",
+    )
 
     return datapoint.model_dump(mode="json", by_alias=True)
 
@@ -141,7 +175,6 @@ async def create_datapoint(payload: dict) -> dict:
 @router.put("/datapoints/{datapoint_id}")
 async def update_datapoint(datapoint_id: str, payload: dict) -> dict:
     datapoint = datapoint_adapter.validate_python(payload)
-    _validate_datapoint_contract_or_400(datapoint)
     if datapoint.datapoint_id != datapoint_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -153,10 +186,21 @@ async def update_datapoint(datapoint_id: str, payload: dict) -> dict:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Datapoint not found",
         )
+    previous = _read_existing_datapoint(path)
+    apply_lifecycle_metadata(
+        datapoint,
+        action="update",
+        changed_by="api",
+        previous_datapoint=previous,
+    )
+    _validate_datapoint_contract_or_400(datapoint)
     save_datapoint_to_disk(datapoint.model_dump(mode="json", by_alias=True), path)
 
     orchestrator = _get_orchestrator()
-    orchestrator.enqueue_sync_incremental([datapoint.datapoint_id])
+    orchestrator.enqueue_sync_incremental(
+        [datapoint.datapoint_id],
+        conflict_mode="prefer_latest",
+    )
 
     return datapoint.model_dump(mode="json", by_alias=True)
 
@@ -180,6 +224,7 @@ async def trigger_sync(payload: SyncTriggerRequest | None = None) -> SyncTrigger
     orchestrator = _get_orchestrator()
     scope = payload.scope if payload else "auto"
     connection_id = payload.connection_id if payload else None
+    conflict_mode: ConflictMode = payload.conflict_mode if payload else "error"
     if scope == "database" and not connection_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -191,7 +236,11 @@ async def trigger_sync(payload: SyncTriggerRequest | None = None) -> SyncTrigger
             detail="connection_id is only allowed when scope=database",
         )
     job_id = await _resolve_maybe_awaitable(
-        orchestrator.enqueue_sync_all(scope=scope, connection_id=connection_id)
+        orchestrator.enqueue_sync_all(
+            scope=scope,
+            connection_id=connection_id,
+            conflict_mode=conflict_mode,
+        )
     )
     return SyncTriggerResponse(job_id=job_id)
 
@@ -217,12 +266,34 @@ async def list_datapoints() -> DataPointListResponse:
         source_tier = str(source_tier_raw) if source_tier_raw is not None else "unknown"
         source_path_raw = metadata.get("source_path")
         source_path = str(source_path_raw) if source_path_raw else None
+        lifecycle_version_raw = metadata.get("lifecycle_version")
+        lifecycle_reviewer_raw = metadata.get("lifecycle_reviewer")
+        lifecycle_changed_by_raw = metadata.get("lifecycle_changed_by")
+        lifecycle_changed_reason_raw = metadata.get("lifecycle_changed_reason")
+        lifecycle_changed_at_raw = metadata.get("lifecycle_changed_at")
         summary = DataPointSummary(
             datapoint_id=datapoint_id,
             type=str(metadata.get("type", "Unknown")),
             name=str(metadata["name"]) if metadata.get("name") is not None else None,
             source_tier=source_tier,
             source_path=source_path,
+            lifecycle_version=(
+                str(lifecycle_version_raw) if lifecycle_version_raw is not None else None
+            ),
+            lifecycle_reviewer=(
+                str(lifecycle_reviewer_raw) if lifecycle_reviewer_raw is not None else None
+            ),
+            lifecycle_changed_by=(
+                str(lifecycle_changed_by_raw) if lifecycle_changed_by_raw is not None else None
+            ),
+            lifecycle_changed_reason=(
+                str(lifecycle_changed_reason_raw)
+                if lifecycle_changed_reason_raw is not None
+                else None
+            ),
+            lifecycle_changed_at=(
+                str(lifecycle_changed_at_raw) if lifecycle_changed_at_raw is not None else None
+            ),
         )
         existing = deduped.get(datapoint_id)
         if existing is None:

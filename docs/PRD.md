@@ -22,6 +22,46 @@ DataChat provides a natural-language interface for operational and analytics dat
 - richer business accuracy via DataPoints
 - future expansion into deeper intelligence and workspace awareness
 
+## Must-Win Workflow (Finance First)
+
+Primary wedge for the next 2-3 release cycles:
+
+- **Workflow:** Revenue variance and liquidity risk investigation for finance and banking operators.
+- **Primary buyer persona:** Head of Finance / CFO delegate.
+- **Primary daily users:** Finance manager, FP&A lead, treasury/risk analyst.
+
+Workflow problem statement:
+
+- teams spend too long reconciling KPI definitions, pulling numbers from multiple systems, and validating whether answers are trustworthy before acting.
+
+Workflow success target:
+
+- produce a trusted, source-attributed variance/risk answer package in minutes instead of hours.
+
+Required workflow outputs (non-negotiable):
+
+1. direct answer with explicit business definition used
+2. source evidence and provenance (tables/datapoints/docs)
+3. confidence + caveats
+4. drill-down follow-up path (variance drivers, segment split, period deltas)
+
+## Workflow KPI Charter (Finance)
+
+| KPI | Baseline (assume until measured) | Target Phase A | Target Phase B | Target Phase C |
+|-----|----------------------------------|----------------|----------------|----------------|
+| Time to trusted answer package | 60-120 min | <= 30 min | <= 15 min | <= 10 min |
+| Clarification loops per query | 1.5-2.5 | <= 1.0 | <= 0.7 | <= 0.5 |
+| Wrong-table/wrong-definition incidents | 8-12% | <= 4% | <= 2% | <= 1% |
+| Answers with source attribution | ~40-60% | >= 95% | >= 98% | >= 99% |
+| Rework after leadership review | 20-30% | <= 12% | <= 8% | <= 5% |
+
+Notes:
+
+- Replace baseline assumptions with measured values during first production telemetry window.
+- A feature that does not improve at least one KPI above is not prioritized for current phase.
+- Implementation spec: `docs/specs/WDG-001.md`
+- Manual validation runbook: `docs/FINANCE_WORKFLOW_V1_MANUAL_TEST.md`
+
 ## Current Product Scope (Shipped)
 
 ### Core Query Experience

@@ -14,6 +14,7 @@ export interface ChatRequest {
   message: string;
   execution_mode?: "natural_language" | "direct_sql";
   sql?: string;
+  workflow_mode?: "auto" | "finance_variance_v1";
   conversation_id?: string;
   target_database?: string;
   conversation_history?: ChatMessage[];
@@ -101,6 +102,16 @@ export interface ChatResponse {
     reason: string;
     details?: Record<string, unknown>;
   }>;
+  workflow_artifacts?: {
+    package_version: string;
+    domain: string;
+    summary: string;
+    metrics: Array<{ label: string; value: string }>;
+    drivers: Array<{ dimension: string; value: string; contribution: string }>;
+    caveats: string[];
+    sources: Array<{ datapoint_id: string; name: string; source_type: string }>;
+    follow_ups: string[];
+  } | null;
 }
 
 export interface AgentUpdate {

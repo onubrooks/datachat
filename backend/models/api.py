@@ -53,6 +53,14 @@ class ChatRequest(BaseModel):
             "Override for response synthesis on simple SQL answers (None = use server default)."
         ),
     )
+    workflow_mode: Literal["auto", "finance_variance_v1"] | None = Field(
+        default="auto",
+        description=(
+            "Optional workflow packaging mode. "
+            "'auto' infers by query/source signals; "
+            "'finance_variance_v1' forces finance brief packaging when possible."
+        ),
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -66,6 +74,7 @@ class ChatRequest(BaseModel):
                 "session_summary": "Intent summary: last_goal=How many products do we have?",
                 "session_state": {"last_goal": "How many products do we have?"},
                 "synthesize_simple_sql": None,
+                "workflow_mode": "auto",
             }
         }
     }
@@ -138,6 +147,45 @@ class SubAnswer(BaseModel):
     error: str | None = Field(default=None, description="Error tied to this sub-answer")
 
 
+class WorkflowMetric(BaseModel):
+    """Key metric extracted for a workflow-style answer package."""
+
+    label: str = Field(..., description="Metric label")
+    value: str = Field(..., description="Human-readable metric value")
+
+
+class WorkflowDriver(BaseModel):
+    """One ranked driver behind the answer."""
+
+    dimension: str = Field(..., description="Dimension used for grouping")
+    value: str = Field(..., description="Dimension value")
+    contribution: str = Field(..., description="Driver contribution summary")
+
+
+class WorkflowSource(BaseModel):
+    """Source summary for workflow package provenance."""
+
+    datapoint_id: str = Field(..., description="DataPoint identifier")
+    name: str = Field(..., description="DataPoint name")
+    source_type: str = Field(..., description="DataPoint type")
+
+
+class WorkflowArtifacts(BaseModel):
+    """Decision-ready output package for workflow-oriented responses."""
+
+    package_version: str = Field(default="1.0", description="Workflow package schema version")
+    domain: str = Field(default="finance", description="Workflow domain label")
+    summary: str = Field(..., description="Concise business summary")
+    metrics: list[WorkflowMetric] = Field(default_factory=list, description="Key metrics")
+    drivers: list[WorkflowDriver] = Field(default_factory=list, description="Top drivers")
+    caveats: list[str] = Field(default_factory=list, description="Assumptions and caveats")
+    sources: list[WorkflowSource] = Field(default_factory=list, description="Source provenance")
+    follow_ups: list[str] = Field(
+        default_factory=list,
+        description="Suggested follow-up prompts to continue analysis",
+    )
+
+
 class ChatResponse(BaseModel):
     """Response model for chat endpoint."""
 
@@ -193,6 +241,10 @@ class ChatResponse(BaseModel):
     decision_trace: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Deterministic routing/decision trace for observability and evals.",
+    )
+    workflow_artifacts: WorkflowArtifacts | None = Field(
+        default=None,
+        description="Optional decision-ready workflow package (finance-focused v1).",
     )
 
     model_config = {

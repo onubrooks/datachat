@@ -101,3 +101,32 @@ def test_extract_limit_handles_show_n_rows_phrase():
 def test_extract_limit_caps_at_ten():
     service = CatalogIntelligence()
     assert service.extract_limit("show 100 rows in public.events") == 10
+
+
+def test_is_sample_rows_query_requires_row_context_for_top_n():
+    service = CatalogIntelligence()
+    assert (
+        service.is_sample_rows_query(
+            "Show total deposits, withdrawals, and net flow by segment for the last 8 weeks, "
+            "then identify the top 2 segments driving week-over-week net flow decline."
+        )
+        is False
+    )
+
+
+def test_is_sample_rows_query_matches_top_n_rows_phrase():
+    service = CatalogIntelligence()
+    assert service.is_sample_rows_query("Show top 5 rows from public.transactions") is True
+
+
+def test_catalog_plan_ignores_finance_top_n_driver_prompt():
+    service = CatalogIntelligence()
+    plan = service.plan_query(
+        query=(
+            "Show total deposits, withdrawals, and net flow by segment for the last 8 weeks, "
+            "then identify the top 2 segments driving week-over-week net flow decline."
+        ),
+        database_type="postgresql",
+        investigation_memory=_memory(),
+    )
+    assert plan is None

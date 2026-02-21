@@ -100,7 +100,26 @@ class TestDatapointEndpoints:
 
         assert response.status_code == 200
         orchestrator.enqueue_sync_all.assert_called_once_with(
-            scope="database", connection_id="db-123"
+            scope="database",
+            connection_id="db-123",
+            conflict_mode="error",
+        )
+
+    def test_trigger_sync_passes_conflict_mode(self, client):
+        orchestrator = AsyncMock()
+        orchestrator.enqueue_sync_all.return_value = "11111111-1111-1111-1111-111111111111"
+
+        with patch("backend.api.routes.datapoints._get_orchestrator", return_value=orchestrator):
+            response = client.post(
+                "/api/v1/sync",
+                json={"scope": "auto", "conflict_mode": "prefer_latest"},
+            )
+
+        assert response.status_code == 200
+        orchestrator.enqueue_sync_all.assert_called_once_with(
+            scope="auto",
+            connection_id=None,
+            conflict_mode="prefer_latest",
         )
 
     def test_trigger_sync_rejects_database_scope_without_connection(self, client):
@@ -207,5 +226,163 @@ class TestDatapointEndpoints:
         assert response.status_code == 201
         assert response.json()["datapoint_id"] == "query_contract_pass_001"
         orchestrator.enqueue_sync_incremental.assert_called_once_with(
-            ["query_contract_pass_001"]
+            ["query_contract_pass_001"], conflict_mode="prefer_latest"
         )
+        lifecycle = response.json()["metadata"]["lifecycle"]
+        assert lifecycle["version"] == "1.0.0"
+        assert lifecycle["changed_by"] == "api"
+        assert lifecycle["changed_reason"] == "created"
+        assert lifecycle["reviewer"] == "pending-review"
+
+    def test_update_datapoint_increments_lifecycle_version(self, client, tmp_path):
+        existing_payload = {
+            "datapoint_id": "query_contract_update_001",
+            "type": "Query",
+            "name": "Contract update query",
+            "owner": "data-team@example.com",
+            "tags": ["manual"],
+            "metadata": {
+                "grain": "row-level",
+                "exclusions": "None documented",
+                "confidence_notes": "Validated with staging data",
+                "lifecycle": {
+                    "owner": "data-team@example.com",
+                    "reviewer": "qa@example.com",
+                    "version": "1.2.3",
+                    "changed_by": "qa@example.com",
+                    "changed_reason": "initial publish",
+                    "changed_at": "2026-02-20T00:00:00+00:00",
+                },
+            },
+            "description": "Contract-complete datapoint update test query.",
+            "sql_template": "SELECT 1 AS value",
+            "related_tables": ["public.orders"],
+        }
+        target_path = tmp_path / "query_contract_update_001.json"
+        target_path.write_text(json.dumps(existing_payload), encoding="utf-8")
+
+        update_payload = dict(existing_payload)
+        update_payload["description"] = "Updated description."
+        update_payload["metadata"] = {
+            "grain": "row-level",
+            "exclusions": "None documented",
+            "confidence_notes": "Validated with staging data",
+        }
+        orchestrator = AsyncMock()
+
+        with (
+            patch("backend.api.routes.datapoints._file_path", return_value=target_path),
+            patch("backend.api.routes.datapoints._get_orchestrator", return_value=orchestrator),
+        ):
+            response = client.put(
+                "/api/v1/datapoints/query_contract_update_001",
+                json=update_payload,
+            )
+
+        assert response.status_code == 200
+        lifecycle = response.json()["metadata"]["lifecycle"]
+        assert lifecycle["version"] == "1.2.4"
+        assert lifecycle["changed_by"] == "api"
+        assert lifecycle["changed_reason"] == "updated"
+        assert lifecycle["reviewer"] == "qa@example.com"
+        orchestrator.enqueue_sync_incremental.assert_called_once_with(
+            ["query_contract_update_001"], conflict_mode="prefer_latest"
+        )
+
+    def test_update_datapoint_recomputes_lifecycle_from_previous_state(self, client, tmp_path):
+        existing_payload = {
+            "datapoint_id": "query_contract_update_002",
+            "type": "Query",
+            "name": "Contract update query",
+            "owner": "data-team@example.com",
+            "tags": ["manual"],
+            "metadata": {
+                "grain": "row-level",
+                "exclusions": "None documented",
+                "confidence_notes": "Validated with staging data",
+                "lifecycle": {
+                    "owner": "data-team@example.com",
+                    "reviewer": "qa@example.com",
+                    "version": "3.1.4",
+                    "changed_by": "qa@example.com",
+                    "changed_reason": "published",
+                    "changed_at": "2026-02-20T00:00:00+00:00",
+                },
+            },
+            "description": "Contract-complete datapoint update test query.",
+            "sql_template": "SELECT 1 AS value",
+            "related_tables": ["public.orders"],
+        }
+        target_path = tmp_path / "query_contract_update_002.json"
+        target_path.write_text(json.dumps(existing_payload), encoding="utf-8")
+
+        update_payload = dict(existing_payload)
+        update_payload["description"] = "Updated description."
+        update_payload["metadata"] = {
+            "grain": "row-level",
+            "exclusions": "None documented",
+            "confidence_notes": "Validated with staging data",
+            "lifecycle": {
+                "owner": "data-team@example.com",
+                "reviewer": "client-reviewer@example.com",
+                "version": "3.1.4",
+                "changed_by": "client@example.com",
+                "changed_reason": "stale-client-copy",
+                "changed_at": "2026-02-20T01:00:00+00:00",
+            },
+        }
+        orchestrator = AsyncMock()
+
+        with (
+            patch("backend.api.routes.datapoints._file_path", return_value=target_path),
+            patch("backend.api.routes.datapoints._get_orchestrator", return_value=orchestrator),
+        ):
+            response = client.put(
+                "/api/v1/datapoints/query_contract_update_002",
+                json=update_payload,
+            )
+
+        assert response.status_code == 200
+        lifecycle = response.json()["metadata"]["lifecycle"]
+        assert lifecycle["version"] == "3.1.5"
+        assert lifecycle["changed_by"] == "api"
+        assert lifecycle["changed_reason"] == "updated"
+        assert lifecycle["reviewer"] == "client-reviewer@example.com"
+
+    def test_update_datapoint_allows_recovery_when_existing_file_is_invalid(
+        self, client, tmp_path
+    ):
+        target_path = tmp_path / "query_contract_recovery_001.json"
+        target_path.write_text("{invalid json", encoding="utf-8")
+        update_payload = {
+            "datapoint_id": "query_contract_recovery_001",
+            "type": "Query",
+            "name": "Recovery query",
+            "owner": "data-team@example.com",
+            "tags": ["manual"],
+            "metadata": {
+                "grain": "row-level",
+                "exclusions": "None documented",
+                "confidence_notes": "Validated with staging data",
+            },
+            "description": "Overwrite corrupted datapoint file.",
+            "sql_template": "SELECT 1 AS value",
+            "related_tables": ["public.orders"],
+        }
+        orchestrator = AsyncMock()
+
+        with (
+            patch("backend.api.routes.datapoints._file_path", return_value=target_path),
+            patch("backend.api.routes.datapoints._get_orchestrator", return_value=orchestrator),
+        ):
+            response = client.put(
+                "/api/v1/datapoints/query_contract_recovery_001",
+                json=update_payload,
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["datapoint_id"] == "query_contract_recovery_001"
+        assert payload["metadata"]["lifecycle"]["version"] == "1.0.0"
+        assert payload["metadata"]["lifecycle"]["changed_by"] == "api"
+        assert payload["metadata"]["lifecycle"]["changed_reason"] == "updated"

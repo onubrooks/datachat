@@ -17,6 +17,7 @@ from fastapi.encoders import jsonable_encoder
 
 from backend.api.database_context import resolve_database_type_and_url
 from backend.api.visualization import infer_direct_sql_visualization
+from backend.api.workflow_packaging import build_workflow_artifacts
 from backend.config import get_settings
 from backend.connectors.base import (
     ConnectionError as ConnectorConnectionError,
@@ -26,6 +27,7 @@ from backend.connectors.base import (
 )
 from backend.connectors.factory import create_connector
 from backend.initialization.initializer import SystemInitializer
+from backend.models.api import DataSource
 
 logger = logging.getLogger(__name__)
 
@@ -275,6 +277,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
         session_summary = data.get("session_summary")
         session_state = data.get("session_state")
         synthesize_simple_sql = data.get("synthesize_simple_sql")
+        workflow_mode = data.get("workflow_mode") or "auto"
         execution_mode = str(data.get("execution_mode") or "natural_language").lower()
 
         if execution_mode == "direct_sql":
@@ -334,6 +337,17 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 visualization_hint, visualization_metadata = infer_direct_sql_visualization(
                     data_result
                 )
+                workflow_artifacts = build_workflow_artifacts(
+                    query=message or sql_query,
+                    answer=answer,
+                    answer_source="sql",
+                    data=data_result,
+                    sources=[],
+                    validation_warnings=[],
+                    clarifying_questions=[],
+                    has_datapoints=status_state.has_datapoints,
+                    workflow_mode=workflow_mode,
+                )
                 payload = {
                     "event": "complete",
                     "answer": answer,
@@ -368,6 +382,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     "conversation_id": conversation_id,
                     "session_summary": session_summary,
                     "session_state": session_state,
+                    "workflow_artifacts": workflow_artifacts,
                     "decision_trace": [
                         {
                             "stage": "execution_mode",
@@ -435,6 +450,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
             database_url=database_url,
             target_connection_id=target_database,
             synthesize_simple_sql=synthesize_simple_sql,
+            workflow_mode=workflow_mode,
             event_callback=event_callback,
         )
 
@@ -464,26 +480,27 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
         # Build sources
         sources = []
+        workflow_sources: list[DataSource] = []
         retrieved_datapoints = result.get("retrieved_datapoints", [])
         for dp in retrieved_datapoints:
             if isinstance(dp, dict):
-                sources.append(
-                    {
-                        "datapoint_id": dp.get("datapoint_id", "unknown"),
-                        "type": dp.get("datapoint_type", dp.get("type", "unknown")),
-                        "name": dp.get("name", "Unknown"),
-                        "relevance_score": dp.get("score", 0.0),
-                    }
+                source = DataSource(
+                    datapoint_id=dp.get("datapoint_id", "unknown"),
+                    type=dp.get("datapoint_type", dp.get("type", "unknown")),
+                    name=dp.get("name", "Unknown"),
+                    relevance_score=dp.get("score", 0.0),
                 )
+                sources.append(source.model_dump())
+                workflow_sources.append(source)
             else:
-                sources.append(
-                    {
-                        "datapoint_id": getattr(dp, "datapoint_id", "unknown"),
-                        "type": getattr(dp, "datapoint_type", "unknown"),
-                        "name": getattr(dp, "name", "Unknown"),
-                        "relevance_score": getattr(dp, "score", 0.0),
-                    }
+                source = DataSource(
+                    datapoint_id=getattr(dp, "datapoint_id", "unknown"),
+                    type=getattr(dp, "datapoint_type", "unknown"),
+                    name=getattr(dp, "name", "Unknown"),
+                    relevance_score=getattr(dp, "score", 0.0),
                 )
+                sources.append(source.model_dump())
+                workflow_sources.append(source)
 
         # Build metrics
         metrics = {
@@ -497,6 +514,18 @@ async def websocket_chat(websocket: WebSocket) -> None:
             "query_compiler_llm_refinements": result.get("query_compiler_llm_refinements", 0),
             "query_compiler_latency_ms": result.get("query_compiler_latency_ms", 0.0),
         }
+        answer_source = str(result.get("answer_source") or "error")
+        workflow_artifacts = build_workflow_artifacts(
+            query=message,
+            answer=answer,
+            answer_source=answer_source,
+            data=data_result,
+            sources=workflow_sources,
+            validation_warnings=result.get("validation_warnings", []),
+            clarifying_questions=result.get("clarifying_questions", []),
+            has_datapoints=status_state.has_datapoints,
+            workflow_mode=workflow_mode,
+        )
 
         # Send final complete event
         payload = {
@@ -509,7 +538,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
             "visualization_hint": visualization_hint,
             "visualization_metadata": visualization_metadata,
             "sources": sources,
-            "answer_source": result.get("answer_source"),
+            "answer_source": answer_source,
             "answer_confidence": result.get("answer_confidence"),
             "evidence": result.get("evidence", []),
             "validation_errors": result.get("validation_errors", []),
@@ -521,6 +550,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
             "conversation_id": conversation_id,
             "session_summary": result.get("session_summary"),
             "session_state": result.get("session_state"),
+            "workflow_artifacts": workflow_artifacts,
             "decision_trace": result.get("decision_trace", []),
         }
         await websocket.send_json(jsonable_encoder(payload))

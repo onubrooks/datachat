@@ -241,6 +241,7 @@ export function Message({
     activeSubAnswer?.visualization_metadata ?? message.visualization_metadata;
   const activeClarifyingQuestions =
     activeSubAnswer?.clarifying_questions || message.clarifying_questions;
+  const workflowArtifacts = message.workflow_artifacts;
 
   useEffect(() => {
     if (subAnswers.length === 0) {
@@ -412,6 +413,14 @@ export function Message({
       Object.keys(message.metrics.agent_timings).length > 0 &&
       showAgentTimingBreakdown
   );
+  const hasWorkflowArtifacts =
+    !isUser &&
+    Boolean(workflowArtifacts) &&
+    (workflowArtifacts?.metrics.length ||
+      workflowArtifacts?.drivers.length ||
+      workflowArtifacts?.caveats.length ||
+      workflowArtifacts?.sources.length ||
+      workflowArtifacts?.follow_ups.length);
 
   const inferVisualizationType = (): VizHint => {
     const hint = (activeVisualizationHint || "").toLowerCase();
@@ -1083,9 +1092,78 @@ export function Message({
   const showActions =
     !isUser && (Boolean(activeSql) || hasTable || Boolean(activeContent?.trim()));
 
+  const renderWorkflowPackage = () => {
+    if (!hasWorkflowArtifacts || !workflowArtifacts) {
+      return null;
+    }
+
+    return (
+      <div className="mt-3 rounded-lg border border-border/70 bg-secondary/20 p-3">
+        <div className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground">
+          Finance Brief
+        </div>
+        <p className="text-sm leading-relaxed">{workflowArtifacts.summary}</p>
+
+        {workflowArtifacts.metrics.length > 0 && (
+          <div className="mt-3">
+            <div className="mb-1 text-xs font-medium text-muted-foreground">Key Metrics</div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {workflowArtifacts.metrics.slice(0, 4).map((metric) => (
+                <div key={`${metric.label}-${metric.value}`} className="rounded border border-border/60 bg-background/80 px-2 py-1">
+                  <div className="text-[11px] text-muted-foreground">{metric.label}</div>
+                  <div className="text-xs font-medium">{metric.value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {workflowArtifacts.drivers.length > 0 && (
+          <div className="mt-3">
+            <div className="mb-1 text-xs font-medium text-muted-foreground">Top Drivers</div>
+            <ul className="space-y-1">
+              {workflowArtifacts.drivers.slice(0, 3).map((driver) => (
+                <li key={`${driver.dimension}-${driver.value}`} className="text-xs">
+                  <span className="font-medium">{driver.dimension}:</span> {driver.value} ({driver.contribution})
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {workflowArtifacts.caveats.length > 0 && (
+          <div className="mt-3">
+            <div className="mb-1 text-xs font-medium text-muted-foreground">Caveats</div>
+            <ul className="space-y-1">
+              {workflowArtifacts.caveats.slice(0, 3).map((item) => (
+                <li key={item} className="text-xs text-muted-foreground">
+                  • {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {workflowArtifacts.follow_ups.length > 0 && (
+          <div className="mt-3">
+            <div className="mb-1 text-xs font-medium text-muted-foreground">Suggested Follow-ups</div>
+            <ul className="space-y-1">
+              {workflowArtifacts.follow_ups.slice(0, 3).map((item) => (
+                <li key={item} className="text-xs">
+                  • {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderAnswerOnly = () => (
     <>
       {renderMarkdownish(activeContent)}
+      {renderWorkflowPackage()}
       {renderClarifyingQuestions()}
     </>
   );

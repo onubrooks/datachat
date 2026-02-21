@@ -20,6 +20,13 @@ Cross-type expectations:
 - `metadata.exclusions` (warning, strict -> error)
 - `metadata.confidence_notes` (warning, strict -> error)
 
+Lifecycle expectations (advisory in this rollout):
+
+- `metadata.lifecycle.version` (warning for managed/user scope)
+- `metadata.lifecycle.reviewer` (warning for managed/user scope)
+- `metadata.lifecycle.changed_by` (warning for managed/user scope)
+- `metadata.lifecycle.changed_reason` (warning for managed/user scope)
+
 Type-specific expectations:
 
 1. `Schema`
@@ -71,10 +78,16 @@ python scripts/lint_datapoints.py --path datapoints --recursive --fail-on-warnin
 ## API and sync enforcement
 
 - `POST /api/v1/datapoints` and `PUT /api/v1/datapoints/{id}` reject contract violations.
+- API create/update now auto-stamp `metadata.lifecycle`:
+  - `owner`, `reviewer`, `version`, `changed_by`, `changed_reason`, `changed_at`
 - Pending approval endpoints (`approve`, `bulk-approve`) apply strict contract validation.
 - Background sync orchestrator runs with strict contract checks and fails the sync job when files violate contracts.
 - Bundled `datapoints/demo/` files are exempt from strict advisory-field escalation in sync mode
   so default demo deployments do not fail on non-critical metadata gaps.
+- Sync conflict behavior:
+  - default `conflict_mode=error` rejects duplicate semantic definitions in managed/user/custom tiers
+  - optional resolution modes: `prefer_user`, `prefer_managed`, `prefer_latest`
+  - conflict decisions are logged as audit events (`datapoint_conflict_resolved`)
 
 ## Roadmap
 

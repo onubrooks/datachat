@@ -103,6 +103,7 @@ class PipelineState(TypedDict, total=False):
     fast_path: bool
     skip_response_synthesis: bool
     synthesize_simple_sql: bool | None
+    workflow_mode: str | None
     preplanned_sql: dict[str, Any] | None
 
     # Classifier output
@@ -1535,6 +1536,11 @@ class DataChatPipeline:
             )
 
             output = await self.executor.execute(input_data)
+            executed_sql = (
+                getattr(output.executed_query, "executed_sql", None)
+                or state.get("validated_sql")
+                or state.get("generated_sql")
+            )
 
             # Update state
             state["query_result"] = {
@@ -1544,6 +1550,11 @@ class DataChatPipeline:
                 "execution_time_ms": output.executed_query.query_result.execution_time_ms,
                 "was_truncated": output.executed_query.query_result.was_truncated,
             }
+            state["validated_sql"] = executed_sql
+            state["generated_sql"] = executed_sql
+            validated_sql_object = state.get("validated_sql_object")
+            if validated_sql_object is not None:
+                validated_sql_object.sql = executed_sql
             state["natural_language_answer"] = output.executed_query.natural_language_answer
             state["visualization_hint"] = output.executed_query.visualization_hint
             state["visualization_note"] = getattr(output.executed_query, "visualization_note", None)
@@ -3052,6 +3063,7 @@ class DataChatPipeline:
         database_url: str | None,
         target_connection_id: str | None,
         synthesize_simple_sql: bool | None,
+        workflow_mode: str | None,
         correlation_prefix: str,
         tool_approved: bool = False,
         preplanned_sql: dict[str, Any] | None = None,
@@ -3075,6 +3087,7 @@ class DataChatPipeline:
             "fast_path": False,
             "skip_response_synthesis": False,
             "synthesize_simple_sql": synthesize_simple_sql,
+            "workflow_mode": workflow_mode,
             "current_agent": None,
             "error": None,
             "total_cost": 0.0,
@@ -3180,6 +3193,7 @@ class DataChatPipeline:
         database_url: str | None = None,
         target_connection_id: str | None = None,
         synthesize_simple_sql: bool | None = None,
+        workflow_mode: str | None = "auto",
         tool_approved: bool = False,
         preplanned_sql: dict[str, Any] | None = None,
     ) -> PipelineState:
@@ -3192,6 +3206,7 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            workflow_mode=workflow_mode,
             tool_approved=tool_approved,
             correlation_prefix="local",
             preplanned_sql=preplanned_sql,
@@ -3394,6 +3409,7 @@ class DataChatPipeline:
         database_url: str | None,
         target_connection_id: str | None,
         synthesize_simple_sql: bool | None,
+        workflow_mode: str | None,
         tool_approved: bool,
         extra_llm_calls: int = 0,
         extra_agent_timings: dict[str, float] | None = None,
@@ -3407,6 +3423,7 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            workflow_mode=workflow_mode,
             tool_approved=tool_approved,
             correlation_prefix="local",
         )
@@ -3608,6 +3625,7 @@ class DataChatPipeline:
         database_url: str | None = None,
         target_connection_id: str | None = None,
         synthesize_simple_sql: bool | None = None,
+        workflow_mode: str | None = "auto",
         tool_approved: bool = False,
     ) -> PipelineState:
         """
@@ -3635,6 +3653,7 @@ class DataChatPipeline:
                 database_url=database_url,
                 target_connection_id=target_connection_id,
                 synthesize_simple_sql=synthesize_simple_sql,
+                workflow_mode=workflow_mode,
                 tool_approved=tool_approved,
             )
 
@@ -3660,6 +3679,7 @@ class DataChatPipeline:
                 database_url=database_url,
                 target_connection_id=target_connection_id,
                 synthesize_simple_sql=synthesize_simple_sql,
+                workflow_mode=workflow_mode,
                 tool_approved=tool_approved,
                 preplanned_sql=planned_sql_map.get(index),
             )
@@ -3677,6 +3697,7 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            workflow_mode=workflow_mode,
             tool_approved=tool_approved,
             extra_llm_calls=planner_llm_calls,
             extra_agent_timings={"multi_sql_planner": planner_duration_ms},
@@ -3692,6 +3713,7 @@ class DataChatPipeline:
         database_url: str | None = None,
         target_connection_id: str | None = None,
         synthesize_simple_sql: bool | None = None,
+        workflow_mode: str | None = "auto",
         tool_approved: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         """
@@ -3721,6 +3743,7 @@ class DataChatPipeline:
                 database_url=database_url,
                 target_connection_id=target_connection_id,
                 synthesize_simple_sql=synthesize_simple_sql,
+                workflow_mode=workflow_mode,
                 tool_approved=tool_approved,
             )
             yield {
@@ -3740,6 +3763,7 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            workflow_mode=workflow_mode,
             tool_approved=tool_approved,
             correlation_prefix="stream",
         )
@@ -3770,6 +3794,7 @@ class DataChatPipeline:
         database_url: str | None,
         target_connection_id: str | None,
         synthesize_simple_sql: bool | None,
+        workflow_mode: str | None = "auto",
         tool_approved: bool = False,
         event_callback: Any = None,
         correlation_prefix: str = "stream",
@@ -3787,6 +3812,7 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            workflow_mode=workflow_mode,
             tool_approved=tool_approved,
             correlation_prefix=correlation_prefix,
             preplanned_sql=preplanned_sql,
@@ -3899,6 +3925,7 @@ class DataChatPipeline:
         database_url: str | None = None,
         target_connection_id: str | None = None,
         synthesize_simple_sql: bool | None = None,
+        workflow_mode: str | None = "auto",
         tool_approved: bool = False,
         event_callback: Any = None,
     ) -> PipelineState:
@@ -3978,6 +4005,7 @@ class DataChatPipeline:
                     database_url=database_url,
                     target_connection_id=target_connection_id,
                     synthesize_simple_sql=synthesize_simple_sql,
+                    workflow_mode=workflow_mode,
                     tool_approved=tool_approved,
                     event_callback=event_callback,
                     correlation_prefix=f"stream-q{index}",
@@ -3997,6 +4025,7 @@ class DataChatPipeline:
                 database_url=database_url,
                 target_connection_id=target_connection_id,
                 synthesize_simple_sql=synthesize_simple_sql,
+                workflow_mode=workflow_mode,
                 tool_approved=tool_approved,
                 extra_llm_calls=planner_llm_calls,
                 extra_agent_timings={"multi_sql_planner": planner_duration_ms},
@@ -4011,6 +4040,7 @@ class DataChatPipeline:
             database_url=database_url,
             target_connection_id=target_connection_id,
             synthesize_simple_sql=synthesize_simple_sql,
+            workflow_mode=workflow_mode,
             tool_approved=tool_approved,
             event_callback=event_callback,
             correlation_prefix="stream",

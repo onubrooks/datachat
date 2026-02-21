@@ -104,7 +104,7 @@ class BaseDataPoint(BaseModel):
     name: str = Field(..., description="Human-readable name", min_length=1, max_length=200)
     owner: str = Field(..., description="Email of the team/person responsible", min_length=1)
     tags: list[str] = Field(default_factory=list, description="Optional tags for categorization")
-    metadata: dict[str, str] = Field(
+    metadata: dict[str, Any] = Field(
         default_factory=dict, description="Additional metadata key-value pairs"
     )
 

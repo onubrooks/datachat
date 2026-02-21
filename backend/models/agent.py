@@ -838,6 +838,10 @@ class ExecutedQuery(BaseModel):
     """Complete query execution result with summary and visualization hints."""
 
     query_result: QueryResult = Field(..., description="Raw query results")
+    executed_sql: str | None = Field(
+        default=None,
+        description="Final SQL executed against the database after any automatic correction.",
+    )
     natural_language_answer: str = Field(..., description="Natural language summary of results")
     visualization_hint: (
         Literal["table", "bar_chart", "line_chart", "pie_chart", "scatter", "none"] | None
@@ -867,6 +871,7 @@ class ExecutedQuery(BaseModel):
                     "columns": ["customer_id", "total_amount"],
                     "execution_time_ms": 45.2,
                 },
+                "executed_sql": "SELECT customer_id, SUM(total_amount) FROM fact_sales GROUP BY customer_id",
                 "natural_language_answer": "Customer 123 had total sales of $5,000",
                 "visualization_hint": "table",
                 "visualization_note": None,

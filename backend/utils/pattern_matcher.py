@@ -95,14 +95,12 @@ class QueryPatternMatcher:
             (re.compile(p, re.IGNORECASE), 1.0)
             for p in [
                 r"\bshow\b.*\brows\b",
-                r"\bfirst\s+\d+\b",
-                r"\btop\s+\d+\b",
+                r"\b(?:first|top|limit)\s+\d+\s+(?:rows?|records?)\b",
                 r"\bpreview\b",
-                r"\bsample\b",
+                r"\bsample\s+(?:rows?|records?)\b",
                 r"\bexample\b",
                 r"\bshow me\b.*\brows\b",
                 r"\bdisplay\b.*\brows\b",
-                r"\blimit\b",
             ]
         ]
         self._definition_patterns = [
