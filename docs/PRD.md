@@ -60,7 +60,7 @@ Notes:
 - Replace baseline assumptions with measured values during first production telemetry window.
 - A feature that does not improve at least one KPI above is not prioritized for current phase.
 - Implementation spec: `docs/specs/WDG-001.md`
-- Manual validation runbook: `docs/FINANCE_WORKFLOW_V1_MANUAL_TEST.md`
+- Manual validation runbook: `docs/finance/FINANCE_WORKFLOW_V1_MANUAL_TEST.md`
 
 ## Current Product Scope (Shipped)
 

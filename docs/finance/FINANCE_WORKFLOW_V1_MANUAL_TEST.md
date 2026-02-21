@@ -2,7 +2,7 @@
 
 Use this runbook to validate the finance wedge workflow with existing demo data.
 
-If you want a faster end-user flow, start with `docs/FINANCE_END_USER_QUICKSTART.md` first.
+If you want a faster end-user flow, start with `docs/finance/FINANCE_END_USER_QUICKSTART.md` first.
 
 ## Goal
 
@@ -134,7 +134,7 @@ Exit code `0` means gate pass; non-zero means at least one threshold failed.
 
 ## Suggested Prompt Set (Finance Wedge)
 
-Use `docs/FINANCE_PROMPT_PACK_V1.md` for the full scripted 20-prompt pack with:
+Use `docs/finance/FINANCE_PROMPT_PACK_V1.md` for the full scripted 20-prompt pack with:
 
 - prompt IDs (`P01`-`P20`)
 - mapped primary datapoints

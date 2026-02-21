@@ -68,7 +68,7 @@ Use these prompts directly:
 
 For the full scripted 20-prompt demo sequence, use:
 
-- `docs/FINANCE_PROMPT_PACK_V1.md`
+- `docs/finance/FINANCE_PROMPT_PACK_V1.md`
 
 ## 6) What Good Output Looks Like
 
