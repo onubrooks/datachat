@@ -65,3 +65,38 @@ def test_apply_lifecycle_metadata_update_bumps_patch_version():
     assert lifecycle["reviewer"] == "qa@example.com"
     assert lifecycle["changed_by"] == "api"
     assert lifecycle["changed_reason"] == "updated"
+
+
+def test_apply_lifecycle_metadata_update_ignores_client_audit_fields():
+    previous_payload = _query_datapoint_payload("query_lifecycle_003")
+    previous_payload["metadata"]["lifecycle"] = {
+        "owner": "owner@example.com",
+        "reviewer": "qa@example.com",
+        "version": "2.0.8",
+        "changed_by": "reviewer@example.com",
+        "changed_reason": "approved",
+        "changed_at": "2026-02-20T00:00:00+00:00",
+    }
+    previous_datapoint = datapoint_adapter.validate_python(previous_payload)
+
+    updated_payload = _query_datapoint_payload("query_lifecycle_003")
+    updated_payload["metadata"]["lifecycle"] = {
+        "owner": "owner@example.com",
+        "reviewer": "client-reviewer@example.com",
+        "version": "2.0.8",
+        "changed_by": "client@example.com",
+        "changed_reason": "client-sent-stale",
+        "changed_at": "2026-02-20T01:00:00+00:00",
+    }
+    updated_datapoint = datapoint_adapter.validate_python(updated_payload)
+
+    lifecycle = apply_lifecycle_metadata(
+        updated_datapoint,
+        action="update",
+        previous_datapoint=previous_datapoint,
+        changed_by="api",
+    )
+
+    assert lifecycle["version"] == "2.0.9"
+    assert lifecycle["changed_by"] == "api"
+    assert lifecycle["changed_reason"] == "updated"

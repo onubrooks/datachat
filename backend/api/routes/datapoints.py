@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
@@ -18,6 +19,7 @@ from backend.models.datapoint import DataPoint
 from backend.sync.orchestrator import save_datapoint_to_disk
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 DATA_ROOT = Path("datapoints")
 DATA_DIR = DATA_ROOT / "managed"
@@ -106,11 +108,23 @@ async def _resolve_maybe_awaitable(value):
 
 
 def _read_existing_datapoint(path: Path) -> DataPoint | None:
-    """Load existing DataPoint payload for lifecycle version bumps."""
+    """Load existing DataPoint payload for lifecycle version bumps.
+
+    Returns None when the file cannot be parsed/validated so PUT can still
+    replace corrupted payloads.
+    """
     if not path.exists():
         return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    return datapoint_adapter.validate_python(payload)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return datapoint_adapter.validate_python(payload)
+    except Exception as exc:  # pragma: no cover - defensive recovery path
+        logger.warning(
+            "Failed to load existing datapoint for lifecycle metadata; "
+            "continuing update without previous lifecycle context",
+            extra={"path": str(path), "error": str(exc)},
+        )
+        return None
 
 
 def _issue_to_dict(issue: ContractIssue) -> dict[str, str]:

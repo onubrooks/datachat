@@ -109,8 +109,9 @@ def apply_lifecycle_metadata(
     """
     Upsert lifecycle metadata on a DataPoint for API/ingestion update flows.
 
-    This is additive and backward-compatible: existing lifecycle values are honored
-    unless a field is missing, in which case defaults are applied.
+    For create, existing lifecycle values are honored when present.
+    For update, server-side metadata is authoritative for audit fields to prevent
+    stale client payloads from suppressing lifecycle revisions.
     """
     metadata = _coerce_metadata(datapoint.metadata)
     existing_lifecycle = extract_lifecycle(datapoint)
@@ -123,21 +124,34 @@ def apply_lifecycle_metadata(
         bump_patch_version(previous_version) if action == "update" else DEFAULT_VERSION
     )
 
-    lifecycle = {
-        "owner": _clean_text(datapoint.owner) or datapoint.owner,
-        "reviewer": _clean_text(existing_lifecycle.get("reviewer"))
-        or _clean_text(reviewer)
+    reviewer_value = (
+        _clean_text(reviewer)
+        or _clean_text(existing_lifecycle.get("reviewer"))
         or _clean_text(previous_lifecycle.get("reviewer"))
-        or DEFAULT_REVIEWER,
-        "version": _clean_text(existing_lifecycle.get("version")) or next_version,
-        "changed_by": _clean_text(existing_lifecycle.get("changed_by"))
-        or _clean_text(changed_by)
-        or DEFAULT_CHANGED_BY,
-        "changed_reason": _clean_text(existing_lifecycle.get("changed_reason"))
-        or _clean_text(changed_reason)
-        or reason_default,
-        "changed_at": now,
-    }
+        or DEFAULT_REVIEWER
+    )
+    if action == "update":
+        lifecycle = {
+            "owner": _clean_text(datapoint.owner) or datapoint.owner,
+            "reviewer": reviewer_value,
+            "version": next_version,
+            "changed_by": _clean_text(changed_by) or DEFAULT_CHANGED_BY,
+            "changed_reason": _clean_text(changed_reason) or reason_default,
+            "changed_at": now,
+        }
+    else:
+        lifecycle = {
+            "owner": _clean_text(datapoint.owner) or datapoint.owner,
+            "reviewer": reviewer_value,
+            "version": _clean_text(existing_lifecycle.get("version")) or next_version,
+            "changed_by": _clean_text(existing_lifecycle.get("changed_by"))
+            or _clean_text(changed_by)
+            or DEFAULT_CHANGED_BY,
+            "changed_reason": _clean_text(existing_lifecycle.get("changed_reason"))
+            or _clean_text(changed_reason)
+            or reason_default,
+            "changed_at": now,
+        }
 
     metadata[LIFECYCLE_KEY] = lifecycle
     datapoint.metadata = metadata

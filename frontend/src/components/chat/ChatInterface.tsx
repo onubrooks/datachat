@@ -1042,6 +1042,7 @@ export function ChatInterface() {
   };
 
   const handleDeleteConversation = (sessionId: string) => {
+    const deletingActiveConversation = sessionId === frontendSessionId;
     const remaining = conversationHistory.filter(
       (entry) => entry.frontendSessionId !== sessionId
     );
@@ -1054,6 +1055,18 @@ export function ChatInterface() {
       (existing: ConversationSnapshotPayload[] | undefined) =>
         (existing || []).filter((item) => item.frontend_session_id !== sessionId)
     );
+    if (deletingActiveConversation) {
+      clearMessages();
+      setConversationDatabaseId(null);
+      setInput("");
+      setSqlDraft("");
+      setComposerMode("nl");
+      setError(null);
+      setErrorCategory(null);
+      setLastFailedQuery(null);
+      setRetryCount(0);
+      restoreInputFocus("nl");
+    }
   };
 
   const handleSchemaSearchChange = (value: string) => {

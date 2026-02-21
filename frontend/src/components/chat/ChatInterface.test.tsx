@@ -269,6 +269,39 @@ describe("ChatInterface target database", () => {
     expect(screen.queryByText("Inventory checks")).not.toBeInTheDocument();
   });
 
+  it("deleting the active conversation removes it and starts a fresh session", async () => {
+    const currentSessionId = useChatStore.getState().frontendSessionId;
+    window.localStorage.setItem(
+      "datachat.conversation.history.v1",
+      JSON.stringify([
+        {
+          frontendSessionId: currentSessionId,
+          title: "Active conversation",
+          targetDatabaseId: "db_mysql",
+          conversationId: "conv_active",
+          sessionSummary: null,
+          sessionState: null,
+          updatedAt: new Date().toISOString(),
+          messages: [],
+        },
+      ])
+    );
+
+    renderWithProviders(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockGetDatabaseSchema).toHaveBeenCalled());
+    fireEvent.click(screen.getByLabelText("Toggle conversation history sidebar"));
+
+    expect(screen.getByText("Active conversation")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Delete conversation Active conversation"));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Active conversation")).not.toBeInTheDocument();
+    });
+    expect(mockDeleteConversation).toHaveBeenCalledWith(currentSessionId);
+    expect(useChatStore.getState().frontendSessionId).not.toBe(currentSessionId);
+  });
+
   it("sends SQL editor content as direct SQL execution request", async () => {
     renderWithProviders(<ChatInterface />);
     await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
